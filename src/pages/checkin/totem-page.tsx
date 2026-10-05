@@ -4,8 +4,10 @@ import {
   obterSessaoEquipe,
   loginEquipe,
   logoutEquipe,
+  obterTurmasAbertasTotem,
+  emitirTokenCheckin,
 } from "../../lib/supabase";
-import { AcademiaPublica, TurmaPublica, UsuarioEquipe } from "../../types/app";
+import { AcademiaPublica, TurmaAbertaTotem, TokenCheckinInfo, UsuarioEquipe } from "../../types/app";
 import { QRGenerator } from "../../components/qr/qr-generator";
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "../../components/ui/card";
 import { Badge } from "../../components/ui/badge";
@@ -34,9 +36,11 @@ interface TotemPageProps {
 export const TotemPage: React.FC<TotemPageProps> = ({ slug, onSessionChange }) => {
   const [academia, setAcademia] = useState<AcademiaPublica | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
-  const [turmaSelecionada, setTurmaSelecionada] = useState<TurmaPublica | null>(null);
+  const [turmasAbertas, setTurmasAbertas] = useState<TurmaAbertaTotem[]>([]);
+  const [tokens, setTokens] = useState<Record<string, TokenCheckinInfo>>({});
   const [currentTime, setCurrentTime] = useState<string>("");
   const [isFullScreen, setIsFullScreen] = useState<boolean>(false);
+  const [segundosRestantes, setSegundosRestantes] = useState<number>(30);
 
   // Estado de autenticação da equipe (sem credenciais hardcoded)
   const [usuarioEquipe, setUsuarioEquipe] = useState<UsuarioEquipe | null>(null);
@@ -47,7 +51,7 @@ export const TotemPage: React.FC<TotemPageProps> = ({ slug, onSessionChange }) =
 
   useEffect(() => {
     verificarAcesso();
-    const timer = setInterval(() => {
+    const clockTimer = setInterval(() => {
       setCurrentTime(
         new Date().toLocaleTimeString("pt-BR", {
           hour: "2-digit",
@@ -56,8 +60,63 @@ export const TotemPage: React.FC<TotemPageProps> = ({ slug, onSessionChange }) =
         })
       );
     }, 1000);
-    return () => clearInterval(timer);
+    return () => clearInterval(clockTimer);
   }, [slug]);
+
+  // Efeito para ciclo de rotação do token e atualização de turmas abertas
+  useEffect(() => {
+    if (!usuarioEquipe || !academia) return;
+
+    let cicloTimer: NodeJS.Timeout | null = null;
+    const atualizarCiclo = async () => {
+      try {
+        const abertas = await obterTurmasAbertasTotem(academia.id);
+        setTurmasAbertas(abertas);
+
+        if (abertas.length > 0) {
+          const novoMapa: Record<string, TokenCheckinInfo> = {};
+          let menorTempoRestante = 30;
+
+          for (const turma of abertas) {
+            const info = await emitirTokenCheckin(turma.id);
+            if (info) {
+              novoMapa[turma.id] = info;
+              if (info.expira_em) {
+                const ms = new Date(info.expira_em).getTime() - Date.now();
+                const segs = Math.max(1, Math.floor(ms / 1000));
+                menorTempoRestante = Math.min(menorTempoRestante, segs);
+              } else if (info.periodo_segundos) {
+                menorTempoRestante = Math.min(menorTempoRestante, info.periodo_segundos);
+              }
+            }
+          }
+          setTokens(novoMapa);
+          setSegundosRestantes(menorTempoRestante);
+        }
+      } catch (err) {
+        console.warn("Erro ao sincronizar turmas e tokens do totem:", err);
+      }
+    };
+
+    // Executa imediatamente
+    atualizarCiclo();
+
+    // Cronômetro regressivo segundo a segundo
+    const intervalTimer = setInterval(() => {
+      setSegundosRestantes((prev) => {
+        if (prev <= 1) {
+          atualizarCiclo();
+          return 30;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+
+    return () => {
+      clearInterval(intervalTimer);
+      if (cicloTimer) clearTimeout(cicloTimer);
+    };
+  }, [usuarioEquipe, academia?.id]);
 
   const verificarAcesso = async () => {
     setLoading(true);
@@ -69,9 +128,24 @@ export const TotemPage: React.FC<TotemPageProps> = ({ slug, onSessionChange }) =
 
     const data = await obterAcademiaPublica(slug);
     setAcademia(data);
-    if (data && data.turmas.length > 0) {
-      setTurmaSelecionada(data.turmas[0]);
+
+    if (user && data) {
+      try {
+        const abertas = await obterTurmasAbertasTotem(data.id);
+        setTurmasAbertas(abertas);
+        if (abertas.length > 0) {
+          const novoMapa: Record<string, TokenCheckinInfo> = {};
+          for (const turma of abertas) {
+            const info = await emitirTokenCheckin(turma.id);
+            if (info) novoMapa[turma.id] = info;
+          }
+          setTokens(novoMapa);
+        }
+      } catch (e) {
+        console.warn("Falha ao inicializar turmas do totem:", e);
+      }
     }
+
     setLoading(false);
   };
 
@@ -241,12 +315,9 @@ export const TotemPage: React.FC<TotemPageProps> = ({ slug, onSessionChange }) =
 
   // 2. Tela Liberada para a Equipe (Modo Totem Quiosque)
   const currentOrigin = typeof window !== "undefined" ? window.location.origin : "https://app.honorteam.com.br";
-  const checkinUrl = turmaSelecionada
-    ? `${currentOrigin}/?slug=${slug}&turma=${turmaSelecionada.id}&tab=checkin`
-    : "";
 
   return (
-    <div className={`container mx-auto px-4 py-8 max-w-4xl ${isFullScreen ? "max-w-none px-8" : ""}`}>
+    <div className={`container mx-auto px-4 py-8 max-w-5xl ${isFullScreen ? "max-w-none px-8" : ""}`}>
       {/* Barra superior de controle do Totem */}
       <div className="flex flex-col sm:flex-row items-center justify-between gap-4 mb-6 pb-4 border-b border-zinc-800">
         <div>
@@ -303,98 +374,89 @@ export const TotemPage: React.FC<TotemPageProps> = ({ slug, onSessionChange }) =
         </div>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-12 gap-6 items-start">
-        {/* Painel Esquerdo: Seleção de Turma da Aula */}
-        <div className="md:col-span-5 space-y-4">
-          <Card className="border-zinc-800 bg-zinc-950/70">
-            <CardHeader className="pb-3">
-              <div className="flex items-center gap-2 text-red-500">
-                <Users className="w-4 h-4" />
-                <CardTitle className="text-base">Turma em Andamento</CardTitle>
-              </div>
-              <CardDescription className="text-xs">
-                Selecione a turma para atualizar o QR Code exibido aos alunos
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-2">
-              {(academia?.turmas || []).map((t) => {
-                const ativo = turmaSelecionada?.id === t.id;
-                return (
-                  <button
-                    key={t.id}
-                    type="button"
-                    onClick={() => setTurmaSelecionada(t)}
-                    className={`w-full text-left p-3 rounded-xl border transition-all cursor-pointer ${
-                      ativo
-                        ? "border-red-600 bg-red-950/20 text-white ring-1 ring-red-600"
-                        : "border-zinc-800 bg-zinc-900/50 text-zinc-300 hover:bg-zinc-900"
-                    }`}
-                  >
-                    <div className="flex items-center justify-between">
-                      <p className="font-bold text-sm">{t.nome}</p>
-                      {ativo && (
-                        <span className="w-2 h-2 rounded-full bg-red-500 shrink-0" />
-                      )}
-                    </div>
-                    <p className="text-xs text-zinc-400 capitalize mt-0.5">
-                      Público: {t.publico}
-                    </p>
-                  </button>
-                );
-              })}
-            </CardContent>
+      {/* Conteúdo do Totem: Turmas Abertas com QR Codes */}
+      {turmasAbertas.length === 0 ? (
+        <div className="py-16">
+          <Card className="border-zinc-800 bg-zinc-950/70 p-12 text-center max-w-lg mx-auto shadow-2xl">
+            <div className="w-16 h-16 rounded-2xl bg-zinc-900 border border-zinc-800 flex items-center justify-center mx-auto mb-4 text-zinc-500">
+              <Clock className="w-8 h-8" />
+            </div>
+            <h3 className="text-xl font-bold text-white mb-2">
+              Nenhuma turma com check-in aberto no momento
+            </h3>
+            <p className="text-xs text-zinc-400 max-w-sm mx-auto leading-relaxed">
+              O check-in abre automaticamente minutos antes do início da aula.
+            </p>
+            <div className="mt-6 flex items-center justify-center gap-2 text-[11px] text-zinc-500 font-mono">
+              <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+              Sincronizando com o tatame automaticamente
+            </div>
           </Card>
+        </div>
+      ) : (
+        <div className="space-y-6">
+          <div className={`grid gap-6 ${turmasAbertas.length === 1 ? "max-w-md mx-auto" : "grid-cols-1 md:grid-cols-2"}`}>
+            {turmasAbertas.map((turma) => {
+              const tokenInfo = tokens[turma.id];
+              const token = tokenInfo?.token || "";
+              const checkinUrl = `${currentOrigin}/?slug=${slug}&turma=${turma.id}&t=${token}&tab=checkin`;
 
-          <Card className="border-zinc-800 bg-zinc-950/50">
+              return (
+                <Card
+                  key={turma.id}
+                  className="border-zinc-800 bg-zinc-950/80 shadow-2xl p-6 flex flex-col items-center text-center"
+                >
+                  <div className="flex items-center gap-2 mb-3">
+                    <Badge variant="default" className="text-xs px-3 py-1 font-bold">
+                      CHECK-IN ABERTO
+                    </Badge>
+                    <span className="text-xs font-mono text-zinc-400 bg-zinc-900 px-2.5 py-0.5 rounded-full border border-zinc-800">
+                      {turma.hora_inicio} às {turma.hora_fim}
+                    </span>
+                  </div>
+
+                  <h3 className="text-xl font-black text-white mb-1">
+                    {turma.nome}
+                  </h3>
+                  <p className="text-xs text-zinc-400 mb-4">
+                    Aponte a câmera do seu celular para registrar sua presença no tatame
+                  </p>
+
+                  <div className="bg-white p-4 rounded-2xl shadow-xl">
+                    <QRGenerator
+                      value={checkinUrl}
+                      size={turmasAbertas.length === 1 ? 260 : 200}
+                    />
+                  </div>
+
+                  <div className="mt-4 flex items-center gap-2 text-[11px] text-zinc-500 font-mono">
+                    <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                    Token rotativo ativo • Renovando em {segundosRestantes}s
+                  </div>
+                </Card>
+              );
+            })}
+          </div>
+
+          <Card className="border-zinc-800 bg-zinc-950/50 max-w-xl mx-auto">
             <CardContent className="p-4 text-xs text-zinc-400 space-y-2">
               <div className="flex items-center gap-2 text-zinc-200 font-semibold">
                 <Sparkles className="w-4 h-4 text-amber-400" />
                 Instruções para o Tatame:
               </div>
               <p>
-                1. Mantenha o QR Code em local visível próximo à entrada do dojo/tatame.
+                1. Os alunos escaneiam o QR Code para registrar presença na aula aberta.
               </p>
               <p>
-                2. Os alunos apontam a câmera para validar a frequência antes do início do treino.
+                2. O token de segurança é renovado automaticamente a cada ciclo para evitar check-ins fora do tatame.
               </p>
               <p>
-                3. O sistema valida automaticamente se a mensalidade está regular antes de confirmar o check-in.
+                3. A presença garante a contagem de aulas para a próxima graduação de faixa do aluno.
               </p>
             </CardContent>
           </Card>
         </div>
-
-        {/* Painel Direito: Exibição Gigante do QR Code */}
-        <div className="md:col-span-7 flex flex-col items-center">
-          {turmaSelecionada ? (
-            <div className="w-full">
-              <div className="text-center mb-4">
-                <Badge variant="default" className="text-xs px-3 py-1 font-bold mb-2">
-                  CHECK-IN ABERTO
-                </Badge>
-                <h3 className="text-2xl font-black text-white">
-                  {turmaSelecionada.nome}
-                </h3>
-                <p className="text-xs text-zinc-400 mt-1">
-                  Aponte a câmera do seu celular para registrar sua presença no tatame
-                </p>
-              </div>
-
-              <QRGenerator
-                value={checkinUrl}
-                size={isFullScreen ? 340 : 260}
-                title="Presença por QR Code"
-                subtitle="O check-in garante sua contagem de aulas para a próxima graduação de faixa"
-              />
-            </div>
-          ) : (
-            <div className="p-12 text-center text-zinc-500">
-              <QrCode className="w-12 h-12 mx-auto mb-2 opacity-50" />
-              Nenhuma turma selecionada para o totem.
-            </div>
-          )}
-        </div>
-      </div>
+      )}
     </div>
   );
 };
