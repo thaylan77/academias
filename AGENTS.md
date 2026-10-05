@@ -24,12 +24,30 @@ Usuários:
 ## Comandos
 
 ```bash
+supabase migration new <nome>       # nova migration
+npm run dev | npm run build | npm run lint | npm test
+
+# Só com Docker (não é o caso da máquina principal do projeto):
 supabase start                      # sobe o banco local
 supabase db reset                   # recria o banco local (migrations + seed)
-supabase migration new <nome>       # nova migration
-supabase gen types typescript --local > src/types/database.ts
-npm run dev | npm run build | npm run lint | npm test
+supabase test db                    # roda os testes pgTAP no banco local
 ```
+
+## Ambientes de banco
+
+- **CI é o "verde" oficial.** O workflow `Banco` (`.github/workflows/banco.yml`)
+  aplica todas as migrations do zero e roda os testes pgTAP a cada push e
+  pull request. Validação feita de outro jeito (PGlite, Postgres temporário)
+  ajuda a desenvolver, mas não conta como verde: diga no PR o que rodou onde.
+- **Não há Supabase local na máquina principal** (sem Docker). Não tente
+  `supabase start`, `supabase db reset` nem `supabase test db` nela.
+- **`honorteam-dev`** é o projeto Supabase de dev compartilhado. Lá só entra
+  `main`, via `supabase db push`, depois do merge. Nunca aplique branch de
+  feature nem rode `db reset` nele.
+- **Testes pgTAP nunca rodam contra o `honorteam-dev`** (nada de
+  `supabase test db --linked` nem `--db-url` apontando para ele).
+- Os tipos (`src/types/database.ts`) saem do `honorteam-dev`:
+  `supabase gen types typescript --linked > src/types/database.ts`.
 
 ## Estrutura
 
@@ -110,11 +128,11 @@ Plano, status e slug da academia só mudam via `service_role` (billing do SaaS).
   A pasta original (`academias`) fica parada em `main`: ninguém edita,
   commita nem troca de branch nela.
 - Só **um** agente mexe em `supabase/migrations/` por vez.
-- Existe **um só** Supabase local, compartilhado por todos os worktrees.
-  Nunca suba um segundo (`supabase start` em outro worktree disputa as
-  mesmas portas). Só **um** agente roda `supabase db reset` por vez:
-  confirme com quem coordena antes de rodar, porque o reset apaga os
-  dados que os outros agentes estão usando.
+- Só para quem tiver Docker: existe **um só** Supabase local, compartilhado
+  por todos os worktrees. Nunca suba um segundo (`supabase start` em outro
+  worktree disputa as mesmas portas). Só **um** agente roda
+  `supabase db reset` por vez: confirme com quem coordena antes de rodar,
+  porque o reset apaga os dados que os outros agentes estão usando.
 - Divisão padrão:
   - **Claude**: schema, RLS, specs de módulo, revisão de PR.
   - **Codex**: CRUDs, Edge Functions, testes.
@@ -123,10 +141,11 @@ Plano, status e slug da academia só mudam via `service_role` (billing do SaaS).
 
 ## Checklist antes de abrir PR
 
-- [ ] `supabase db reset` roda sem erro
+- [ ] CI `Banco` verde no último commit (migrations do zero + pgTAP)
 - [ ] Tabela nova: `academia_id` + RLS + políticas + FK composta
 - [ ] Testado com 2 academias: usuário de A não lê nem altera nada de B
-- [ ] Tipos regenerados (`supabase gen types`)
+- [ ] Tipos regenerados: depois do merge, a partir do `honorteam-dev`
+      (`gen types --linked`); o PR diz se o schema mudou
 - [ ] `npm run lint`, `npm run build` e `npm test` passando
 
 ## Backlog conhecido
