@@ -25,13 +25,13 @@ export type Database = {
           Tables: {
             "academias": {
                   Row: {
-                    "cnpj": string | null,"configuracoes": NonNullable<Json>,"created_at": string,"dias_antecedencia_cobranca": number,"dias_tolerancia": number,"fuso": string,"id": string,"logo_url": string | null,"matricula_online_aberta": boolean,"nome": string,"plano_saas": string,"slug": string,"status": string,"telefone": string | null,"trial_ate": string,"updated_at": string
+                    "checkin_antecedencia_min": number,"checkin_token_segundos": number,"cnpj": string | null,"configuracoes": NonNullable<Json>,"created_at": string,"dias_antecedencia_cobranca": number,"dias_tolerancia": number,"fuso": string,"id": string,"logo_url": string | null,"matricula_online_aberta": boolean,"nome": string,"plano_saas": string,"slug": string,"status": string,"telefone": string | null,"trial_ate": string,"updated_at": string
                   }
                   Insert: {
-                    "cnpj"?: string | null,"configuracoes"?: NonNullable<Json>,"created_at"?: string,"dias_antecedencia_cobranca"?: number,"dias_tolerancia"?: number,"fuso"?: string,"id"?: string,"logo_url"?: string | null,"matricula_online_aberta"?: boolean,"nome": string,"plano_saas"?: string,"slug": string,"status"?: string,"telefone"?: string | null,"trial_ate"?: string,"updated_at"?: string
+                    "checkin_antecedencia_min"?: number,"checkin_token_segundos"?: number,"cnpj"?: string | null,"configuracoes"?: NonNullable<Json>,"created_at"?: string,"dias_antecedencia_cobranca"?: number,"dias_tolerancia"?: number,"fuso"?: string,"id"?: string,"logo_url"?: string | null,"matricula_online_aberta"?: boolean,"nome": string,"plano_saas"?: string,"slug": string,"status"?: string,"telefone"?: string | null,"trial_ate"?: string,"updated_at"?: string
                   }
                   Update: {
-                    "cnpj"?: string | null,"configuracoes"?: NonNullable<Json>,"created_at"?: string,"dias_antecedencia_cobranca"?: number,"dias_tolerancia"?: number,"fuso"?: string,"id"?: string,"logo_url"?: string | null,"matricula_online_aberta"?: boolean,"nome"?: string,"plano_saas"?: string,"slug"?: string,"status"?: string,"telefone"?: string | null,"trial_ate"?: string,"updated_at"?: string
+                    "checkin_antecedencia_min"?: number,"checkin_token_segundos"?: number,"cnpj"?: string | null,"configuracoes"?: NonNullable<Json>,"created_at"?: string,"dias_antecedencia_cobranca"?: number,"dias_tolerancia"?: number,"fuso"?: string,"id"?: string,"logo_url"?: string | null,"matricula_online_aberta"?: boolean,"nome"?: string,"plano_saas"?: string,"slug"?: string,"status"?: string,"telefone"?: string | null,"trial_ate"?: string,"updated_at"?: string
                   }
                   Relationships: [
                     
@@ -51,6 +51,25 @@ export type Database = {
       foreignKeyName: "alunos_academia_id_fkey"
       columns: ["academia_id"]
 isOneToOne: false
+      referencedRelation: "academias"
+      referencedColumns: ["id"]
+    }
+                  ]
+                },"checkin_segredos": {
+                  Row: {
+                    "academia_id": string,"created_at": string,"rotacionado_em": string | null,"segredo": string
+                  }
+                  Insert: {
+                    "academia_id": string,"created_at"?: string,"rotacionado_em"?: string | null,"segredo"?: string
+                  }
+                  Update: {
+                    "academia_id"?: string,"created_at"?: string,"rotacionado_em"?: string | null,"segredo"?: string
+                  }
+                  Relationships: [
+                    {
+      foreignKeyName: "checkin_segredos_academia_id_fkey"
+      columns: ["academia_id"]
+isOneToOne: true
       referencedRelation: "academias"
       referencedColumns: ["id"]
     }
@@ -484,11 +503,28 @@ isOneToOne: false
 "cancelar_cobranca_interna":
 { Args: { "p_cobranca_id": string,"p_user_id": string }; Returns: undefined
                            },
+"checkin_aulas_abertas":
+{ Args: { "p_academia_id": string }; Returns: {
+              "dia": string,"hora_fim": string,"hora_inicio": string,"turma_id": string
+            }[]
+                           },
+"checkin_data_aula":
+{ Args: { "p_turma_id": string }; Returns: string
+                           },
+"checkin_janela_atual":
+{ Args: { "p_academia_id": string }; Returns: number
+                           },
+"checkin_token_da_janela":
+{ Args: { "p_janela": number,"p_turma_id": string }; Returns: string
+                           },
 "criar_academia":
 { Args: { "p_nome": string,"p_slug": string }; Returns: string
                            },
+"emitir_token_checkin":
+{ Args: { "p_turma_id": string }; Returns: Json
+                           },
 "fazer_checkin":
-{ Args: { "p_aluno_id"?: string,"p_turma_id": string }; Returns: string
+{ Args: { "p_aluno_id"?: string,"p_token": string,"p_turma_id": string }; Returns: string
                            },
 "gateway_credencial":
 { Args: { "p_gateway_conta_id": string }; Returns: string
@@ -523,11 +559,17 @@ isOneToOne: false
 "reservar_emissao_interna":
 { Args: { "p_cobranca_id": string,"p_gateway_conta_id": string,"p_tentativa_conferida"?: string,"p_user_id": string }; Returns: Json
                            },
+"rotacionar_segredo_checkin":
+{ Args: { "p_academia_id": string }; Returns: undefined
+                           },
 "sou_o_aluno":
 { Args: { "p_aluno_id": string }; Returns: boolean
                            },
 "tem_papel":
 { Args: { "p_academia_id": string,"p_papeis"?: (string)[] }; Returns: boolean
+                           },
+"totem_turmas_agora":
+{ Args: { "p_academia_id": string }; Returns: Json
                            },
 "vincular_meu_cadastro_aluno":
 { Args: Record<PropertyKey, never>; Returns: number
