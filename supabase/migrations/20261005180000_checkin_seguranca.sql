@@ -270,7 +270,8 @@ drop function public.fazer_checkin(uuid, uuid);
 -- inadimplência. Sem token válido, a função não revela nada sobre a turma.
 -- Aceita o token da janela atual e o da anterior.
 -- p_aluno_id só é necessário quando o login é de um responsável com mais de
--- um aluno na turma.
+-- um aluno na turma. Nesse caso o erro checkin_multiplos_alunos traz no
+-- detail a lista de candidatos (só os alunos do próprio login naquela turma).
 create or replace function public.fazer_checkin(
   p_turma_id uuid,
   p_token    text,
@@ -287,9 +288,10 @@ declare
   v_janela    bigint;
   v_dia       date;
   v_hoje      date;
-  v_alunos    uuid[];
-  v_aluno_id  uuid;
-  v_id        uuid;
+  v_alunos     uuid[];
+  v_candidatos jsonb;
+  v_aluno_id   uuid;
+  v_id         uuid;
 begin
   select * into v_turma from public.turmas where id = p_turma_id and ativa;
 
@@ -321,25 +323,34 @@ begin
   select * into v_acad from public.academias where id = v_turma.academia_id;
   v_hoje := public.hoje_academia(v_acad.id);
 
-  -- alunos deste login com matrícula ativa nesta turma
-  select array_agg(a.id) into v_alunos
-  from public.alunos a
-  join public.matriculas m on m.aluno_id = a.id
-  join public.matricula_turmas mt on mt.matricula_id = m.id
-  where a.academia_id = v_turma.academia_id
-    and a.user_id = auth.uid()
-    and a.status = 'ativo'
-    and m.status = 'ativa'
-    and (m.data_fim is null or m.data_fim >= v_dia)
-    and mt.turma_id = p_turma_id
-    and (p_aluno_id is null or a.id = p_aluno_id);
+  -- alunos deste login com matrícula ativa nesta turma. O distinct evita
+  -- contar duas vezes o aluno com duas matrículas ativas na mesma turma.
+  select array_agg(x.id order by x.nome, x.id),
+         jsonb_agg(jsonb_build_object('id', x.id, 'nome', x.nome) order by x.nome, x.id)
+    into v_alunos, v_candidatos
+  from (
+    select distinct a.id, a.nome
+    from public.alunos a
+    join public.matriculas m on m.aluno_id = a.id
+    join public.matricula_turmas mt on mt.matricula_id = m.id
+    where a.academia_id = v_turma.academia_id
+      and a.user_id = auth.uid()
+      and a.status = 'ativo'
+      and m.status = 'ativa'
+      and (m.data_fim is null or m.data_fim >= v_dia)
+      and mt.turma_id = p_turma_id
+      and (p_aluno_id is null or a.id = p_aluno_id)
+  ) x;
 
   if v_alunos is null then
     raise exception 'Nenhuma matrícula ativa nesta turma para este login'
       using hint = 'checkin_sem_matricula';
   elsif cardinality(v_alunos) > 1 then
+    -- detail: os candidatos deste login nesta turma, em JSON [{"id","nome"}],
+    -- para o front montar o seletor e chamar de novo com p_aluno_id.
     raise exception 'Mais de um aluno neste login: escolha quem está fazendo o check-in'
-      using hint = 'checkin_multiplos_alunos';
+      using hint = 'checkin_multiplos_alunos',
+            detail = v_candidatos::text;
   end if;
   v_aluno_id := v_alunos[1];
 

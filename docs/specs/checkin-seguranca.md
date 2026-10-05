@@ -79,7 +79,7 @@ O código vai no `hint` do erro (`raise exception '<mensagem em português>' usi
 | `academia_suspensa` | `fazer_checkin`, `emitir_token_checkin`, `totem_turmas_agora` | assinatura suspensa ou trial vencido. **Só em RPC autenticada.** |
 | `checkin_fora_do_horario` | `fazer_checkin`, `emitir_token_checkin` | fora da janela, ou turma sem horário |
 | `checkin_sem_matricula` | `fazer_checkin` | login sem aluno ativo com matrícula ativa na turma |
-| `checkin_multiplos_alunos` | `fazer_checkin` | responsável com mais de um aluno na turma e sem `p_aluno_id` |
+| `checkin_multiplos_alunos` | `fazer_checkin` | responsável com mais de um aluno na turma e sem `p_aluno_id`. O `detail` traz os candidatos (ver abaixo) |
 | `checkin_inadimplente` | `fazer_checkin` | cobrança pendente vencida além de `dias_tolerancia` |
 | `matricula_fechada` | `matricula_online` | slug inexistente, matrícula online fechada **ou academia suspensa**: o visitante anônimo não fica sabendo da situação da assinatura |
 | `cpf_duplicado` | `matricula_online` | CPF já cadastrado na academia |
@@ -87,6 +87,14 @@ O código vai no `hint` do erro (`raise exception '<mensagem em português>' usi
 | `dados_invalidos` | `matricula_online` | nome vazio, termo não aceito, plano inválido, CPF malformado (D7) |
 | `sem_permissao` | `emitir_token_checkin`, `totem_turmas_agora`, `rotacionar_segredo_checkin` | quem chama não tem o papel na academia (D7) |
 
+
+**Lista de candidatos em `checkin_multiplos_alunos`.** O erro leva no `detail` (no PostgREST, `error.details`) um JSON com os alunos daquele login naquela turma, em ordem de nome:
+
+```json
+[{ "id": "…uuid…", "nome": "Filho 1" }, { "id": "…uuid…", "nome": "Filho 2" }]
+```
+
+O front monta o seletor de dependentes com essa lista e chama `fazer_checkin` de novo com `p_aluno_id`. Só entram alunos ligados ao próprio login, com matrícula ativa na turma; nada além de `id` e `nome`. Como esse erro só sai depois do token válido, da assinatura e da janela de horário, a lista não vaza para quem não passaria no check-in. Nenhum outro código leva `detail`.
 
 ## 8. Schema e funções
 
@@ -110,18 +118,18 @@ O código vai no `hint` do erro (`raise exception '<mensagem em português>' usi
 
 Dependência: `pgcrypto` no schema `extensions`, sempre com chamada qualificada (`extensions.hmac`, `extensions.gen_random_bytes`).
 
-## 9. Testes pgTAP (`supabase/tests/checkin/`, 76 asserções)
+## 9. Testes pgTAP (`supabase/tests/checkin/`, 82 asserções)
 
 | Arquivo | Asserções | Cobre |
 |---------|-----------|-------|
-| `checkin.test.sql` | 63 | um teste por código de `fazer_checkin` e das RPCs do totem; token atual e anterior aceitos, de duas janelas atrás recusado; token de outra turma e de outra academia recusados; check-in repetido devolve a mesma presença; totem emite token, vê só a turma aberta e não lê `academias`, catálogo, `alunos`, matrículas, presenças, graduações, cobranças nem as três views; aluno e anônimo não emitem; rotação do segredo; a função antiga não existe mais |
+| `checkin.test.sql` | 69 | um teste por código de `fazer_checkin` e das RPCs do totem; token atual e anterior aceitos, de duas janelas atrás recusado; token de outra turma e de outra academia recusados; check-in repetido devolve a mesma presença; `detail` de `checkin_multiplos_alunos` com os candidatos (só do próprio login, só `id` e `nome`); aluno com duas matrículas na mesma turma não vira "múltiplos"; totem emite token, vê só a turma aberta e não lê `academias`, catálogo, `alunos`, matrículas, presenças, graduações, cobranças nem as três views; aluno e anônimo não emitem; rotação do segredo; a função antiga não existe mais |
 | `matricula_online.test.sql` | 13 | cada código de `matricula_online`; slug inexistente, matrícula fechada e academia suspensa com o mesmo código |
 
 A janela "aberta" usa um horário que cobre o dia inteiro de hoje e a "fechada" um dia da semana que não é hoje nem amanhã, para o teste não depender da hora em que roda.
 
 ## 10. Impacto
 
-- **Front (Antigravity)**: a tela do aluno envia `p_token`; a tela do totem troca o QR fixo por `totem_turmas_agora` + `emitir_token_checkin`, renovando em `expira_em`; os erros passam a ser tratados por `error.hint`.
+- **Front (Antigravity)**: a tela do aluno envia `p_token` e monta o seletor de dependentes com `error.details` de `checkin_multiplos_alunos`; a tela do totem troca o QR fixo por `totem_turmas_agora` + `emitir_token_checkin`, renovando em `expira_em`; os erros passam a ser tratados por `error.hint`.
 - **Testes do Codex**: cinco casos de `fazer_checkin` em `rls.test.sql` usam a assinatura antiga e precisam passar o token.
 - **AGENTS.md**: papel `totem`, RPCs novas e a convenção de código no `hint`.
 

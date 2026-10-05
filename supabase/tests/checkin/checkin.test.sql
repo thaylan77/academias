@@ -5,7 +5,7 @@
 -- não depende da hora em que roda.
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(63);
+select plan(69);
 
 -- Devolve o hint do erro que o comando levanta. Fica em public (e some no
 -- rollback) porque é chamada com os papéis authenticated e anon.
@@ -24,6 +24,23 @@ exception when others then
 end
 $$;
 grant execute on function public.__hint_de(text) to anon, authenticated;
+
+-- Idem para o detail do erro (no PostgREST chega como error.details).
+create function public.__detalhe_de(p_sql text)
+returns text
+language plpgsql
+as $$
+declare
+  v_detalhe text;
+begin
+  execute p_sql;
+  return null;
+exception when others then
+  get stacked diagnostics v_detalhe = pg_exception_detail;
+  return nullif(v_detalhe, '');
+end
+$$;
+grant execute on function public.__detalhe_de(text) to anon, authenticated;
 
 -- ---------------------------------------------------------------------
 -- Fixtures
@@ -87,7 +104,9 @@ insert into public.matriculas (id, academia_id, aluno_id) values
   ('f4000000-0000-4000-8000-0000000004a1', 'f4000000-0000-4000-8000-00000000000a', 'f4000000-0000-4000-8000-0000000001a1'),
   ('f4000000-0000-4000-8000-0000000004a2', 'f4000000-0000-4000-8000-00000000000a', 'f4000000-0000-4000-8000-0000000001a2'),
   ('f4000000-0000-4000-8000-0000000004a3', 'f4000000-0000-4000-8000-00000000000a', 'f4000000-0000-4000-8000-0000000001a3'),
-  ('f4000000-0000-4000-8000-0000000004a4', 'f4000000-0000-4000-8000-00000000000a', 'f4000000-0000-4000-8000-0000000001a4');
+  ('f4000000-0000-4000-8000-0000000004a4', 'f4000000-0000-4000-8000-00000000000a', 'f4000000-0000-4000-8000-0000000001a4'),
+  -- segunda matrícula ativa do aluno 1 na mesma turma
+  ('f4000000-0000-4000-8000-0000000004a5', 'f4000000-0000-4000-8000-00000000000a', 'f4000000-0000-4000-8000-0000000001a1');
 
 insert into public.matricula_turmas (academia_id, matricula_id, turma_id) values
   ('f4000000-0000-4000-8000-00000000000a', 'f4000000-0000-4000-8000-0000000004a1', 'f4000000-0000-4000-8000-0000000003a1'),
@@ -95,7 +114,8 @@ insert into public.matricula_turmas (academia_id, matricula_id, turma_id) values
   ('f4000000-0000-4000-8000-00000000000a', 'f4000000-0000-4000-8000-0000000004a1', 'f4000000-0000-4000-8000-0000000003a3'),
   ('f4000000-0000-4000-8000-00000000000a', 'f4000000-0000-4000-8000-0000000004a2', 'f4000000-0000-4000-8000-0000000003a1'),
   ('f4000000-0000-4000-8000-00000000000a', 'f4000000-0000-4000-8000-0000000004a3', 'f4000000-0000-4000-8000-0000000003a1'),
-  ('f4000000-0000-4000-8000-00000000000a', 'f4000000-0000-4000-8000-0000000004a4', 'f4000000-0000-4000-8000-0000000003a1');
+  ('f4000000-0000-4000-8000-00000000000a', 'f4000000-0000-4000-8000-0000000004a4', 'f4000000-0000-4000-8000-0000000003a1'),
+  ('f4000000-0000-4000-8000-00000000000a', 'f4000000-0000-4000-8000-0000000004a5', 'f4000000-0000-4000-8000-0000000003a1');
 
 insert into public.cobrancas (academia_id, aluno_id, valor, vencimento) values
   ('f4000000-0000-4000-8000-00000000000a', 'f4000000-0000-4000-8000-0000000001a4', 100, current_date - 60);
@@ -182,7 +202,7 @@ select is(public.__hint_de(format($$select public.fazer_checkin('f4000000-0000-4
 -- 4. fazer_checkin: caminho feliz
 -- ---------------------------------------------------------------------
 select isnt(public.fazer_checkin('f4000000-0000-4000-8000-0000000003a1', (select tok from t_tok where nome = 't1-anterior')),
-  null, 'Token da janela anterior é aceito');
+  null, 'Token da janela anterior é aceito (aluno com duas matrículas na turma não vira "múltiplos")');
 select is(public.fazer_checkin('f4000000-0000-4000-8000-0000000003a1', (select tok from t_tok where nome = 't1')),
   (select id from public.presencas where aluno_id = 'f4000000-0000-4000-8000-0000000001a1'),
   'Token da janela atual é aceito e o check-in repetido devolve a mesma presença');
@@ -205,12 +225,32 @@ set local request.jwt.claims = '{"sub":"f4000000-0000-4000-8000-0000000000c2","r
 select is(public.__hint_de(format($$select public.fazer_checkin('f4000000-0000-4000-8000-0000000003a1', %L)$$,
     (select tok from t_tok where nome = 't1'))),
   'checkin_multiplos_alunos', 'Responsável com dois alunos e sem escolher: checkin_multiplos_alunos');
+
+-- o detail traz os candidatos do login naquela turma, para o seletor de dependentes
+create temp table t_det as
+select public.__detalhe_de(format($$select public.fazer_checkin('f4000000-0000-4000-8000-0000000003a1', %L)$$,
+         (select tok from t_tok where nome = 't1')))::jsonb as d;
+
+select is((select jsonb_typeof(d) from t_det), 'array', 'detail de checkin_multiplos_alunos é uma lista JSON');
+select is((select jsonb_array_length(d) from t_det), 2, 'A lista tem os dois alunos do login nesta turma');
+select is((select d from t_det),
+  '[{"id":"f4000000-0000-4000-8000-0000000001a2","nome":"Filho 1"},
+    {"id":"f4000000-0000-4000-8000-0000000001a3","nome":"Filho 2"}]'::jsonb,
+  'Cada item tem id e nome, em ordem de nome');
+select is((select count(*) from t_det, jsonb_array_elements(d) e
+            where e ->> 'id' not in ('f4000000-0000-4000-8000-0000000001a2', 'f4000000-0000-4000-8000-0000000001a3')),
+  0::bigint, 'A lista não traz aluno de outro login');
+select is((select count(*) from t_det, jsonb_array_elements(d) e, jsonb_object_keys(e) k where k not in ('id', 'nome')),
+  0::bigint, 'A lista só expõe id e nome');
 select isnt(public.fazer_checkin('f4000000-0000-4000-8000-0000000003a1', (select tok from t_tok where nome = 't1'),
     'f4000000-0000-4000-8000-0000000001a2'),
   null, 'Responsável escolhe o aluno e faz o check-in');
 select is(public.__hint_de(format($$select public.fazer_checkin('f4000000-0000-4000-8000-0000000003a1', %L, 'f4000000-0000-4000-8000-0000000001a1')$$,
     (select tok from t_tok where nome = 't1'))),
   'checkin_sem_matricula', 'Responsável não faz check-in de aluno de outro login');
+select is(public.__detalhe_de(format($$select public.fazer_checkin('f4000000-0000-4000-8000-0000000003a1', %L, 'f4000000-0000-4000-8000-0000000001a1')$$,
+    (select tok from t_tok where nome = 't1'))),
+  null, 'Os outros erros não levam detail');
 
 set local request.jwt.claim.sub = 'f4000000-0000-4000-8000-0000000000c5';
 set local request.jwt.claims = '{"sub":"f4000000-0000-4000-8000-0000000000c5","role":"authenticated"}';
