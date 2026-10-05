@@ -345,6 +345,68 @@ create trigger cobrancas_protege_emitida
   for each row execute function public.cobrancas_protege_emitida();
 
 
+-- Mês inicial de cobrança da matrícula (dia 1 da primeira competência).
+-- Padrão: mês do cadastro (ou de data_inicio, se a aula começa depois).
+-- Aluno antigo importado: a secretaria informa o mês seguinte.
+alter table public.matriculas
+  add column cobrar_a_partir date check (extract(day from cobrar_a_partir) = 1);
+
+update public.matriculas m
+   set cobrar_a_partir =
+       date_trunc('month', greatest(m.data_inicio, (m.created_at at time zone a.fuso)::date)::timestamp)::date
+  from public.academias a
+ where a.id = m.academia_id;
+
+alter table public.matriculas alter column cobrar_a_partir set not null;
+
+-- Preenche o padrão no insert. Depois, só muda enquanto a matrícula não
+-- tiver cobrança, e nunca para antes do mês do cadastro (competência
+-- passada ficaria fora da janela de geração e nunca seria cobrada).
+create or replace function public.matriculas_cobrar_a_partir()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_cadastro date;
+begin
+  select (coalesce(new.created_at, now()) at time zone a.fuso)::date into v_cadastro
+  from public.academias a
+  where a.id = new.academia_id;
+
+  if tg_op = 'INSERT' then
+    if new.cobrar_a_partir is null then
+      new.cobrar_a_partir := date_trunc('month', greatest(new.data_inicio, v_cadastro)::timestamp)::date;
+    end if;
+  elsif new.cobrar_a_partir is distinct from old.cobrar_a_partir then
+    if exists (
+      select 1 from public.cobrancas c
+      where c.academia_id = new.academia_id and c.matricula_id = new.id
+    ) then
+      raise exception 'A matrícula já tem cobrança: o mês inicial de cobrança não pode mais mudar';
+    end if;
+  else
+    return new;
+  end if;
+
+  if new.cobrar_a_partir < date_trunc('month', v_cadastro::timestamp)::date then
+    raise exception 'O mês inicial de cobrança não pode ser anterior ao mês do cadastro da matrícula';
+  end if;
+
+  return new;
+end
+$$;
+
+create trigger matriculas_cobrar_a_partir_insert
+  before insert on public.matriculas
+  for each row execute function public.matriculas_cobrar_a_partir();
+
+create trigger matriculas_cobrar_a_partir_update
+  before update of cobrar_a_partir on public.matriculas
+  for each row execute function public.matriculas_cobrar_a_partir();
+
+
 -- =====================================================================
 -- 5. RLS E PERMISSÕES
 -- =====================================================================
@@ -899,12 +961,12 @@ $$;
 
 -- Recorrência ----------------------------------------------------------
 -- Uma cobrança por matrícula e competência. O intervalo vem do plano
--- (1, 3, 6 ou 12 meses), contado do mês de data_inicio.
---   Primeira: competência = mês de data_inicio; vence no maior entre
---             data_inicio e o dia do cadastro da matrícula (fuso da academia),
---             então matrícula retroativa no mesmo mês gera a primeira para hoje.
---   Demais:   vencimento = dia_vencimento no mês da competência; não gera
---             com vencimento anterior ao cadastro (aluno importado não nasce devendo).
+-- (1, 3, 6 ou 12 meses), contado de matriculas.cobrar_a_partir.
+--   Primeira: competência = cobrar_a_partir. Vence no maior entre data_inicio
+--             e o dia do cadastro (fuso da academia), então nunca nasce vencida.
+--             Se cobrar_a_partir é um mês posterior a essa data (aluno importado,
+--             cobrança adiada), vence no dia_vencimento daquele mês.
+--   Demais:   vencimento = dia_vencimento no mês da competência.
 -- Gera a partir de N dias antes do vencimento (academias.dias_antecedencia_cobranca)
 -- e só para a competência corrente e a seguinte.
 -- Competência cancelada não é regerada (o unique barra).
@@ -937,8 +999,7 @@ begin
       case p.periodicidade
         when 'mensal' then 1 when 'trimestral' then 3 when 'semestral' then 6 else 12
       end as intervalo,
-      date_trunc('month', m.data_inicio::timestamp)::date as primeira,
-      (m.created_at at time zone a.fuso)::date as cadastro
+      greatest(m.data_inicio, (m.created_at at time zone a.fuso)::date) as base
   ) b
   cross join lateral (
     select s::date as competencia
@@ -948,9 +1009,12 @@ begin
       interval '1 month') s
   ) g
   cross join lateral (
-    select case when g.competencia = b.primeira
-                then greatest(m.data_inicio, b.cadastro)
-                else g.competencia + (m.dia_vencimento - 1)
+    select case
+             when g.competencia <> m.cobrar_a_partir
+               then g.competencia + (m.dia_vencimento - 1)
+             when m.cobrar_a_partir = date_trunc('month', b.base::timestamp)::date
+               then b.base
+             else greatest(g.competencia + (m.dia_vencimento - 1), b.base)
            end as vencimento
   ) x
   where m.status = 'ativa'
@@ -960,11 +1024,10 @@ begin
     and public.academia_ativa(a.id)
     and (p_academia_id is null or m.academia_id = p_academia_id)
     and (p_matricula_id is null or m.id = p_matricula_id)
-    and g.competencia >= b.primeira
-    and ((extract(year from g.competencia) - extract(year from b.primeira)) * 12
-         + extract(month from g.competencia) - extract(month from b.primeira))::int % b.intervalo = 0
+    and g.competencia >= m.cobrar_a_partir
+    and ((extract(year from g.competencia) - extract(year from m.cobrar_a_partir)) * 12
+         + extract(month from g.competencia) - extract(month from m.cobrar_a_partir))::int % b.intervalo = 0
     and b.hoje >= x.vencimento - a.dias_antecedencia_cobranca
-    and (g.competencia = b.primeira or x.vencimento >= b.cadastro)
     and (m.data_fim is null or x.vencimento <= m.data_fim)
   on conflict (matricula_id, competencia) do nothing;
 
@@ -1082,6 +1145,7 @@ $$;
 
 revoke execute on function
   public.alunos_bloqueia_anonimizado(),
+  public.matriculas_cobrar_a_partir(),
   public.cobrancas_protege_emitida(),
   public.membro_pode_gerir(uuid, uuid, text[]),
   public.baixar_cobranca_interna(uuid, uuid, text, timestamptz, numeric),

@@ -110,7 +110,7 @@ Pagar a cobrança libera o check-in sem código adicional: `fazer_checkin` já l
 
 Estorno de cobrança paga pelo gateway é feito no painel do gateway; o webhook traz o estado.
 
-## 4. Schema e RLS (revisão 4, aprovada)
+## 4. Schema e RLS (revisão 5, aprovada)
 
 Implementado em `supabase/migrations/20261005120000_correcoes_e_financeiro.sql`. O schema inicial não foi editado.
 
@@ -141,7 +141,13 @@ Implementado em `supabase/migrations/20261005120000_correcoes_e_financeiro.sql`.
   - mantém presenças, graduações e cobranças.
 - O cadastro do pagador no gateway continua lá: é a conta da academia.
 
-### 4.2 `academias`
+### 4.2 `academias` e `matriculas`
+
+- `matriculas.cobrar_a_partir date not null`: dia 1 da primeira competência cobrada.
+  - Padrão: mês do cadastro, no fuso da academia. Se `data_inicio` é posterior ao cadastro, vale o mês de `data_inicio`; senão a matrícula que começa no mês que vem teria duas cobranças naquele mês.
+  - A secretaria edita só enquanto a matrícula não tem nenhuma cobrança.
+  - Nunca anterior ao mês do cadastro: competência passada fica fora da janela de geração e nunca seria cobrada.
+  - Aluno antigo importado: a secretaria informa o mês seguinte.
 
 - `dias_antecedencia_cobranca smallint not null default 10`, de 1 a 28, editável por dono e admin.
 
@@ -234,27 +240,28 @@ Só para `service_role`. As que recebem `p_user_id` **reconferem no SQL** se ess
 **Recorrência (`gerar_cobrancas`)**
 
 - Considera matrícula `ativa` de aluno `ativo`, com plano, `dia_vencimento` e valor `coalesce(matriculas.valor, planos.valor) > 0`, em academia com assinatura em dia.
-- O plano define o intervalo em meses (1, 3, 6, 12), contado do mês de `data_inicio`.
-- **Primeira mensalidade**: competência = mês de `data_inicio`; vence no maior entre `data_inicio` e o dia do cadastro da matrícula (fuso da academia). Matrícula com `data_inicio` retroativa no mesmo mês gera a primeira vencendo no dia do cadastro.
-- **Demais**: vencimento = `dia_vencimento` no mês da competência, e nunca anterior ao cadastro da matrícula: aluno antigo importado não nasce devendo.
+- O plano define o intervalo em meses (1, 3, 6, 12), contado de `cobrar_a_partir`.
+- **Primeira mensalidade**: competência = `cobrar_a_partir`; vence em `greatest(data_inicio, dia do cadastro)`, então nunca nasce vencida.
+  - Exceção: se `cobrar_a_partir` é um mês posterior a essa data (importado, cobrança adiada), vence no `dia_vencimento` daquele mês. Sem isso, o aluno importado receberia hoje a cobrança do mês seguinte.
+- **Demais**: vencimento = `dia_vencimento` no mês da competência, sem regra especial.
 - Não há pró-rata: quem começa dia 25 com vencimento no dia 5 paga a primeira no dia 25 e a segunda no dia 5 seguinte.
 - Gera quando `hoje_academia >= vencimento - dias_antecedencia_cobranca`, dentro de `data_fim`.
-- Só a competência corrente e a seguinte. Matrícula cadastrada num mês com `data_inicio` no mês anterior não recebe a primeira mensalidade; a secretaria cria uma avulsa se quiser cobrar.
+- Só a competência corrente e a seguinte.
 - `on conflict (matricula_id, competencia) do nothing`.
 
 O agendamento no pg_cron e a emissão automática ficam para a etapa seguinte.
 
 ### 4.6 Validação
 
-Testes pgTAP em `supabase/tests/financeiro/` (63 asserções):
+Testes pgTAP em `supabase/tests/financeiro/` (71 asserções):
 
 | Arquivo | Cobre |
 |---------|-------|
 | `emissao_webhook.test.sql` | token de A com id ou `externalReference` de cobrança de B; baixa, cancelamento e ajuste de valor recusados durante a reserva; reserva mantida sem recusa explícita; adoção por `externalReference` só para a conta da reserva; evento repetido; pagamento em duplicidade |
-| `recorrencia.test.sql` | gerar duas vezes sem duplicata; competência cancelada não volta; matrícula retroativa no mesmo mês; aluno importado sem cobrança vencida |
+| `recorrencia.test.sql` | padrão de `cobrar_a_partir`; gerar duas vezes sem duplicata; competência cancelada não volta; `data_inicio` no mês anterior ao cadastro; importado com `cobrar_a_partir` no mês seguinte; `cobrar_a_partir` travado depois da primeira cobrança |
 | `permissoes.test.sql` | delete em `alunos` e `cobrancas` negado; status só por função; academia suspensa e trial vencido não atualizam a academia; `anonimizar_aluno` funciona com a academia suspensa |
 
-**Pendente:** sem Docker na máquina, `supabase start`, `supabase db reset` e `supabase test db` não foram rodados. Os 63 testes passaram num Postgres embutido (PGlite) com pgTAP 1.3.4 e com `auth`, Vault e os papéis do Supabase simulados. Isso valida a lógica, não a stack: falta confirmar no Supabase real o Vault, os grants padrão e os tipos gerados.
+Rodam no GitHub Actions (`.github/workflows/banco.yml`: `supabase db start` e `supabase test db`) a cada push e pull request. Localmente, sem Docker, os 71 passaram num Postgres embutido (PGlite) com pgTAP 1.3.4 e com `auth`, Vault e os papéis do Supabase simulados; o CI é a validação na stack real.
 
 ## 5. Adaptador de gateway
 
