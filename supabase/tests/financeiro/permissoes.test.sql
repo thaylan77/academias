@@ -3,7 +3,7 @@
 -- (anonimizar_aluno funciona mesmo com a assinatura vencida).
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(19);
+select plan(30);
 
 -- ---------------------------------------------------------------------
 -- Fixtures
@@ -135,6 +135,78 @@ select is((select count(*) from public.cobrancas where aluno_id = 'f3000000-0000
 select throws_like(
   $$update public.alunos set nome = 'Volta' where id = 'f3000000-0000-4000-8000-0000000001e1'$$,
   '%anonimizado%', 'Cadastro anonimizado não aceita update nem do dono do banco');
+
+-- ---------------------------------------------------------------------
+-- 4. alunos: grants por coluna (user_id, anonimizado_em e academia_id
+--    não são graváveis pela API)
+-- ---------------------------------------------------------------------
+insert into public.alunos (id, academia_id, nome, cpf, email) values
+  ('f3000000-0000-4000-8000-0000000001a2', 'f3000000-0000-4000-8000-00000000000a', 'Aluno A2', '33333333333', 'aluno-a2@perm.test');
+insert into public.modalidades (id, academia_id, nome) values
+  ('f3000000-0000-4000-8000-000000000201', 'f3000000-0000-4000-8000-00000000000a', 'Jiu-Jitsu');
+insert into public.turmas (id, academia_id, modalidade_id, nome) values
+  ('f3000000-0000-4000-8000-000000000301', 'f3000000-0000-4000-8000-00000000000a', 'f3000000-0000-4000-8000-000000000201', 'Turma A');
+
+set local role authenticated;
+set local request.jwt.claim.sub = 'f3000000-0000-4000-8000-0000000000a2';
+set local request.jwt.claims = '{"sub":"f3000000-0000-4000-8000-0000000000a2","role":"authenticated"}';
+
+select throws_ok(
+  $$update public.alunos set anonimizado_em = now() where id = 'f3000000-0000-4000-8000-0000000001a2'$$,
+  '42501'::char(5), null::text, 'Recepção não grava anonimizado_em');
+select throws_ok(
+  $$update public.alunos set user_id = 'f3000000-0000-4000-8000-0000000000a2' where id = 'f3000000-0000-4000-8000-0000000001a2'$$,
+  '42501'::char(5), null::text, 'Recepção não grava user_id por update');
+select throws_ok(
+  $$insert into public.alunos (academia_id, nome, user_id)
+    values ('f3000000-0000-4000-8000-00000000000a', 'Aluno com login', 'f3000000-0000-4000-8000-0000000000a2')$$,
+  '42501'::char(5), null::text, 'Recepção não grava user_id por insert');
+select throws_ok(
+  $$update public.alunos set academia_id = 'f3000000-0000-4000-8000-00000000000e' where id = 'f3000000-0000-4000-8000-0000000001a2'$$,
+  '42501'::char(5), null::text, 'Recepção não grava academia_id em aluno');
+select lives_ok(
+  $$update public.alunos set telefone = '5585999990000' where id = 'f3000000-0000-4000-8000-0000000001a2'$$,
+  'Recepção continua editando os dados cadastrais');
+
+reset role;
+select is((select telefone from public.alunos where id = 'f3000000-0000-4000-8000-0000000001a2'),
+  '5585999990000', 'Dado cadastral foi gravado');
+
+-- marcador presente, dados pessoais ainda preenchidos: não conta como anonimizado
+update public.alunos set anonimizado_em = now() where id = 'f3000000-0000-4000-8000-0000000001a2';
+
+set local role authenticated;
+set local request.jwt.claim.sub = 'f3000000-0000-4000-8000-0000000000a1';
+set local request.jwt.claims = '{"sub":"f3000000-0000-4000-8000-0000000000a1","role":"authenticated"}';
+
+select lives_ok(
+  $$select public.anonimizar_aluno('f3000000-0000-4000-8000-0000000001a2')$$,
+  'anonimizar_aluno roda mesmo com o marcador já presente');
+
+reset role;
+select is((select nome = 'Aluno anonimizado' and cpf is null and telefone is null and email is null
+             from public.alunos where id = 'f3000000-0000-4000-8000-0000000001a2'),
+  true, 'Marcador presente com dados preenchidos: os dados são limpos');
+
+-- ---------------------------------------------------------------------
+-- 5. Nenhum registro muda de academia (trigger, vale até para o dono do banco)
+-- ---------------------------------------------------------------------
+select throws_like(
+  $$update public.alunos set academia_id = 'f3000000-0000-4000-8000-00000000000e' where id = 'f3000000-0000-4000-8000-0000000001a1'$$,
+  '%não pode mudar de academia%', 'Aluno não muda de academia');
+select throws_like(
+  $$update public.turmas set academia_id = 'f3000000-0000-4000-8000-00000000000e' where id = 'f3000000-0000-4000-8000-000000000301'$$,
+  '%não pode mudar de academia%', 'Turma não muda de academia');
+select is((select count(*)
+             from information_schema.columns c
+             join information_schema.tables t
+               on t.table_schema = c.table_schema and t.table_name = c.table_name
+            where c.table_schema = 'public' and c.column_name = 'academia_id' and t.table_type = 'BASE TABLE'
+              and not exists (
+                select 1 from pg_catalog.pg_trigger g
+                where g.tgrelid = format('public.%I', c.table_name)::regclass
+                  and g.tgname = c.table_name || '_academia_imutavel')),
+  0::bigint, 'Toda tabela com academia_id tem o trigger de academia imutável');
 
 select * from finish();
 rollback;

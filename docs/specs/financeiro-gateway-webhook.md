@@ -42,18 +42,29 @@ Ajustes da aprovação: chave de API só de escrita na UI; o authToken do webhoo
 Edge Function `cobranca-emitir`, entrada `{ cobranca_id }`.
 
 1. Confere a permissão com o JWT do usuário e pega a conta ativa da academia em `gateway_contas`.
-2. Chama `reservar_emissao_interna(cobranca_id, user_id, gateway_conta_id)`, que trava a linha, reconfere o papel e grava para qual conta é a reserva. Devolve `{estado, gateway_conta_id}`:
+2. Chama `reservar_emissao_interna(cobranca_id, user_id, gateway_conta_id)`, que trava a linha, reconfere o papel e devolve `{estado, gateway_conta_id, tentativa}`:
    - `reservada`: segue para o passo 4;
-   - `orfa` (reserva com mais de 2 minutos, sem `gateway_id`): passo 3;
-   - `em_andamento`: responde "emissão em andamento";
+   - `orfa` (reserva com mais de 2 minutos, sem `gateway_id`): quem chamou passa a ser o dono da emissão, com tentativa nova; passo 3;
+   - `em_andamento`: responde "emissão em andamento" (não recebe tentativa);
    - `emitida`: devolve o `link_pagamento` existente.
-3. Reserva órfã: consulta o Asaas por `externalReference = cobrancas.id` **antes de reemitir**, na conta devolvida (a da reserva antiga, que pode não ser mais a ativa). Se achar, grava com `registrar_emissao_interna` e encerra. Se não achar, chama `reservar_emissao_interna` de novo com `p_orfa_conferida = true`, que passa a reserva para a conta ativa, e segue. Isso cobre a função que caiu entre criar no gateway e gravar no banco.
+3. Reserva órfã: consulta o Asaas por `externalReference = cobrancas.id` **antes de reemitir**, na conta devolvida (a da reserva antiga, que pode não ser mais a ativa).
+   - Achou: grava com `registrar_emissao_interna` e encerra.
+   - Não achou: chama `reservar_emissao_interna` de novo com `p_tentativa_conferida` = a tentativa que recebeu. Isso passa a reserva para a conta ativa e devolve outra tentativa.
 4. Garante o cliente no gateway (`gateway_clientes`). O pagador é o responsável quando `responsavel_cpf` está preenchido; senão, o próprio aluno. Sem CPF: erro "Informe o CPF do aluno ou do responsável para emitir a cobrança".
 5. Cria a cobrança no gateway com valor, vencimento, descrição e **`externalReference = cobrancas.id`**, deixando o pagador escolher a forma de pagamento.
-6. Grava com `registrar_emissao_interna(cobranca_id, gateway_conta_id, gateway_id, link)`.
+6. Grava com `registrar_emissao_interna(cobranca_id, tentativa, gateway_conta_id, gateway_id, link)`.
 7. Falhas:
-   - **Recusa explícita do gateway** (resposta 4xx de validação, ex.: CPF inválido): chama `liberar_emissao_interna(cobranca_id, motivo)`. O motivo fica em `cobrancas.emissao_recusa` para a secretaria.
+   - **Recusa explícita do gateway** (resposta 4xx de validação, ex.: CPF inválido): chama `liberar_emissao_interna(cobranca_id, tentativa, motivo)`. O motivo fica em `cobrancas.emissao_recusa` para a secretaria.
    - **Timeout, erro de rede ou 5xx**: **não libera**. A cobrança pode ter sido criada; a reserva fica para reconciliar por `externalReference` na próxima tentativa (passo 3) ou pelo webhook.
+
+**Tentativa e retomada concorrente.** Cada reserva e cada renovação gera uma `emissao_tentativa` nova. Só a tentativa vigente registra, libera ou renova; qualquer outra recebe erro com `hint = 'reserva_substituida'`. O caso que isso fecha: o worker 1 trava depois de reservar, a reserva envelhece, o worker 2 assume, e o worker 1 volta atrasado.
+
+Quando a Edge Function recebe `reserva_substituida`:
+
+- **Em `registrar_emissao_interna`, depois de ter criado a cobrança no gateway**: relê a cobrança. Se o `gateway_id` gravado é o que ela mesma criou, outro processo já a adotou e não há nada a fazer. Se é outro (ou nulo), **cancela no gateway a cobrança que ela criou**, para não sobrar uma cobrança pagável sem registro.
+- **Em `reservar` (renovação) ou `liberar`**: para sem fazer mais nada; a emissão é de outro processo.
+
+**Webhook antes do registro.** Se o webhook chega primeiro e adota a cobrança por `externalReference`, o `registrar_emissao_interna` seguinte, com a mesma conta e o mesmo `gateway_id`, só completa o `link_pagamento` que estiver nulo. Não toca em status nem em pagamento.
 
 Enquanto houver reserva, a cobrança conta como emitida: valor e vencimento travam, e baixa e cancelamento só pelas Edge Functions.
 
@@ -110,7 +121,7 @@ Pagar a cobrança libera o check-in sem código adicional: `fazer_checkin` já l
 
 Estorno de cobrança paga pelo gateway é feito no painel do gateway; o webhook traz o estado.
 
-## 4. Schema e RLS (revisão 5, aprovada)
+## 4. Schema e RLS (revisão 6, aprovada)
 
 Implementado em `supabase/migrations/20261005120000_correcoes_e_financeiro.sql`. O schema inicial não foi editado.
 
@@ -122,6 +133,10 @@ Implementado em `supabase/migrations/20261005120000_correcoes_e_financeiro.sql`.
 - Substitui `current_date` em `vw_inadimplentes`, `vw_progresso_graduacao`, `academia_ativa` e `matricula_online` (maioridade e `data_inicio`).
 - Não muda: os defaults de coluna `matriculas.data_inicio`, `graduacoes.data` e `academias.trial_ate`, que continuam em UTC. O front e as RPCs enviam a data explícita.
 
+**Nenhum registro muda de academia**
+
+- Trigger `bloqueia_troca_academia` em toda tabela com `academia_id`: recusa update que altere a coluna, inclusive do dono do banco. Tabela nova precisa criar o mesmo trigger; um teste falha se alguma ficar sem.
+
 **Academia suspensa não altera os próprios dados**
 
 - `academias_update` usava `tem_papel`; passa a usar `pode_gerir(id, array['dono', 'admin'])` no `using` e no `with check`. Falha achada pelos testes de RLS do Codex.
@@ -129,8 +144,10 @@ Implementado em `supabase/migrations/20261005120000_correcoes_e_financeiro.sql`.
 **Aluno não se apaga, se anonimiza**
 
 - Sem política de delete e sem grant de delete em `alunos`.
+- Insert e update por coluna: `user_id`, `anonimizado_em`, `created_at` e `updated_at` não são graváveis pela API; no update, `id` e `academia_id` também não. `user_id` só muda por `vincular_meu_cadastro_aluno` e `anonimizado_em` só por `anonimizar_aluno`.
 - `cobrancas.aluno_id` com `on delete restrict`.
-- `alunos.anonimizado_em timestamptz`; um trigger recusa qualquer update em aluno já anonimizado.
+- `alunos.anonimizado_em timestamptz`; um trigger recusa update em aluno com o marcador, salvo a própria limpeza.
+- O aluno só conta como anonimizado quando o marcador existe **e** os dados pessoais já saíram. Marcador presente com dados ainda preenchidos: `anonimizar_aluno` limpa.
 - `anonimizar_aluno(p_aluno_id)`, só dono e admin. Usa `tem_papel`, **sem checar a assinatura**: pedido de titular (LGPD) não depende de pagamento. É a única exceção à regra "suspensa lê, mas não altera".
   - recusa se houver cobrança `pendente`;
   - `nome = 'Aluno anonimizado'`; zera CPF, nascimento, telefone, e-mail, foto, dados do responsável, contato de emergência, observações médicas e `user_id`;
@@ -164,6 +181,7 @@ A coluna `gateway` (text) saiu; a cobrança aponta para a conta que a emitiu.
 | `baixa_em` | timestamptz | só em baixa manual |
 | `emissao_iniciada_em` | timestamptz | reserva da emissão |
 | `emissao_gateway_conta_id` | uuid | conta para a qual a emissão foi reservada; FK composta; preenchida junto com `emissao_iniciada_em` |
+| `emissao_tentativa` | uuid | muda a cada reserva ou renovação; só a vigente registra, libera ou renova |
 | `emissao_recusa` | text | motivo da última recusa explícita do gateway |
 | `divergencia` | text | código com `check`: `pagamento_duplicado`, `cancelada_no_gateway`, `estado_apos_estorno`, `estorno_parcial` |
 
@@ -227,9 +245,9 @@ Só para `service_role`. As que recebem `p_user_id` **reconferem no SQL** se ess
 
 | Função | Faz |
 |--------|-----|
-| `reservar_emissao_interna(cobranca, user_id, conta, orfa_conferida default false) returns jsonb` | `{estado, gateway_conta_id}`. Estados: `reservada`, `orfa` (reserva com mais de 2 minutos e sem `gateway_id`), `em_andamento` ou `emitida`. Só reserva para conta ativa da academia. |
-| `registrar_emissao_interna(cobranca, conta, gateway_id, link)` | Grava a emissão. Exige reserva para a mesma conta. |
-| `liberar_emissao_interna(cobranca, recusa)` | Solta a reserva. Só com recusa explícita do gateway; `recusa` é obrigatória e fica em `emissao_recusa`. |
+| `reservar_emissao_interna(cobranca, user_id, conta, tentativa_conferida default null) returns jsonb` | `{estado, gateway_conta_id, tentativa}`. Estados: `reservada`, `orfa`, `em_andamento` ou `emitida`. Só reserva para conta ativa. Com `tentativa_conferida`, renova a órfã se ela ainda for a vigente; senão `reserva_substituida`. |
+| `registrar_emissao_interna(cobranca, tentativa, conta, gateway_id, link)` | Grava a emissão. Exige a tentativa vigente e reserva para a mesma conta. Se a cobrança já tem essa conta e esse `gateway_id`, só completa o link nulo. |
+| `liberar_emissao_interna(cobranca, tentativa, recusa)` | Solta a reserva. Exige a tentativa vigente e a recusa explícita do gateway, que fica em `emissao_recusa`. |
 | `baixar_cobranca_interna(cobranca, user_id, forma, pago_em, valor_pago)` | Usada por `cobranca-baixar` depois de cancelar no gateway. Aceita também `cancelada` emitida. |
 | `cancelar_cobranca_interna(cobranca, user_id)` | Usada por `cobranca-cancelar`. |
 | `aplicar_pagamento_gateway(conta, evento_id, gateway_id, referencia, estado, pago_em, valor_pago, forma, divergencia) returns text` | Transições da seção 3.4 e registro do evento. Devolve `aplicado`, `sem_mudanca`, `ignorado` ou `divergente`. |
@@ -253,15 +271,15 @@ O agendamento no pg_cron e a emissão automática ficam para a etapa seguinte.
 
 ### 4.6 Validação
 
-Testes pgTAP em `supabase/tests/financeiro/` (71 asserções):
+Testes pgTAP em `supabase/tests/financeiro/` (97 asserções):
 
 | Arquivo | Cobre |
 |---------|-------|
-| `emissao_webhook.test.sql` | token de A com id ou `externalReference` de cobrança de B; baixa, cancelamento e ajuste de valor recusados durante a reserva; reserva mantida sem recusa explícita; adoção por `externalReference` só para a conta da reserva; evento repetido; pagamento em duplicidade |
+| `emissao_webhook.test.sql` | token de A com id ou `externalReference` de cobrança de B; baixa, cancelamento e ajuste de valor recusados durante a reserva; reserva mantida sem recusa explícita; retomada concorrente (registro, liberação e renovação com tentativa antiga recusados); webhook antes do registro e link completado depois; adoção por `externalReference` só para a conta da reserva; evento repetido; pagamento em duplicidade |
 | `recorrencia.test.sql` | padrão de `cobrar_a_partir`; gerar duas vezes sem duplicata; competência cancelada não volta; `data_inicio` no mês anterior ao cadastro; importado com `cobrar_a_partir` no mês seguinte; `cobrar_a_partir` travado depois da primeira cobrança |
-| `permissoes.test.sql` | delete em `alunos` e `cobrancas` negado; status só por função; academia suspensa e trial vencido não atualizam a academia; `anonimizar_aluno` funciona com a academia suspensa |
+| `permissoes.test.sql` | delete em `alunos` e `cobrancas` negado; status só por função; academia suspensa e trial vencido não atualizam a academia; `anonimizar_aluno` funciona com a academia suspensa; recepção não grava `user_id`, `anonimizado_em` nem `academia_id` em aluno; marcador presente com dados preenchidos é limpo; aluno e turma não mudam de academia; toda tabela com `academia_id` tem o trigger |
 
-Rodam no GitHub Actions (`.github/workflows/banco.yml`: `supabase db start` e `supabase test db`) a cada push e pull request. Localmente, sem Docker, os 71 passaram num Postgres embutido (PGlite) com pgTAP 1.3.4 e com `auth`, Vault e os papéis do Supabase simulados; o CI é a validação na stack real.
+Rodam no GitHub Actions (`.github/workflows/banco.yml`: `supabase db start` e `supabase test db`) a cada push e pull request. Localmente, sem Docker, os 97 passaram num Postgres embutido (PGlite) com pgTAP 1.3.4 e com `auth`, Vault e os papéis do Supabase simulados; o CI é a validação na stack real.
 
 ## 5. Adaptador de gateway
 

@@ -192,13 +192,38 @@ alter table public.alunos add column anonimizado_em timestamptz;
 drop policy alunos_delete on public.alunos;
 revoke delete on public.alunos from anon, authenticated;
 
+-- O aluno só conta como anonimizado quando os dados pessoais já saíram.
+create or replace function public.aluno_sem_dados_pessoais(p_aluno public.alunos)
+returns boolean
+language sql
+immutable
+set search_path = ''
+as $$
+  select p_aluno.nome = 'Aluno anonimizado'
+     and p_aluno.status = 'inativo'
+     and p_aluno.cpf is null
+     and p_aluno.data_nascimento is null
+     and p_aluno.telefone is null
+     and p_aluno.email is null
+     and p_aluno.foto_url is null
+     and p_aluno.responsavel_nome is null
+     and p_aluno.responsavel_cpf is null
+     and p_aluno.responsavel_telefone is null
+     and p_aluno.contato_emergencia is null
+     and p_aluno.observacoes_medicas is null
+     and p_aluno.user_id is null;
+$$;
+
+-- Cadastro com anonimizado_em não aceita mais update. A única passagem é a
+-- própria limpeza: a linha nova precisa sair sem nenhum dado pessoal.
 create or replace function public.alunos_bloqueia_anonimizado()
 returns trigger
 language plpgsql
 set search_path = ''
 as $$
 begin
-  if old.anonimizado_em is not null then
+  if old.anonimizado_em is not null
+     and not (new.anonimizado_em is not null and public.aluno_sem_dados_pessoais(new)) then
     raise exception 'Cadastro anonimizado não pode ser alterado';
   end if;
   return new;
@@ -277,6 +302,7 @@ alter table public.cobrancas
   add column baixa_em            timestamptz,
   add column emissao_iniciada_em      timestamptz,   -- reserva da emissão no gateway
   add column emissao_gateway_conta_id uuid,          -- conta para a qual a emissão foi reservada
+  add column emissao_tentativa        uuid,          -- muda a cada reserva ou renovação: só a vigente registra ou libera
   add column emissao_recusa           text,          -- motivo da última recusa explícita do gateway
   add column divergencia              text           -- gateway e sistema discordam: revisar à mão
     check (divergencia in ('pagamento_duplicado', 'cancelada_no_gateway',
@@ -293,7 +319,8 @@ alter table public.cobrancas
   add constraint cobrancas_gateway_par_check
     check ((gateway_conta_id is null) = (gateway_id is null)),
   add constraint cobrancas_reserva_par_check
-    check ((emissao_iniciada_em is null) = (emissao_gateway_conta_id is null)),
+    check ((emissao_iniciada_em is null) = (emissao_gateway_conta_id is null)
+       and (emissao_iniciada_em is null) = (emissao_tentativa is null)),
   add constraint cobrancas_academia_id_emissao_gateway_conta_id_fkey
     foreign key (academia_id, emissao_gateway_conta_id) references public.gateway_contas (academia_id, id),
   add constraint cobrancas_academia_id_gateway_conta_id_fkey
@@ -407,6 +434,44 @@ create trigger matriculas_cobrar_a_partir_update
   for each row execute function public.matriculas_cobrar_a_partir();
 
 
+-- Nenhum registro muda de academia. Vale para toda tabela com academia_id;
+-- tabela nova precisa criar o mesmo trigger (ver AGENTS.md).
+create or replace function public.bloqueia_troca_academia()
+returns trigger
+language plpgsql
+set search_path = ''
+as $$
+begin
+  if new.academia_id is distinct from old.academia_id then
+    raise exception 'Um registro não pode mudar de academia';
+  end if;
+  return new;
+end
+$$;
+
+do $$
+declare
+  t text;
+begin
+  for t in
+    select c.table_name
+    from information_schema.columns c
+    join information_schema.tables tb
+      on tb.table_schema = c.table_schema and tb.table_name = c.table_name
+    where c.table_schema = 'public'
+      and c.column_name = 'academia_id'
+      and tb.table_type = 'BASE TABLE'
+    order by c.table_name
+  loop
+    execute format(
+      'create trigger %I before update of academia_id on public.%I
+         for each row execute function public.bloqueia_troca_academia()',
+      t || '_academia_imutavel', t);
+  end loop;
+end
+$$;
+
+
 -- =====================================================================
 -- 5. RLS E PERMISSÕES
 -- =====================================================================
@@ -419,6 +484,18 @@ create policy academias_update on public.academias
   for update to authenticated
   using (public.pode_gerir(id, array['dono', 'admin']))
   with check (public.pode_gerir(id, array['dono', 'admin']));
+
+-- alunos: grants por coluna. user_id só muda por vincular_meu_cadastro_aluno()
+-- e anonimizado_em só por anonimizar_aluno(); id e academia_id não mudam.
+revoke insert, update on public.alunos from anon, authenticated;
+grant insert (id, academia_id, nome, cpf, data_nascimento, telefone, email, foto_url,
+              responsavel_nome, responsavel_cpf, responsavel_telefone,
+              contato_emergencia, observacoes_medicas, status)
+  on public.alunos to authenticated;
+grant update (nome, cpf, data_nascimento, telefone, email, foto_url,
+              responsavel_nome, responsavel_cpf, responsavel_telefone,
+              contato_emergencia, observacoes_medicas, status)
+  on public.alunos to authenticated;
 
 -- cobrancas: a equipe cria e ajusta descrição/valor/vencimento. Status,
 -- pagamento, baixa e campos do gateway só mudam pelas funções abaixo.
@@ -617,19 +694,25 @@ end
 $$;
 
 -- Emissão --------------------------------------------------------------
--- Reserva a emissão para uma conta de gateway. Devolve {estado, gateway_conta_id}:
+-- Cada reserva (e cada renovação) ganha uma emissao_tentativa nova. Só quem
+-- tem a tentativa vigente registra, libera ou renova; os outros recebem
+-- hint = 'reserva_substituida'. Isso impede que um worker atrasado grave por
+-- cima de quem retomou a emissão.
+--
+-- Devolve {estado, gateway_conta_id, tentativa}:
 --   'reservada'    pode criar no gateway, na conta devolvida
---   'orfa'         havia reserva antiga sem gateway_id. Antes de reemitir,
+--   'orfa'         havia reserva com mais de 2 minutos e sem gateway_id; quem
+--                  chamou passa a ser o dono (tentativa nova). Antes de reemitir,
 --                  consultar a conta devolvida (a da reserva antiga) por
 --                  externalReference = cobrancas.id. Achou: registrar_emissao_interna.
---                  Não achou: chamar de novo com p_orfa_conferida = true.
---   'em_andamento' outra chamada reservou há menos de 2 minutos
+--                  Não achou: chamar de novo com p_tentativa_conferida.
+--   'em_andamento' outra chamada reservou há menos de 2 minutos (sem tentativa)
 --   'emitida'      já tem gateway_id
 create or replace function public.reservar_emissao_interna(
-  p_cobranca_id      uuid,
-  p_user_id          uuid,
-  p_gateway_conta_id uuid,
-  p_orfa_conferida   boolean default false
+  p_cobranca_id          uuid,
+  p_user_id              uuid,
+  p_gateway_conta_id     uuid,
+  p_tentativa_conferida  uuid default null
 )
 returns jsonb
 language plpgsql
@@ -637,7 +720,8 @@ security definer
 set search_path = ''
 as $$
 declare
-  v_cob public.cobrancas;
+  v_cob       public.cobrancas;
+  v_tentativa uuid := gen_random_uuid();
 begin
   select * into v_cob from public.cobrancas where id = p_cobranca_id for update;
   if not found
@@ -646,11 +730,18 @@ begin
   end if;
 
   if v_cob.gateway_id is not null then
-    return jsonb_build_object('estado', 'emitida', 'gateway_conta_id', v_cob.gateway_conta_id);
+    return jsonb_build_object('estado', 'emitida', 'gateway_conta_id', v_cob.gateway_conta_id, 'tentativa', null);
   end if;
 
   if v_cob.status <> 'pendente' then
     raise exception 'Só é possível emitir cobrança pendente';
+  end if;
+
+  -- renovação de órfã já conferida no gateway: só vale para a tentativa vigente
+  if p_tentativa_conferida is not null
+     and v_cob.emissao_tentativa is distinct from p_tentativa_conferida then
+    raise exception 'A emissão desta cobrança foi retomada por outro processo'
+      using hint = 'reserva_substituida';
   end if;
 
   if not exists (
@@ -660,27 +751,31 @@ begin
     raise exception 'Conecte uma conta de gateway antes de emitir a cobrança';
   end if;
 
-  if v_cob.emissao_iniciada_em is null or p_orfa_conferida then
+  if v_cob.emissao_iniciada_em is null or p_tentativa_conferida is not null then
     update public.cobrancas
        set emissao_iniciada_em = now(),
            emissao_gateway_conta_id = p_gateway_conta_id,
+           emissao_tentativa = v_tentativa,
            emissao_recusa = null
      where id = p_cobranca_id;
-    return jsonb_build_object('estado', 'reservada', 'gateway_conta_id', p_gateway_conta_id);
+    return jsonb_build_object('estado', 'reservada', 'gateway_conta_id', p_gateway_conta_id, 'tentativa', v_tentativa);
   end if;
 
   if v_cob.emissao_iniciada_em > now() - interval '2 minutes' then
-    return jsonb_build_object('estado', 'em_andamento', 'gateway_conta_id', v_cob.emissao_gateway_conta_id);
+    return jsonb_build_object('estado', 'em_andamento', 'gateway_conta_id', v_cob.emissao_gateway_conta_id, 'tentativa', null);
   end if;
 
-  -- órfã: renova o prazo e mantém a conta da reserva antiga
-  update public.cobrancas set emissao_iniciada_em = now() where id = p_cobranca_id;
-  return jsonb_build_object('estado', 'orfa', 'gateway_conta_id', v_cob.emissao_gateway_conta_id);
+  -- órfã: quem chamou assume (tentativa nova), mantendo a conta da reserva antiga
+  update public.cobrancas
+     set emissao_iniciada_em = now(), emissao_tentativa = v_tentativa
+   where id = p_cobranca_id;
+  return jsonb_build_object('estado', 'orfa', 'gateway_conta_id', v_cob.emissao_gateway_conta_id, 'tentativa', v_tentativa);
 end
 $$;
 
 create or replace function public.registrar_emissao_interna(
   p_cobranca_id      uuid,
+  p_tentativa        uuid,
   p_gateway_conta_id uuid,
   p_gateway_id       text,
   p_link_pagamento   text
@@ -700,9 +795,23 @@ begin
 
   if v_cob.gateway_id is not null then
     if v_cob.gateway_id <> p_gateway_id or v_cob.gateway_conta_id <> p_gateway_conta_id then
-      raise exception 'Cobrança já emitida com outro identificador no gateway';
+      raise exception 'Cobrança já emitida com outro identificador no gateway'
+        using hint = 'reserva_substituida';
     end if;
-    return;  -- repetição
+
+    -- mesma cobrança do gateway (repetição, ou o webhook adotou antes por
+    -- externalReference): completa o que faltar, sem tocar em status nem pagamento
+    update public.cobrancas
+       set link_pagamento = coalesce(link_pagamento, p_link_pagamento)
+     where id = p_cobranca_id
+       and link_pagamento is null
+       and p_link_pagamento is not null;
+    return;
+  end if;
+
+  if p_tentativa is null or v_cob.emissao_tentativa is distinct from p_tentativa then
+    raise exception 'A emissão desta cobrança foi retomada por outro processo'
+      using hint = 'reserva_substituida';
   end if;
 
   if v_cob.emissao_gateway_conta_id is distinct from p_gateway_conta_id then
@@ -721,23 +830,41 @@ $$;
 -- (ex.: CPF inválido): p_recusa é o motivo, guardado para a secretaria.
 -- Timeout e erro 5xx NÃO liberam: a reserva fica para reconciliar por
 -- externalReference na próxima tentativa ou pelo webhook.
-create or replace function public.liberar_emissao_interna(p_cobranca_id uuid, p_recusa text)
+create or replace function public.liberar_emissao_interna(
+  p_cobranca_id uuid,
+  p_tentativa   uuid,
+  p_recusa      text
+)
 returns void
 language plpgsql
 security definer
 set search_path = ''
 as $$
+declare
+  v_cob public.cobrancas;
 begin
   if coalesce(trim(p_recusa), '') = '' then
     raise exception 'Informe a recusa do gateway para liberar a reserva';
   end if;
 
+  select * into v_cob from public.cobrancas where id = p_cobranca_id for update;
+  if not found then
+    raise exception 'Cobrança não encontrada';
+  end if;
+
+  if v_cob.gateway_id is not null
+     or p_tentativa is null
+     or v_cob.emissao_tentativa is distinct from p_tentativa then
+    raise exception 'A emissão desta cobrança foi retomada por outro processo'
+      using hint = 'reserva_substituida';
+  end if;
+
   update public.cobrancas
      set emissao_iniciada_em = null,
          emissao_gateway_conta_id = null,
+         emissao_tentativa = null,
          emissao_recusa = left(trim(p_recusa), 300)
-   where id = p_cobranca_id
-     and gateway_id is null;
+   where id = p_cobranca_id;
 end
 $$;
 
@@ -1078,7 +1205,8 @@ begin
     raise exception 'Aluno não encontrado ou sem permissão para anonimizar';
   end if;
 
-  if v_aluno.anonimizado_em is not null then
+  -- só está pronto se o marcador existe E os dados pessoais já saíram
+  if v_aluno.anonimizado_em is not null and public.aluno_sem_dados_pessoais(v_aluno) then
     return;
   end if;
 
@@ -1121,7 +1249,7 @@ begin
          observacoes_medicas  = null,
          user_id              = null,
          status               = 'inativo',
-         anonimizado_em       = now()
+         anonimizado_em       = coalesce(anonimizado_em, now())
    where id = p_aluno_id;
 
   -- o login perde o papel de aluno se não tiver outro aluno na academia
@@ -1145,6 +1273,8 @@ $$;
 
 revoke execute on function
   public.alunos_bloqueia_anonimizado(),
+  public.aluno_sem_dados_pessoais(public.alunos),
+  public.bloqueia_troca_academia(),
   public.matriculas_cobrar_a_partir(),
   public.cobrancas_protege_emitida(),
   public.membro_pode_gerir(uuid, uuid, text[]),
@@ -1152,9 +1282,9 @@ revoke execute on function
   public.baixar_cobranca_manual(uuid, text, timestamptz, numeric),
   public.cancelar_cobranca_interna(uuid, uuid),
   public.cancelar_cobranca(uuid),
-  public.reservar_emissao_interna(uuid, uuid, uuid, boolean),
-  public.registrar_emissao_interna(uuid, uuid, text, text),
-  public.liberar_emissao_interna(uuid, text),
+  public.reservar_emissao_interna(uuid, uuid, uuid, uuid),
+  public.registrar_emissao_interna(uuid, uuid, uuid, text, text),
+  public.liberar_emissao_interna(uuid, uuid, text),
   public.aplicar_pagamento_gateway(uuid, text, text, uuid, text, timestamptz, numeric, text, text),
   public.gateway_salvar_conta(uuid, uuid, text, text, text, text, text),
   public.gateway_credencial(uuid),
@@ -1174,9 +1304,9 @@ grant execute on function
   public.membro_pode_gerir(uuid, uuid, text[]),
   public.baixar_cobranca_interna(uuid, uuid, text, timestamptz, numeric),
   public.cancelar_cobranca_interna(uuid, uuid),
-  public.reservar_emissao_interna(uuid, uuid, uuid, boolean),
-  public.registrar_emissao_interna(uuid, uuid, text, text),
-  public.liberar_emissao_interna(uuid, text),
+  public.reservar_emissao_interna(uuid, uuid, uuid, uuid),
+  public.registrar_emissao_interna(uuid, uuid, uuid, text, text),
+  public.liberar_emissao_interna(uuid, uuid, text),
   public.aplicar_pagamento_gateway(uuid, text, text, uuid, text, timestamptz, numeric, text, text),
   public.gateway_salvar_conta(uuid, uuid, text, text, text, text, text),
   public.gateway_credencial(uuid),

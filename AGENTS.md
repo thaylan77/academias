@@ -45,6 +45,9 @@ src/types/database.ts  tipos gerados do banco (não editar à mão)
 
 1. Toda tabela de negócio tem `academia_id uuid not null`, RLS ligado e
    políticas usando as funções helper abaixo. Nunca desligue RLS "para testar".
+   Também tem o trigger `<tabela>_academia_imutavel`
+   (`before update of academia_id`, função `bloqueia_troca_academia`):
+   nenhum registro muda de academia.
 2. Tabela que é referenciada por outras tem `unique (academia_id, id)`.
 3. Toda referência entre tabelas é FK composta:
    `foreign key (academia_id, x_id) references x (academia_id, id)`.
@@ -136,7 +139,8 @@ Plano, status e slug da academia só mudam via `service_role` (billing do SaaS).
 ## Checklist antes de abrir PR
 
 - [ ] `supabase db reset` roda sem erro
-- [ ] Tabela nova: `academia_id` + RLS + políticas + FK composta
+- [ ] Tabela nova: `academia_id` + RLS + políticas + FK composta + trigger
+      de academia imutável
 - [ ] Testado com 2 academias: usuário de A não lê nem altera nada de B
 - [ ] Tipos regenerados (`supabase gen types`)
 - [ ] `npm run lint`, `npm run build` e `npm test` passando
