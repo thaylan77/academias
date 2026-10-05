@@ -93,7 +93,7 @@ insert into casos_insert values
 ('alunos', $$insert into public.alunos (academia_id, nome) values (pg_temp.id('A'), 'Novo aluno')$$, array['dono','admin','recepcao']),
 ('matriculas', $$insert into public.matriculas (academia_id, aluno_id) values (pg_temp.id('A'), pg_temp.id('aluno-A1'))$$, array['dono','admin','recepcao']),
 ('matricula_turmas', $$insert into public.matricula_turmas (academia_id, matricula_id, turma_id) values (pg_temp.id('A'), pg_temp.id('matricula-' || pg_temp.id('aluno-A1')), pg_temp.id('turma-vazia-A'))$$, array['dono','admin','recepcao']),
-('presencas', $$insert into public.presencas (academia_id, aluno_id, turma_id, data) values (pg_temp.id('A'), pg_temp.id('aluno-A1'), pg_temp.id('turma-A'), current_date)$$, array['dono','admin','professor','recepcao']),
+('presencas', $$insert into public.presencas (academia_id, aluno_id, turma_id, data) values (pg_temp.id('A'), pg_temp.id('aluno-A1'), pg_temp.id('turma-A'), current_date - 2)$$, array['dono','admin','professor','recepcao']),
 ('graduacoes', $$insert into public.graduacoes (academia_id, aluno_id, faixa_id) values (pg_temp.id('A'), pg_temp.id('aluno-A1'), pg_temp.id('faixa-A'))$$, array['dono','admin','professor']),
 ('cobrancas', $$insert into public.cobrancas (academia_id, aluno_id, valor, vencimento) values (pg_temp.id('A'), pg_temp.id('aluno-A1'), 100, current_date)$$, array['dono','admin','recepcao']),
 ('membros_academia', $$insert into public.membros_academia (academia_id, user_id, papel) values (pg_temp.id('A'), pg_temp.id('usuario-9'), 'professor')$$, array['dono','admin']);
