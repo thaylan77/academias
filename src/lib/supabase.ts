@@ -34,17 +34,21 @@ export async function obterAcademiaPublica(slug: string): Promise<AcademiaPublic
     }
   }
 
-  // Fallback para simulação local / preview
-  if (slugNormalizado === "honor-demo-a" || slugNormalizado === "demo") {
-    return ACADEMIA_DEMO_A;
+  // Fallback para simulação local / preview (apenas DEV)
+  if (import.meta.env.DEV) {
+    if (slugNormalizado === "honor-demo-a" || slugNormalizado === "demo") {
+      return ACADEMIA_DEMO_A;
+    }
+    if (slugNormalizado === "honor-demo-b") {
+      return ACADEMIA_DEMO_B;
+    }
+    return {
+      ...ACADEMIA_DEMO_A,
+      nome: `Academia ${slug.toUpperCase()}`,
+    };
   }
-  if (slugNormalizado === "honor-demo-b") {
-    return ACADEMIA_DEMO_B;
-  }
-  return {
-    ...ACADEMIA_DEMO_A,
-    nome: `Academia ${slug.toUpperCase()}`,
-  };
+
+  return null;
 }
 
 // Helper unificado para realizar matrícula online
@@ -79,27 +83,34 @@ export async function submeterMatriculaOnline(
     }
   }
 
-  // Simulação local para demonstração
-  await new Promise((r) => setTimeout(r, 600));
+  // Simulação local para demonstração (somente DEV)
+  if (import.meta.env.DEV) {
+    await new Promise((r) => setTimeout(r, 600));
 
-  const cpfLimpo = (dados.cpf || "").replace(/\D/g, "");
-  if (cpfLimpo === "11111111111") {
-    const erroMapeado = mapearErroRpc({
-      message: "Já existe um cadastro com esse CPF nesta academia. Procure a recepção.",
-      code: "23505",
-      hint: "CPF_DUPLICADO",
-    });
+    const cpfLimpo = (dados.cpf || "").replace(/\D/g, "");
+    if (cpfLimpo === "11111111111") {
+      const erroMapeado = mapearErroRpc({
+        message: "Já existe um cadastro com esse CPF nesta academia. Procure a recepção.",
+        code: "23505",
+        hint: "CPF_DUPLICADO",
+      });
+      return {
+        sucesso: false,
+        titulo: erroMapeado.titulo,
+        mensagem: erroMapeado.mensagem,
+        acao: erroMapeado.acaoSugerida,
+      };
+    }
+
     return {
-      sucesso: false,
-      titulo: erroMapeado.titulo,
-      mensagem: erroMapeado.mensagem,
-      acao: erroMapeado.acaoSugerida,
+      sucesso: true,
+      matricula_id: "demo-matricula-" + Math.floor(Math.random() * 100000),
     };
   }
 
   return {
-    sucesso: true,
-    matricula_id: "demo-matricula-" + Math.floor(Math.random() * 100000),
+    sucesso: false,
+    mensagem: "Supabase não conectado em ambiente de produção.",
   };
 }
 
@@ -109,7 +120,7 @@ export async function realizarCheckin(
   alunoId?: string,
   simulacaoCenario?: "sucesso" | "inadimplente" | "multiplos"
 ): Promise<CheckinResultado> {
-  if (supabase && !simulacaoCenario) {
+  if (supabase && (!import.meta.env.DEV || !simulacaoCenario)) {
     try {
       const { data, error } = await (supabase.rpc as any)("fazer_checkin", {
         p_turma_id: turmaId,
@@ -126,7 +137,7 @@ export async function realizarCheckin(
           acao_sugerida: erroMapeado.acaoSugerida,
         };
 
-        if (erroMapeado.codigo === "MULTIPLOS_ALUNOS") {
+        if (erroMapeado.codigo === "MULTIPLOS_ALUNOS" && import.meta.env.DEV) {
           resultado.alunos_disponiveis = [
             { id: "aluno-1", nome: "Lucas Silva (Filho)", status: "ativo" },
             { id: "aluno-2", nome: "Mariana Silva (Filha)", status: "ativo" },
@@ -154,48 +165,56 @@ export async function realizarCheckin(
     }
   }
 
-  // Simulação interativa
-  await new Promise((r) => setTimeout(r, 400));
+  // Simulação interativa estritamente para DEV
+  if (import.meta.env.DEV) {
+    await new Promise((r) => setTimeout(r, 400));
 
-  if (simulacaoCenario === "inadimplente") {
-    const erroMapeado = mapearErroRpc({
-      message: "Check-in bloqueado: mensalidade em atraso. Procure a recepção.",
-      hint: "INADIMPLENTE",
-    });
-    return {
-      sucesso: false,
-      codigo_erro: erroMapeado.codigo,
-      titulo: erroMapeado.titulo,
-      mensagem: erroMapeado.mensagem,
-      acao_sugerida: erroMapeado.acaoSugerida,
-    };
-  }
+    if (simulacaoCenario === "inadimplente") {
+      const erroMapeado = mapearErroRpc({
+        message: "Check-in bloqueado: mensalidade em atraso. Procure a recepção.",
+        hint: "INADIMPLENTE",
+      });
+      return {
+        sucesso: false,
+        codigo_erro: erroMapeado.codigo,
+        titulo: erroMapeado.titulo,
+        mensagem: erroMapeado.mensagem,
+        acao_sugerida: erroMapeado.acaoSugerida,
+      };
+    }
 
-  if (simulacaoCenario === "multiplos" && !alunoId) {
-    const erroMapeado = mapearErroRpc({
-      message: "Mais de um aluno neste login: informe qual (p_aluno_id)",
-      hint: "MULTIPLOS_ALUNOS",
-    });
+    if (simulacaoCenario === "multiplos" && !alunoId) {
+      const erroMapeado = mapearErroRpc({
+        message: "Mais de um aluno neste login: informe qual (p_aluno_id)",
+        hint: "MULTIPLOS_ALUNOS",
+      });
+      return {
+        sucesso: false,
+        codigo_erro: erroMapeado.codigo,
+        titulo: erroMapeado.titulo,
+        mensagem: erroMapeado.mensagem,
+        acao_sugerida: erroMapeado.acaoSugerida,
+        alunos_disponiveis: [
+          { id: "aluno-1", nome: "Lucas Silva (Filho)", status: "ativo" },
+          { id: "aluno-2", nome: "Mariana Silva (Filha)", status: "ativo" },
+        ],
+      };
+    }
+
     return {
-      sucesso: false,
-      codigo_erro: erroMapeado.codigo,
-      titulo: erroMapeado.titulo,
-      mensagem: erroMapeado.mensagem,
-      acao_sugerida: erroMapeado.acaoSugerida,
-      alunos_disponiveis: [
-        { id: "aluno-1", nome: "Lucas Silva (Filho)", status: "ativo" },
-        { id: "aluno-2", nome: "Mariana Silva (Filha)", status: "ativo" },
-      ],
+      sucesso: true,
+      presenca_id: "presenca-" + Math.floor(Math.random() * 100000),
+      aluno_nome: alunoId === "aluno-2" ? "Mariana Silva" : "Lucas Silva",
+      turma_nome: "Jiu-Jitsu Adulto — Noite",
+      horario: new Date().toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" }),
+      mensagem: "Presença confirmada com sucesso! Oss!",
     };
   }
 
   return {
-    sucesso: true,
-    presenca_id: "presenca-" + Math.floor(Math.random() * 100000),
-    aluno_nome: alunoId === "aluno-2" ? "Mariana Silva" : "Lucas Silva",
-    turma_nome: "Jiu-Jitsu Adulto — Noite",
-    horario: new Date().toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" }),
-    mensagem: "Presença confirmada com sucesso! Oss!",
+    sucesso: false,
+    codigo_erro: "CONFIG_AUSENTE",
+    mensagem: "Supabase não configurado no ambiente de produção.",
   };
 }
 

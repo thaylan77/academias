@@ -149,7 +149,7 @@ export const QRScanner: React.FC<QRScannerProps> = ({
               {showManualInput ? "Ocultar digitação" : "Digitar código manualmente"}
             </button>
 
-            {simulatedTurmaId && (
+            {import.meta.env.DEV && simulatedTurmaId && (
               <button
                 type="button"
                 onClick={() => onScanSuccess(simulatedTurmaId)}

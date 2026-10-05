@@ -78,6 +78,7 @@ export const TotemPage: React.FC<TotemPageProps> = ({ slug, onSessionChange }) =
   const handleLogin = async (
     e?: React.FormEvent,
     emailDemo?: string,
+    senhaDemo?: string,
     papelOverride?: UsuarioEquipe["papel"]
   ) => {
     if (e) e.preventDefault();
@@ -85,7 +86,8 @@ export const TotemPage: React.FC<TotemPageProps> = ({ slug, onSessionChange }) =
     setAutenticando(true);
 
     const email = emailDemo || emailLogin;
-    const res = await loginEquipe(email, senhaLogin || "senha123", papelOverride || "professor");
+    const senha = senhaDemo !== undefined ? senhaDemo : senhaLogin;
+    const res = await loginEquipe(email, senha, papelOverride || "professor");
     setAutenticando(false);
 
     if (res.sucesso && res.usuario) {
@@ -174,6 +176,7 @@ export const TotemPage: React.FC<TotemPageProps> = ({ slug, onSessionChange }) =
                   onChange={(e) => setSenhaLogin(e.target.value)}
                   placeholder="••••••••"
                   className="mt-1"
+                  required
                 />
               </div>
 
@@ -197,7 +200,14 @@ export const TotemPage: React.FC<TotemPageProps> = ({ slug, onSessionChange }) =
                     type="button"
                     variant="outline"
                     size="sm"
-                    onClick={() => handleLogin(undefined, "rls-3@example.test", "professor")}
+                    onClick={() =>
+                      handleLogin(
+                        undefined,
+                        import.meta.env.VITE_DEMO_PROFESSOR_EMAIL || "rls-3@example.test",
+                        import.meta.env.VITE_DEMO_PROFESSOR_SENHA || "",
+                        "professor"
+                      )
+                    }
                     className="flex-1 text-xs gap-1 border-zinc-800 hover:bg-zinc-900"
                   >
                     <UserCheck className="w-3.5 h-3.5 text-red-400" />
@@ -207,7 +217,14 @@ export const TotemPage: React.FC<TotemPageProps> = ({ slug, onSessionChange }) =
                     type="button"
                     variant="outline"
                     size="sm"
-                    onClick={() => handleLogin(undefined, "rls-4@example.test", "recepcao")}
+                    onClick={() =>
+                      handleLogin(
+                        undefined,
+                        import.meta.env.VITE_DEMO_RECEPCAO_EMAIL || "rls-4@example.test",
+                        import.meta.env.VITE_DEMO_RECEPCAO_SENHA || "",
+                        "recepcao"
+                      )
+                    }
                     className="flex-1 text-xs gap-1 border-zinc-800 hover:bg-zinc-900"
                   >
                     <ShieldCheck className="w-3.5 h-3.5 text-blue-400" />

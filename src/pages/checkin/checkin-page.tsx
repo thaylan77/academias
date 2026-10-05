@@ -47,7 +47,8 @@ export const CheckinPage: React.FC<CheckinPageProps> = ({
     setLoading(true);
     setResultado(null);
     try {
-      const res = await realizarCheckin(tId, alunoId, cenarioOverride || cenarioSimulado);
+      const cenario = import.meta.env.DEV ? (cenarioOverride || cenarioSimulado) : undefined;
+      const res = await realizarCheckin(tId, alunoId, cenario);
       setResultado(res);
     } catch (err: any) {
       setResultado({
@@ -101,54 +102,56 @@ export const CheckinPage: React.FC<CheckinPageProps> = ({
         </p>
       </div>
 
-      {/* Barra de Simulação de Cenários para Testes Rápidos */}
-      <div className="mb-6 p-3 rounded-xl border border-zinc-800 bg-zinc-950/60 flex flex-wrap items-center justify-between gap-2 text-xs">
-        <span className="text-zinc-400 font-mono font-semibold">Simulação de Cenários:</span>
-        <div className="flex gap-1.5">
-          <button
-            type="button"
-            onClick={() => {
-              setCenarioSimulado("sucesso");
-              if (turmaId) executarCheckin(turmaId, undefined, "sucesso");
-            }}
-            className={`px-2.5 py-1 rounded-lg font-medium transition-all ${
-              cenarioSimulado === "sucesso"
-                ? "bg-emerald-600 text-white"
-                : "bg-zinc-800 text-zinc-300 hover:bg-zinc-700"
-            }`}
-          >
-            Sucesso
-          </button>
-          <button
-            type="button"
-            onClick={() => {
-              setCenarioSimulado("inadimplente");
-              if (turmaId) executarCheckin(turmaId, undefined, "inadimplente");
-            }}
-            className={`px-2.5 py-1 rounded-lg font-medium transition-all ${
-              cenarioSimulado === "inadimplente"
-                ? "bg-red-600 text-white"
-                : "bg-zinc-800 text-zinc-300 hover:bg-zinc-700"
-            }`}
-          >
-            Inadimplência
-          </button>
-          <button
-            type="button"
-            onClick={() => {
-              setCenarioSimulado("multiplos");
-              if (turmaId) executarCheckin(turmaId, undefined, "multiplos");
-            }}
-            className={`px-2.5 py-1 rounded-lg font-medium transition-all ${
-              cenarioSimulado === "multiplos"
-                ? "bg-amber-600 text-white"
-                : "bg-zinc-800 text-zinc-300 hover:bg-zinc-700"
-            }`}
-          >
-            Dependentes
-          </button>
+      {/* Barra de Simulação de Cenários para Testes Rápidos (Apenas em DEV) */}
+      {import.meta.env.DEV && (
+        <div className="mb-6 p-3 rounded-xl border border-zinc-800 bg-zinc-950/60 flex flex-wrap items-center justify-between gap-2 text-xs">
+          <span className="text-zinc-400 font-mono font-semibold">Simulação de Cenários:</span>
+          <div className="flex gap-1.5">
+            <button
+              type="button"
+              onClick={() => {
+                setCenarioSimulado("sucesso");
+                if (turmaId) executarCheckin(turmaId, undefined, "sucesso");
+              }}
+              className={`px-2.5 py-1 rounded-lg font-medium transition-all ${
+                cenarioSimulado === "sucesso"
+                  ? "bg-emerald-600 text-white"
+                  : "bg-zinc-800 text-zinc-300 hover:bg-zinc-700"
+              }`}
+            >
+              Sucesso
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setCenarioSimulado("inadimplente");
+                if (turmaId) executarCheckin(turmaId, undefined, "inadimplente");
+              }}
+              className={`px-2.5 py-1 rounded-lg font-medium transition-all ${
+                cenarioSimulado === "inadimplente"
+                  ? "bg-red-600 text-white"
+                  : "bg-zinc-800 text-zinc-300 hover:bg-zinc-700"
+              }`}
+            >
+              Inadimplência
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setCenarioSimulado("multiplos");
+                if (turmaId) executarCheckin(turmaId, undefined, "multiplos");
+              }}
+              className={`px-2.5 py-1 rounded-lg font-medium transition-all ${
+                cenarioSimulado === "multiplos"
+                  ? "bg-amber-600 text-white"
+                  : "bg-zinc-800 text-zinc-300 hover:bg-zinc-700"
+              }`}
+            >
+              Dependentes
+            </button>
+          </div>
         </div>
-      </div>
+      )}
 
       {/* Estado: Processando Check-in */}
       {loading && (
@@ -322,7 +325,7 @@ export const CheckinPage: React.FC<CheckinPageProps> = ({
         <div className="space-y-6">
           <QRScanner
             onScanSuccess={handleScanSuccess}
-            simulatedTurmaId="turma-jj-01"
+            simulatedTurmaId={import.meta.env.DEV ? "turma-jj-01" : undefined}
           />
 
           <Card className="border-zinc-800 bg-zinc-950/60 p-4 text-xs text-zinc-400 space-y-2">
@@ -334,7 +337,12 @@ export const CheckinPage: React.FC<CheckinPageProps> = ({
               1. Enquadre o QR Code exibido no totem da academia ou no celular do professor no quadrado do leitor.
             </p>
             <p>
-              2. Caso esteja utilizando o navegador de um computador sem câmera, use o botão <strong>"Simular Leitura"</strong> para testar a confirmação instantaneamente.
+              2. Caso o aparelho não possua câmera, digite o código da turma manualmente no botão abaixo.
+              {import.meta.env.DEV && (
+                <span className="text-zinc-500 block mt-1 font-mono text-[11px]">
+                  (Dev: utilize o botão "Simular Leitura" para teste rápido sem câmera)
+                </span>
+              )}
             </p>
           </Card>
         </div>

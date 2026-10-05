@@ -95,8 +95,8 @@ export const Header: React.FC<HeaderProps> = ({
               </button>
             </nav>
 
-            {/* Seletor de Tenant / Academia para Sandbox e Testes */}
-            {onSlugChange && (
+            {/* Seletor de Tenant / Academia para Sandbox e Testes (Apenas em DEV) */}
+            {import.meta.env.DEV && onSlugChange && (
               <div className="hidden lg:flex items-center gap-2">
                 <span className="text-xs text-zinc-500 font-mono">Unidade:</span>
                 <select
