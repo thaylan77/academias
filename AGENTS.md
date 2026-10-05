@@ -105,7 +105,16 @@ Plano, status e slug da academia só mudam via `service_role` (billing do SaaS).
 
 - Uma branch por tarefa, prefixada pelo agente: `claude/rls-cobrancas`,
   `codex/crud-turmas`, `antigravity/tela-checkin`. Prefira `git worktree`.
+- Cada agente trabalha **só no próprio worktree**, pastas irmãs do repositório:
+  `../honorteam-claude`, `../honorteam-codex`, `../honorteam-antigravity`.
+  A pasta original (`academias`) fica parada em `main`: ninguém edita,
+  commita nem troca de branch nela.
 - Só **um** agente mexe em `supabase/migrations/` por vez.
+- Existe **um só** Supabase local, compartilhado por todos os worktrees.
+  Nunca suba um segundo (`supabase start` em outro worktree disputa as
+  mesmas portas). Só **um** agente roda `supabase db reset` por vez:
+  confirme com quem coordena antes de rodar, porque o reset apaga os
+  dados que os outros agentes estão usando.
 - Divisão padrão:
   - **Claude**: schema, RLS, specs de módulo, revisão de PR.
   - **Codex**: CRUDs, Edge Functions, testes.
