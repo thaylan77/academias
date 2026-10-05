@@ -106,9 +106,11 @@ src/types/database.ts  tipos gerados do banco (não editar à mão)
 | professor | alunos, turmas, presenças, graduações      | presenças, graduações (sem financeiro)       |
 | recepcao  | alunos, matrículas, presenças, cobranças   | alunos, matrículas, presenças, cobranças     |
 | aluno     | próprio cadastro (ou dos filhos), catálogo | só via RPC (check-in)                        |
+| totem     | só o próprio vínculo                       | nada; só as RPCs do QR de check-in           |
 
 Helpers SQL:
-- `tem_papel(academia_id, papeis[])`: leitura.
+- `tem_papel(academia_id, papeis[])`: leitura. Sem lista de papéis vale para
+  qualquer membro, **menos o `totem`**, que só entra quando a lista o cita.
 - `pode_gerir(academia_id, papeis[])`: escrita; exige também assinatura do
   SaaS em dia. Academia suspensa ou com trial vencido lê, mas não altera.
 - `academia_ativa(academia_id)`: assinatura ativa ou trial válido.
@@ -132,7 +134,10 @@ Plano, status e slug da academia só mudam via `service_role` (billing do SaaS).
 | `academia_publica(slug)`               | anon         | dados públicos para a página de matrícula                  |
 | `matricula_online(slug, dados)`        | anon         | cria aluno + matrícula `pendente` (recepção aprova)        |
 | `vincular_meu_cadastro_aluno()`        | logado       | liga login (e-mail confirmado) aos alunos ativos           |
-| `fazer_checkin(turma_id, aluno_id?)`   | aluno        | check-in por QR; bloqueia atraso > `dias_tolerancia`       |
+| `fazer_checkin(turma_id, token, aluno_id?)` | aluno   | check-in por QR com token rotativo, dentro do horário da aula; bloqueia atraso > `dias_tolerancia` |
+| `emitir_token_checkin(turma_id)`       | equipe, totem | token do QR da turma (janela atual)                       |
+| `totem_turmas_agora(academia_id)`      | equipe, totem | turmas com check-in aberto agora                          |
+| `rotacionar_segredo_checkin(academia_id)` | dono, admin | invalida todos os QR em uso                              |
 | `baixar_cobranca_manual(cobranca_id, ...)` | secretaria   | baixa de cobrança não emitida no gateway (`baixa_por`, `baixa_em`) |
 | `cancelar_cobranca(cobranca_id)`       | secretaria   | cancela cobrança não emitida; cobrança nunca é apagada     |
 | `gerar_cobrancas_matricula(matricula_id)` | secretaria | gera na hora as cobranças recorrentes da matrícula         |
@@ -148,7 +153,11 @@ Plano, status e slug da academia só mudam via `service_role` (billing do SaaS).
 - Dinheiro em `numeric(10,2)`. Data de negócio é `date` no fuso da academia
   (`academias.fuso`), não em UTC.
 - CPF e telefone só com dígitos; telefone no formato E.164 (55 + DDD + número).
-- Mensagens de erro exibidas ao usuário em português.
+- Mensagens de erro exibidas ao usuário em português. Erro de RPC que o
+  front precisa tratar leva um **código estável no `hint`**
+  (`raise exception '...' using hint = 'checkin_token_invalido'`); o front
+  decide por `error.hint`, nunca pelo texto. Lista em
+  `docs/specs/checkin-seguranca.md`.
 - Commits no padrão Conventional Commits: `feat(checkin): ...`, `fix(rls): ...`.
 
 ## Trabalho em paralelo entre agentes
