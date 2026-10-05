@@ -73,6 +73,9 @@ src/types/database.ts  tipos gerados do banco (não editar à mão)
 
 1. Toda tabela de negócio tem `academia_id uuid not null`, RLS ligado e
    políticas usando as funções helper abaixo. Nunca desligue RLS "para testar".
+   Também tem o trigger `<tabela>_academia_imutavel`
+   (`before update of academia_id`, função `bloqueia_troca_academia`):
+   nenhum registro muda de academia.
 2. Tabela que é referenciada por outras tem `unique (academia_id, id)`.
 3. Toda referência entre tabelas é FK composta:
    `foreign key (academia_id, x_id) references x (academia_id, id)`.
@@ -103,6 +106,14 @@ Helpers SQL:
   SaaS em dia. Academia suspensa ou com trial vencido lê, mas não altera.
 - `academia_ativa(academia_id)`: assinatura ativa ou trial válido.
 - `sou_o_aluno(aluno_id)`: o login é o aluno ou o responsável dele.
+- `hoje_academia(academia_id)`: data de hoje no fuso da academia. Use no lugar
+  de `current_date` em qualquer regra de negócio.
+
+**Única exceção** à regra "suspensa lê, mas não altera": `anonimizar_aluno`
+usa `tem_papel` (dono, admin) sem checar a assinatura, porque pedido de
+titular (LGPD) não depende de pagamento. Coberta por
+`supabase/tests/financeiro/permissoes.test.sql`. Não crie outra exceção sem
+aprovação.
 
 Plano, status e slug da academia só mudam via `service_role` (billing do SaaS).
 
@@ -115,6 +126,10 @@ Plano, status e slug da academia só mudam via `service_role` (billing do SaaS).
 | `matricula_online(slug, dados)`        | anon         | cria aluno + matrícula `pendente` (recepção aprova)        |
 | `vincular_meu_cadastro_aluno()`        | logado       | liga login (e-mail confirmado) aos alunos ativos           |
 | `fazer_checkin(turma_id, aluno_id?)`   | aluno        | check-in por QR; bloqueia atraso > `dias_tolerancia`       |
+| `baixar_cobranca_manual(cobranca_id, ...)` | secretaria   | baixa de cobrança não emitida no gateway (`baixa_por`, `baixa_em`) |
+| `cancelar_cobranca(cobranca_id)`       | secretaria   | cancela cobrança não emitida; cobrança nunca é apagada     |
+| `gerar_cobrancas_matricula(matricula_id)` | secretaria | gera na hora as cobranças recorrentes da matrícula         |
+| `anonimizar_aluno(aluno_id)`           | dono, admin  | LGPD: substitui o delete de aluno                          |
 | `vw_graduacao_atual`                   | equipe/aluno | faixa e grau atuais por modalidade                         |
 | `vw_progresso_graduacao`               | equipe/aluno | aulas e meses desde a última graduação, campo `apto`       |
 | `vw_inadimplentes`                     | secretaria   | alunos com cobrança pendente vencida                       |
@@ -152,7 +167,8 @@ Plano, status e slug da academia só mudam via `service_role` (billing do SaaS).
 ## Checklist antes de abrir PR
 
 - [ ] CI `Banco` verde no último commit (migrations do zero + pgTAP)
-- [ ] Tabela nova: `academia_id` + RLS + políticas + FK composta
+- [ ] Tabela nova: `academia_id` + RLS + políticas + FK composta + trigger
+      de academia imutável
 - [ ] Testado com 2 academias: usuário de A não lê nem altera nada de B
 - [ ] Tipos regenerados: depois do merge, a partir do `honorteam-dev`
       (`gen types --linked`); o PR diz se o schema mudou
@@ -163,8 +179,9 @@ Plano, status e slug da academia só mudam via `service_role` (billing do SaaS).
 - Matrícula online atrás de Edge Function com captcha (Cloudflare Turnstile);
   depois revogar `matricula_online` de `anon`.
 - Convite de membros da equipe por e-mail (Edge Function com auth admin).
-- Geração recorrente de cobranças (pg_cron) e webhook do gateway
-  (idempotente por `gateway, gateway_id`).
+- Financeiro: Edge Functions do gateway e do webhook, agendamento de
+  `gerar_cobrancas` no pg_cron (spec em `docs/specs/financeiro-gateway-webhook.md`;
+  funções `*_interna` e `gateway_*` são só para `service_role`).
 - Lembretes no WhatsApp: vencimento, aluno sumido há X dias, apto a graduar.
 - Storage de fotos dos alunos: bucket privado, caminho `{academia_id}/{aluno_id}.jpg`.
 - Testes de RLS com pgTAP (`supabase test db`).
