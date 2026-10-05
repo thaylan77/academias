@@ -28,18 +28,19 @@ import {
 
 interface TotemPageProps {
   slug: string;
+  onSessionChange?: (autenticado: boolean) => void;
 }
 
-export const TotemPage: React.FC<TotemPageProps> = ({ slug }) => {
+export const TotemPage: React.FC<TotemPageProps> = ({ slug, onSessionChange }) => {
   const [academia, setAcademia] = useState<AcademiaPublica | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
   const [turmaSelecionada, setTurmaSelecionada] = useState<TurmaPublica | null>(null);
   const [currentTime, setCurrentTime] = useState<string>("");
   const [isFullScreen, setIsFullScreen] = useState<boolean>(false);
 
-  // Estado de autenticação da equipe
+  // Estado de autenticação da equipe (sem credenciais hardcoded)
   const [usuarioEquipe, setUsuarioEquipe] = useState<UsuarioEquipe | null>(null);
-  const [emailLogin, setEmailLogin] = useState<string>("professor@honorteam.com.br");
+  const [emailLogin, setEmailLogin] = useState<string>("");
   const [senhaLogin, setSenhaLogin] = useState<string>("");
   const [erroLogin, setErroLogin] = useState<string | null>(null);
   const [autenticando, setAutenticando] = useState<boolean>(false);
@@ -62,6 +63,9 @@ export const TotemPage: React.FC<TotemPageProps> = ({ slug }) => {
     setLoading(true);
     const user = await obterSessaoEquipe();
     setUsuarioEquipe(user);
+    if (onSessionChange) {
+      onSessionChange(!!user);
+    }
 
     const data = await obterAcademiaPublica(slug);
     setAcademia(data);
@@ -71,17 +75,24 @@ export const TotemPage: React.FC<TotemPageProps> = ({ slug }) => {
     setLoading(false);
   };
 
-  const handleLogin = async (e?: React.FormEvent, papelOverride?: UsuarioEquipe["papel"]) => {
+  const handleLogin = async (
+    e?: React.FormEvent,
+    emailDemo?: string,
+    papelOverride?: UsuarioEquipe["papel"]
+  ) => {
     if (e) e.preventDefault();
     setErroLogin(null);
     setAutenticando(true);
 
-    const email = papelOverride === "recepcao" ? "recepcao@honorteam.com.br" : emailLogin;
-    const res = await loginEquipe(email, senhaLogin || "123456", papelOverride || "professor");
+    const email = emailDemo || emailLogin;
+    const res = await loginEquipe(email, senhaLogin || "senha123", papelOverride || "professor");
     setAutenticando(false);
 
     if (res.sucesso && res.usuario) {
       setUsuarioEquipe(res.usuario);
+      if (onSessionChange) {
+        onSessionChange(true);
+      }
     } else {
       setErroLogin(res.mensagem || "Não foi possível autenticar. Verifique suas credenciais.");
     }
@@ -90,6 +101,9 @@ export const TotemPage: React.FC<TotemPageProps> = ({ slug }) => {
   const handleLogout = async () => {
     await logoutEquipe();
     setUsuarioEquipe(null);
+    if (onSessionChange) {
+      onSessionChange(false);
+    }
   };
 
   const toggleFullScreen = () => {
@@ -145,7 +159,7 @@ export const TotemPage: React.FC<TotemPageProps> = ({ slug }) => {
                   type="email"
                   value={emailLogin}
                   onChange={(e) => setEmailLogin(e.target.value)}
-                  placeholder="professor@honorteam.com.br"
+                  placeholder="equipe@suaacademia.com"
                   className="mt-1"
                   required
                 />
@@ -172,40 +186,43 @@ export const TotemPage: React.FC<TotemPageProps> = ({ slug }) => {
               </Button>
             </form>
 
-            <div className="pt-4 border-t border-zinc-800 text-center">
-              <p className="text-[11px] text-zinc-500 mb-2 font-mono">
-                Acesso Rápido para Demonstração:
-              </p>
-              <div className="flex gap-2">
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  onClick={() => handleLogin(undefined, "professor")}
-                  className="flex-1 text-xs gap-1 border-zinc-800 hover:bg-zinc-900"
-                >
-                  <UserCheck className="w-3.5 h-3.5 text-red-400" />
-                  Professor Pedro
-                </Button>
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  onClick={() => handleLogin(undefined, "recepcao")}
-                  className="flex-1 text-xs gap-1 border-zinc-800 hover:bg-zinc-900"
-                >
-                  <ShieldCheck className="w-3.5 h-3.5 text-blue-400" />
-                  Recepção
-                </Button>
+            {/* Atalhos para o ambiente de desenvolvimento local (seed do banco) */}
+            {import.meta.env.DEV && (
+              <div className="pt-4 border-t border-zinc-800 text-center">
+                <p className="text-[11px] text-zinc-500 mb-2 font-mono">
+                  Atalhos de Dev (Seed Local):
+                </p>
+                <div className="flex gap-2">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => handleLogin(undefined, "rls-3@example.test", "professor")}
+                    className="flex-1 text-xs gap-1 border-zinc-800 hover:bg-zinc-900"
+                  >
+                    <UserCheck className="w-3.5 h-3.5 text-red-400" />
+                    Professor (Seed)
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => handleLogin(undefined, "rls-4@example.test", "recepcao")}
+                    className="flex-1 text-xs gap-1 border-zinc-800 hover:bg-zinc-900"
+                  >
+                    <ShieldCheck className="w-3.5 h-3.5 text-blue-400" />
+                    Recepção (Seed)
+                  </Button>
+                </div>
               </div>
-            </div>
+            )}
           </CardContent>
         </Card>
       </div>
     );
   }
 
-  // 2. Tela Liberada para a Equipe
+  // 2. Tela Liberada para a Equipe (Modo Totem Quiosque)
   const currentOrigin = typeof window !== "undefined" ? window.location.origin : "https://app.honorteam.com.br";
   const checkinUrl = turmaSelecionada
     ? `${currentOrigin}/?slug=${slug}&turma=${turmaSelecionada.id}&tab=checkin`

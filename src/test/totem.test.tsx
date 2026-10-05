@@ -23,16 +23,16 @@ describe("Tela de Totem (Proteção de Equipe)", () => {
     render(<TotemPage slug="honor-demo-a" />);
 
     await waitFor(() => {
-      expect(screen.getByText("Professor Pedro")).toBeInTheDocument();
+      expect(screen.getByText("Professor (Seed)")).toBeInTheDocument();
     });
 
-    // Clica no atalho de demonstração do Professor Pedro
-    fireEvent.click(screen.getByText("Professor Pedro"));
+    // Clica no atalho de dev para o usuário do seed
+    fireEvent.click(screen.getByText("Professor (Seed)"));
 
     await waitFor(() => {
       expect(screen.getByText(/Totem Ativo • Quiosque do Tatame/i)).toBeInTheDocument();
       expect(screen.getByText(/CHECK-IN ABERTO/i)).toBeInTheDocument();
-      expect(screen.getByText("Professor Pedro")).toBeInTheDocument();
+      expect(screen.getByText("Professor")).toBeInTheDocument();
     });
 
     // Verifica presença do botão de encerrar sessão
@@ -44,9 +44,9 @@ describe("Tela de Totem (Proteção de Equipe)", () => {
 
     // Autentica
     await waitFor(() => {
-      expect(screen.getByText("Professor Pedro")).toBeInTheDocument();
+      expect(screen.getByText("Professor (Seed)")).toBeInTheDocument();
     });
-    fireEvent.click(screen.getByText("Professor Pedro"));
+    fireEvent.click(screen.getByText("Professor (Seed)"));
 
     await waitFor(() => {
       expect(screen.getByText(/Encerrar Sessão/i)).toBeInTheDocument();

@@ -8,6 +8,7 @@ export function App() {
   const [slug, setSlug] = useState<string>("honor-demo-a");
   const [activeTab, setActiveTab] = useState<"matricula" | "totem" | "checkin">("matricula");
   const [turmaParam, setTurmaParam] = useState<string | null>(null);
+  const [totemSessaoAtiva, setTotemSessaoAtiva] = useState<boolean>(false);
 
   // Lê parâmetros da URL na inicialização
   useEffect(() => {
@@ -58,6 +59,8 @@ export function App() {
     window.history.pushState({}, "", url.toString());
   };
 
+  const isModoKiosk = activeTab === "totem" && totemSessaoAtiva;
+
   return (
     <div className="min-h-screen bg-zinc-950 text-zinc-100 flex flex-col font-sans">
       <Header
@@ -65,11 +68,17 @@ export function App() {
         onSlugChange={handleSlugChange}
         activeTab={activeTab}
         onTabChange={handleTabChange}
+        modoKiosk={isModoKiosk}
       />
 
       <main className="flex-1 pb-16">
         {activeTab === "matricula" && <MatriculaPage slug={slug} />}
-        {activeTab === "totem" && <TotemPage slug={slug} />}
+        {activeTab === "totem" && (
+          <TotemPage
+            slug={slug}
+            onSessionChange={(ativa) => setTotemSessaoAtiva(ativa)}
+          />
+        )}
         {activeTab === "checkin" && (
           <CheckinPage slug={slug} initialTurmaId={turmaParam} />
         )}

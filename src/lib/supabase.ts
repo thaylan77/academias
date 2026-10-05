@@ -22,7 +22,7 @@ export async function obterAcademiaPublica(slug: string): Promise<AcademiaPublic
 
   if (supabase) {
     try {
-      const { data, error } = await supabase.rpc("academia_publica", {
+      const { data, error } = await (supabase.rpc as any)("academia_publica", {
         p_slug: slugNormalizado,
       });
       if (error) {
@@ -54,9 +54,9 @@ export async function submeterMatriculaOnline(
 ): Promise<{ sucesso: boolean; matricula_id?: string; mensagem?: string; titulo?: string; acao?: string }> {
   if (supabase) {
     try {
-      const { data, error } = await supabase.rpc("matricula_online", {
+      const { data, error } = await (supabase.rpc as any)("matricula_online", {
         p_slug: slug.toLowerCase().trim(),
-        p_dados: dados as any,
+        p_dados: dados,
       });
       if (error) {
         const erroMapeado = mapearErroRpc(error);
@@ -111,7 +111,7 @@ export async function realizarCheckin(
 ): Promise<CheckinResultado> {
   if (supabase && !simulacaoCenario) {
     try {
-      const { data, error } = await supabase.rpc("fazer_checkin", {
+      const { data, error } = await (supabase.rpc as any)("fazer_checkin", {
         p_turma_id: turmaId,
         p_aluno_id: alunoId || null,
       });
@@ -213,7 +213,11 @@ export async function obterSessaoEquipe(): Promise<UsuarioEquipe | null> {
       papel: (user.user_metadata?.papel as any) || "professor",
     };
   }
-  return sessaoEquipeMock;
+  // Em desenvolvimento local, permite resgatar sessão do mock se estiver ativo
+  if (import.meta.env.DEV) {
+    return sessaoEquipeMock;
+  }
+  return null;
 }
 
 export async function loginEquipe(
@@ -238,15 +242,18 @@ export async function loginEquipe(
     };
   }
 
-  // Mock login da equipe para sandbox
-  sessaoEquipeMock = {
-    id: "equipe-demo-01",
-    nome: email.includes("recepcao") ? "Recepção Central" : "Professor Pedro",
-    email,
-    papel,
-  };
+  // Mock login da equipe estritamente para desenvolvimento local (import.meta.env.DEV)
+  if (import.meta.env.DEV) {
+    sessaoEquipeMock = {
+      id: "equipe-dev-01",
+      nome: email.includes("recepcao") ? "Recepção" : "Professor",
+      email,
+      papel,
+    };
+    return { sucesso: true, usuario: sessaoEquipeMock };
+  }
 
-  return { sucesso: true, usuario: sessaoEquipeMock };
+  return { sucesso: false, mensagem: "Ambiente de produção exige conexão ativa com o Supabase." };
 }
 
 export async function logoutEquipe(): Promise<void> {
