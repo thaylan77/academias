@@ -41,9 +41,19 @@ supabase test db                    # roda os testes pgTAP no banco local
   ajuda a desenvolver, mas não conta como verde: diga no PR o que rodou onde.
 - **Não há Supabase local na máquina principal** (sem Docker). Não tente
   `supabase start`, `supabase db reset` nem `supabase test db` nela.
-- **`honorteam-dev`** é o projeto Supabase de dev compartilhado. Lá só entra
-  `main`, via `supabase db push`, depois do merge. Nunca aplique branch de
-  feature nem rode `db reset` nele.
+- **`honorteam-dev`** é o projeto Supabase de dev compartilhado: ref
+  `eugtoifaryynoqwozgcc`, região São Paulo (`sa-east-1`), Postgres 17,
+  `https://eugtoifaryynoqwozgcc.supabase.co`. Lá só entra `main`, via
+  `supabase db push`, depois do merge. Nunca aplique branch de feature nem
+  rode `db reset` nele.
+- Depois de cada merge que traga migration, na pasta original (`academias`,
+  em `main`, já linkada ao projeto):
+  `supabase db push` e, em seguida,
+  `supabase gen types typescript --linked > src/types/database.ts`,
+  com commit dos tipos em `main`. Precisa de `supabase login` na máquina.
+- O front de dev aponta para o `honorteam-dev` só com a URL e a chave
+  `anon`/publishable. A `service_role` desse projeto não vai para `.env`
+  de front nem para o repositório.
 - **Testes pgTAP nunca rodam contra o `honorteam-dev`** (nada de
   `supabase test db --linked` nem `--db-url` apontando para ele).
 - Os tipos (`src/types/database.ts`) saem do `honorteam-dev`:
