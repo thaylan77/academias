@@ -1,0 +1,307 @@
+# Spec — Financeiro: gateway de pagamento e webhook
+
+Status: **aprovada em 2026-10-05.** Schema e RLS implementados (seção 4); Edge Functions e telas pendentes.
+Base: `supabase/migrations/20261005000000_schema_inicial.sql`.
+
+## 1. Escopo
+
+Cobre a cobrança do **aluno pela academia**: emitir uma cobrança no gateway, receber a confirmação por webhook e dar baixa.
+
+Fora do escopo:
+
+- Assinatura do SaaS (academia pagando a plataforma: `academias.plano_saas` e `status`).
+- Agendamento da geração recorrente (pg_cron) e emissão automática. Esta spec entrega só a função `gerar_cobrancas` (seção 4.5).
+- Cartão recorrente (fora do MVP).
+- Lembretes de vencimento no WhatsApp.
+- Checkout próprio. O aluno paga na página hospedada do gateway.
+
+## 2. Decisões (aprovadas)
+
+| # | Decisão | Recomendação | Por quê |
+|---|---------|--------------|---------|
+| D1 | Primeiro gateway | Asaas | Pix, boleto e cartão numa única fatura hospedada; webhook com token próprio; sandbox completo. O código fica atrás de um adaptador, então Efí e Mercado Pago entram depois sem mexer no banco. |
+| D2 | De quem é a conta no gateway | Cada academia conecta a **própria conta** (chave de API dela) | O dinheiro cai direto na academia. A plataforma não intermedeia pagamento, não faz split e não responde por repasse. |
+| D3 | Recorrência | Nós geramos cada cobrança; **não** usamos assinatura do gateway | Mantém `cobrancas` como fonte única e funciona igual em qualquer gateway. |
+| D4 | Fonte da verdade no webhook | O corpo do webhook é só um aviso; o estado é **reconsultado na API do gateway** | Evento forjado, repetido ou fora de ordem deixa de ser problema. Custa uma chamada HTTP por evento. |
+| D5 | `cobrancas.aluno_id on delete cascade` | Trocar para `restrict` | Hoje apagar um aluno apaga o histórico financeiro dele, inclusive cobranças pagas. |
+
+Ajustes da aprovação: chave de API só de escrita na UI; o authToken do webhook resolve a academia; `competencia` nas cobranças; aluno é anonimizado, não apagado; baixa manual com `baixa_por` e `baixa_em`.
+
+## 3. Fluxos
+
+### 3.1 Conectar o gateway (dono ou admin)
+
+1. A tela envia a chave de API para a Edge Function `gateway-conectar`.
+2. A função valida a chave chamando o gateway, grava a chave no Supabase Vault e cria a linha em `gateway_contas`.
+3. A função gera um authToken aleatório de 32 bytes, único por academia, guarda só o SHA-256 dele e registra o webhook no gateway apontando para
+   `/functions/v1/gateway-webhook/{gateway}` com esse token.
+4. A chave e o token nunca voltam para o front.
+
+### 3.2 Emitir cobrança (dono, admin ou recepção)
+
+Edge Function `cobranca-emitir`, entrada `{ cobranca_id }`.
+
+1. Confere a permissão com o JWT do usuário e pega a conta ativa da academia em `gateway_contas`.
+2. Chama `reservar_emissao_interna(cobranca_id, user_id)`, que trava a linha e reconfere o papel:
+   - `reservada`: segue para o passo 4;
+   - `orfa` (reserva com mais de 2 minutos, sem `gateway_id`): passo 3;
+   - `em_andamento`: responde "emissão em andamento";
+   - `emitida`: devolve o `link_pagamento` existente.
+3. Reserva órfã: consulta o Asaas por `externalReference = cobrancas.id` **antes de reemitir**. Se achar, grava com `registrar_emissao_interna` e encerra. Isso cobre a função que caiu entre criar no gateway e gravar no banco.
+4. Garante o cliente no gateway (`gateway_clientes`). O pagador é o responsável quando `responsavel_cpf` está preenchido; senão, o próprio aluno. Sem CPF: erro "Informe o CPF do aluno ou do responsável para emitir a cobrança".
+5. Cria a cobrança no gateway com valor, vencimento, descrição e **`externalReference = cobrancas.id`**, deixando o pagador escolher a forma de pagamento.
+6. Grava com `registrar_emissao_interna(cobranca_id, gateway_conta_id, gateway_id, link)`. Se o gateway recusar de vez (ex.: CPF inválido), chama `liberar_emissao_interna`; em falha de rede, deixa a reserva para a próxima tentativa cair no passo 3.
+
+Enquanto houver reserva, a cobrança conta como emitida: valor e vencimento travam, e baixa e cancelamento só pelas Edge Functions.
+
+O aluno vê o `link_pagamento` no portal; a política `cobrancas_select` já permite.
+
+### 3.3 Webhook
+
+Edge Function `gateway-webhook`, pública (`verify_jwt = false`), usa `service_role`.
+
+1. Calcula o SHA-256 do authToken do cabeçalho e busca a conta por `webhook_token_hash`, ativa ou não. Sem token ou sem conta: `401`. Nada é gravado.
+2. O `academia_id` dessa conta vale para todo o resto da requisição; nada do corpo é usado para identificar a academia.
+3. Insere em `gateway_eventos` com `on conflict (gateway_conta_id, evento_id) do nothing`. Evento já processado: `200` e encerra.
+4. Reconsulta a cobrança na API do gateway com a chave **desta conta** e normaliza o estado para `pendente | paga | cancelada | estornada`.
+5. Chama `aplicar_pagamento_gateway(...)`, que localiza a cobrança, trava a linha (`for update`), aplica a transição e marca o evento, tudo numa transação.
+6. Responde `200`.
+
+Regras:
+
+- A cobrança é procurada **sempre com o `academia_id` resolvido pelo token**: primeiro por `(academia_id, gateway_conta_id, gateway_id)`, depois pela referência externa (só cobrança com reserva de emissão). Sem esse filtro, uma academia conseguiria dar baixa em cobrança de outra enviando o `gateway_id` dela com o próprio token.
+- Cobrança não encontrada é normal (a academia usa a mesma conta para outras vendas): evento marcado `ignorado`, resposta `200`.
+- Falha nossa (banco, tempo esgotado no gateway): evento marcado `erro`, resposta `500` para o gateway reenviar.
+- O webhook **não** verifica `academia_ativa`. Academia suspensa não emite, mas pagamento de aluno que chegar precisa ser registrado.
+- Corpo acima de 100 KB: `413`.
+
+### 3.4 Transições de estado
+
+Aplicadas por `aplicar_pagamento_gateway`, que compara o estado atual com o estado reconsultado.
+
+| Atual \ Gateway | pendente | paga | cancelada | estornada |
+|-----------------|----------|------|-----------|-----------|
+| **pendente**    | —        | paga | cancelada | estornada |
+| **paga**        | pendente (baixa desfeita) | — | não aplica, evento `divergente` | estornada |
+| **cancelada**   | pendente (restaurada) | **paga** | — | estornada |
+| **estornada**   | não aplica | não aplica | não aplica | — |
+
+- Ao virar `paga`: grava `pago_em` (data do gateway), `valor_pago` e `forma_pagamento`.
+- `cancelada → paga` é intencional: Pix pago segundos depois do cancelamento é dinheiro real na conta.
+- "Vencida" não é estado: continua sendo `pendente` com `vencimento` no passado.
+- Cartão aprovado e ainda não liquidado conta como `paga`.
+- Estorno parcial fica como `paga`, com o evento marcado `divergente` para revisão manual.
+- Cobrança sem `gateway_id` nunca é tocada pelo webhook.
+- Cobrança com `baixa_em` preenchido (baixa manual de cobrança emitida): evento `ignorado`, ou `divergente` se o gateway disser `paga` (pagamento em duplicidade); nesse caso `cobrancas.divergencia` é preenchida para a secretaria revisar.
+
+Pagar a cobrança libera o check-in sem código adicional: `fazer_checkin` já lê `cobrancas`.
+
+### 3.5 Baixa manual e cancelamento
+
+| Caso | Como | Faz |
+|---------------|-------|-----|
+| Cobrança sem `gateway_id` | RPC `baixar_cobranca_manual` e `cancelar_cobranca` | Marca `paga` (com `baixa_por` e `baixa_em`) ou `cancelada`. |
+| Baixa de cobrança emitida | Edge Function `cobranca-baixar` | Cancela no gateway, para o boleto e o Pix pararem de valer, e chama `baixar_cobranca_interna`. Se o gateway recusar porque já recebeu: "Esta cobrança já foi paga pelo gateway". |
+| Cancelamento de cobrança emitida | Edge Function `cobranca-cancelar` | Cancela no gateway e chama `cancelar_cobranca_interna`. Só a partir de `pendente`. |
+
+Estorno de cobrança paga pelo gateway é feito no painel do gateway; o webhook traz o estado.
+
+## 4. Schema e RLS (revisão 3, aprovada)
+
+Implementado em `supabase/migrations/20261005120000_correcoes_e_financeiro.sql`. O schema inicial não foi editado.
+
+### 4.1 Correções no schema inicial
+
+**Data no fuso da academia**
+
+- `hoje_academia(p_academia_id) returns date`: `(now() at time zone academias.fuso)::date`.
+- Substitui `current_date` em `vw_inadimplentes`, `vw_progresso_graduacao`, `academia_ativa` e `matricula_online` (maioridade e `data_inicio`).
+- Não muda: os defaults de coluna `matriculas.data_inicio`, `graduacoes.data` e `academias.trial_ate`, que continuam em UTC. O front e as RPCs enviam a data explícita.
+
+**Aluno não se apaga, se anonimiza**
+
+- Sem política de delete e sem grant de delete em `alunos`.
+- `cobrancas.aluno_id` com `on delete restrict`.
+- `alunos.anonimizado_em timestamptz`; um trigger recusa qualquer update em aluno já anonimizado.
+- `anonimizar_aluno(p_aluno_id)`, só dono e admin:
+  - recusa se houver cobrança `pendente`;
+  - `nome = 'Aluno anonimizado'`; zera CPF, nascimento, telefone, e-mail, foto, dados do responsável, contato de emergência, observações médicas e `user_id`;
+  - `status = 'inativo'`, `anonimizado_em = now()`;
+  - matrículas não canceladas viram `cancelada`, com `data_fim = hoje_academia`;
+  - apaga `gateway_clientes` do aluno e esvazia o `payload` dos eventos das cobranças dele;
+  - remove o papel `aluno` do login, se ele não tiver outro aluno na academia;
+  - mantém presenças, graduações e cobranças.
+- O cadastro do pagador no gateway continua lá: é a conta da academia.
+
+### 4.2 `academias`
+
+- `dias_antecedencia_cobranca smallint not null default 10`, de 1 a 28, editável por dono e admin.
+
+### 4.3 `cobrancas`
+
+A coluna `gateway` (text) saiu; a cobrança aponta para a conta que a emitiu.
+
+| Coluna nova | Tipo | Nota |
+|-------------|------|------|
+| `gateway_conta_id` | uuid | FK composta `(academia_id, gateway_conta_id) → gateway_contas (academia_id, id)` |
+| `competencia` | date | dia 1 do mês de referência; nula em cobrança avulsa |
+| `valor_pago` | numeric(10,2) | |
+| `baixa_por` | uuid | FK `auth.users`, `on delete set null`; só em baixa manual |
+| `baixa_em` | timestamptz | só em baixa manual |
+| `emissao_iniciada_em` | timestamptz | reserva da emissão |
+| `divergencia` | text | gateway e sistema discordam; a secretaria lê e resolve à mão |
+
+Restrições:
+
+- `unique (academia_id, id)`.
+- `unique (matricula_id, competencia)`. Vale também para `cancelada`: competência cancelada não é regerada; para cobrar de novo, cria-se uma avulsa.
+- `unique (gateway_conta_id, gateway_id)`.
+- `check ((gateway_conta_id is null) = (gateway_id is null))`.
+
+**"Emitida"** = `gateway_id is not null` **ou** `emissao_iniciada_em is not null`. A definição vale no trigger de valor e vencimento, em `baixar_cobranca_manual` e em `cancelar_cobranca`, sempre com a linha travada (`for update`).
+
+Permissões de `authenticated`:
+
+- insert só em `academia_id, aluno_id, matricula_id, competencia, descricao, valor, vencimento`;
+- update só em `descricao, valor, vencimento`, e um trigger recusa mudar `valor` e `vencimento` de cobrança emitida ou que saiu de `pendente`;
+- **sem delete**: nem política, nem grant. Cobrança se cancela.
+
+O aluno lê as próprias cobrancas e, com elas, a coluna `divergencia`.
+
+### 4.4 Tabelas novas
+
+Todas com `academia_id not null`, RLS ligado e FK composta.
+
+**`gateway_contas`** — conta da academia no gateway.
+
+| Coluna | Tipo | Nota |
+|--------|------|------|
+| `id` | uuid PK | `unique (academia_id, id)` |
+| `academia_id` | uuid not null | FK `academias` |
+| `gateway` | text | `asaas`, `efi` ou `mercadopago` |
+| `ambiente` | text | `sandbox` ou `producao` |
+| `conta_externa_id` | text | id da conta no gateway; `unique (academia_id, gateway, ambiente, conta_externa_id)` |
+| `ativa` | boolean | no máximo uma ativa por academia (índice único parcial) |
+| `api_key_secret_id` | uuid | segredo no Vault |
+| `webhook_token_hash` | text | SHA-256 do authToken, `unique` |
+| `conectada_em`, `created_at`, `updated_at` | timestamptz | |
+
+- Não há `unique (academia_id, gateway)`: a academia pode acumular contas. Só a ativa emite; **as inativas continuam recebendo o webhook das cobranças que emitiram**.
+- `conta_externa_id` distingue reconexão (mesma conta: troca chave e token) de conta nova (desativa a anterior).
+- Dono e admin leem `id, academia_id, gateway, ambiente, ativa, conectada_em`. Nenhuma escrita por `authenticated`.
+
+**`gateway_clientes`** — PK `(gateway_conta_id, aluno_id)`; `gateway_cliente_id`, `cpf_pagador`. Só `service_role`.
+
+**`gateway_eventos`** — `gateway_conta_id`, `evento_id` (`unique (gateway_conta_id, evento_id)`), `tipo`, `cobranca_id`, `status` (`recebido`, `processado`, `ignorado`, `divergente`, `erro`), `payload`, `erro`, `recebido_em`, `processado_em`. Só `service_role`. Retenção de 90 dias (job na etapa seguinte).
+
+### 4.5 Funções
+
+Todas `security definer`, `set search_path = ''`, com `revoke execute from public, anon, authenticated` e grant explícito.
+
+Para `authenticated`:
+
+| Função | Papel | Faz |
+|--------|-------|-----|
+| `baixar_cobranca_manual(cobranca, forma, pago_em, valor_pago)` | secretaria | Só `pendente` não emitida. Marca `paga`, grava `baixa_por` e `baixa_em`. |
+| `cancelar_cobranca(cobranca)` | secretaria | Só `pendente` não emitida. |
+| `gerar_cobrancas_matricula(matricula)` | secretaria | Gera na hora as cobranças da matrícula, sem esperar o job. |
+| `anonimizar_aluno(aluno)` | dono, admin | Seção 4.1. |
+
+Só para `service_role`. As que recebem `p_user_id` **reconferem no SQL** se esse usuário tem o papel na academia e se a assinatura está em dia (`membro_pode_gerir`):
+
+| Função | Faz |
+|--------|-----|
+| `reservar_emissao_interna(cobranca, user_id) returns text` | `reservada`, `orfa` (reserva com mais de 2 minutos e sem `gateway_id`), `em_andamento` ou `emitida`. |
+| `registrar_emissao_interna(cobranca, conta, gateway_id, link)` | Grava a emissão. A FK composta recusa conta de outra academia. |
+| `liberar_emissao_interna(cobranca)` | Solta a reserva quando o gateway recusou de vez. |
+| `baixar_cobranca_interna(cobranca, user_id, forma, pago_em, valor_pago)` | Usada por `cobranca-baixar` depois de cancelar no gateway. Aceita também `cancelada` emitida. |
+| `cancelar_cobranca_interna(cobranca, user_id)` | Usada por `cobranca-cancelar`. |
+| `aplicar_pagamento_gateway(conta, evento_id, gateway_id, referencia, estado, pago_em, valor_pago, forma, divergencia) returns text` | Transições da seção 3.4 e registro do evento. Devolve `aplicado`, `sem_mudanca`, `ignorado` ou `divergente`. |
+| `gateway_salvar_conta(academia, user_id, gateway, ambiente, conta_externa_id, api_key, token_hash) returns uuid` | Só dono e admin. Chave no Vault. |
+| `gateway_credencial(conta) returns text` | Lê a chave no Vault. |
+| `gerar_cobrancas(academia default null, matricula default null) returns integer` | Recorrência. |
+
+**Recorrência (`gerar_cobrancas`)**
+
+- Considera matrícula `ativa` de aluno `ativo`, com plano, `dia_vencimento` e valor `coalesce(matriculas.valor, planos.valor) > 0`, em academia com assinatura em dia.
+- O plano define o intervalo em meses (1, 3, 6, 12), contado do mês de `data_inicio`.
+- **Primeira mensalidade**: competência = mês de `data_inicio`, vencimento = `data_inicio`.
+- **Demais**: vencimento = `dia_vencimento` no mês da competência. Não há pró-rata: quem começa dia 25 com vencimento no dia 5 paga a primeira no dia 25 e a segunda no dia 5 seguinte.
+- Gera quando `hoje_academia >= vencimento - dias_antecedencia_cobranca`, dentro de `data_fim`.
+- Só a competência corrente e a seguinte.
+- Nunca com vencimento anterior ao cadastro da matrícula no sistema: aluno antigo importado não nasce devendo.
+- `on conflict (matricula_id, competencia) do nothing`.
+
+O agendamento no pg_cron e a emissão automática ficam para a etapa seguinte.
+
+### 4.6 Validação
+
+Sem Docker na máquina, `supabase db reset` **não foi rodado**. As duas migrations foram aplicadas num Postgres embutido (PGlite), com `auth`, Vault e os papéis do Supabase simulados, e 83 cenários passaram: permissões por papel, isolamento entre duas academias, emissão, webhook, recorrência e anonimização. Falta rodar `supabase db reset` e regenerar os tipos antes do merge.
+
+## 5. Adaptador de gateway
+
+`supabase/functions/_shared/gateway/`, uma implementação por gateway:
+
+```ts
+interface Gateway {
+  validarCredencial(): Promise<void>
+  registrarWebhook(url: string, token: string): Promise<void>
+  garantirCliente(pagador: Pagador): Promise<string>
+  buscarPorReferencia(cobrancaId: string): Promise<CobrancaGateway | null>
+  criarCobranca(dados: NovaCobranca): Promise<CobrancaGateway>
+  consultar(gatewayId: string): Promise<CobrancaGateway>
+  cancelar(gatewayId: string): Promise<void>
+  lerWebhook(req: Request): { token: string; eventoId: string; tipo: string; gatewayId: string }
+}
+
+type CobrancaGateway = {
+  gatewayId: string
+  referencia: string | null
+  estado: 'pendente' | 'paga' | 'cancelada' | 'estornada'
+  pagoEm: string | null
+  valorPago: number | null
+  forma: 'pix' | 'boleto' | 'cartao' | 'dinheiro' | 'outro' | null
+  link: string
+}
+```
+
+O mapeamento dos status e dos nomes de evento do Asaas para os quatro estados fica dentro do adaptador e deve ser **validado no sandbox contra a documentação atual** antes do merge. Status que o adaptador não conhece gera erro (evento `erro`, resposta `500`), nunca um palpite.
+
+## 6. Segurança
+
+- `service_role` só nas Edge Functions. Toda função chamada pelo painel valida o JWT e o papel antes de usá-lo.
+- Chave de API só no Vault. Nunca em `academias.configuracoes`, em log ou em resposta.
+- Token do webhook por conta, guardado como hash, comparado em tempo constante.
+- Mensagens de erro ao usuário em português, sem repassar a mensagem crua do gateway.
+- Log das funções sem CPF e sem corpo de requisição.
+
+## 7. Testes obrigatórios
+
+1. Mesmo evento entregue duas vezes: uma única transição, as duas respostas `200`.
+2. Eventos fora de ordem (pago chega antes de criado): estado final `paga`.
+3. Dois eventos simultâneos da mesma cobrança: sem erro e sem estado inconsistente.
+4. Token errado: `401`, nada gravado.
+5. **Duas academias**: conta de A enviando o `gateway_id` de uma cobrança de B, com o token de A: cobrança de B intacta, evento `ignorado`.
+6. Cobrança desconhecida na conta: `200`, `ignorado`.
+7. Gateway fora do ar na reconsulta: `500`, evento `erro`; o reenvio processa.
+8. Emissão com duplo clique: uma única cobrança no gateway.
+9. Emissão que cai depois de criar no gateway: a nova tentativa reaproveita pela referência externa.
+10. `cancelada → paga` e `paga → estornada`.
+11. Recepção tentando `update cobrancas set status = 'paga'` direto: negado.
+12. Professor não lê `cobrancas` nem `gateway_contas`; recepção não lê `gateway_contas`.
+13. Academia suspensa: emissão negada, webhook processa.
+
+## 8. Divisão do trabalho
+
+| Etapa | Agente | Entrega |
+|-------|--------|---------|
+| 1 | Claude | Migration da seção 4 (feita) |
+| 2 | Codex | Adaptador Asaas, as cinco Edge Functions, todos os testes da seção 7 em pgTAP e ajuste de `rls.test.sql` (delete em `alunos` e `cobrancas` agora dá permissão negada) |
+| 3 | Antigravity | Tela de conexão do gateway, ações de emitir, baixar e cancelar, link de pagamento no portal |
+| Revisão | Claude revisa 2 e 3; Codex revisa 1 | |
+
+## 9. Fase seguinte
+
+- Reconciliação diária: reconsultar cobranças `pendente` emitidas, para cobrir webhook perdido.
+- Painel de eventos `erro` e `divergente` para dono e admin.
+- Alterar valor ou vencimento de cobrança já emitida.
