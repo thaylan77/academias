@@ -275,8 +275,12 @@ alter table public.cobrancas
   add column valor_pago          numeric(10, 2) check (valor_pago > 0),
   add column baixa_por           uuid references auth.users (id) on delete set null,  -- só em baixa manual
   add column baixa_em            timestamptz,
-  add column emissao_iniciada_em timestamptz,   -- reserva da emissão no gateway
-  add column divergencia         text;          -- gateway e sistema discordam: revisar à mão
+  add column emissao_iniciada_em      timestamptz,   -- reserva da emissão no gateway
+  add column emissao_gateway_conta_id uuid,          -- conta para a qual a emissão foi reservada
+  add column emissao_recusa           text,          -- motivo da última recusa explícita do gateway
+  add column divergencia              text           -- gateway e sistema discordam: revisar à mão
+    check (divergencia in ('pagamento_duplicado', 'cancelada_no_gateway',
+                           'estado_apos_estorno', 'estorno_parcial'));
 
 -- Aluno com cobrança não pode ser apagado (era cascade): histórico financeiro fica.
 alter table public.cobrancas
@@ -288,6 +292,10 @@ alter table public.cobrancas
   add constraint cobrancas_conta_gateway_id_key unique (gateway_conta_id, gateway_id),
   add constraint cobrancas_gateway_par_check
     check ((gateway_conta_id is null) = (gateway_id is null)),
+  add constraint cobrancas_reserva_par_check
+    check ((emissao_iniciada_em is null) = (emissao_gateway_conta_id is null)),
+  add constraint cobrancas_academia_id_emissao_gateway_conta_id_fkey
+    foreign key (academia_id, emissao_gateway_conta_id) references public.gateway_contas (academia_id, id),
   add constraint cobrancas_academia_id_gateway_conta_id_fkey
     foreign key (academia_id, gateway_conta_id) references public.gateway_contas (academia_id, id);
 
@@ -340,6 +348,15 @@ create trigger cobrancas_protege_emitida
 -- =====================================================================
 -- 5. RLS E PERMISSÕES
 -- =====================================================================
+
+-- academias: a política inicial usava tem_papel, então academia suspensa ou
+-- com trial vencido conseguia alterar os próprios dados. Escrita = pode_gerir.
+drop policy academias_update on public.academias;
+
+create policy academias_update on public.academias
+  for update to authenticated
+  using (public.pode_gerir(id, array['dono', 'admin']))
+  with check (public.pode_gerir(id, array['dono', 'admin']));
 
 -- cobrancas: a equipe cria e ajusta descrição/valor/vencimento. Status,
 -- pagamento, baixa e campos do gateway só mudam pelas funções abaixo.
@@ -538,21 +555,27 @@ end
 $$;
 
 -- Emissão --------------------------------------------------------------
--- Reserva a emissão. Devolve:
---   'reservada'    pode criar no gateway
---   'orfa'         havia reserva antiga sem gateway_id: consultar o gateway
---                  por externalReference (= cobrancas.id) antes de criar
+-- Reserva a emissão para uma conta de gateway. Devolve {estado, gateway_conta_id}:
+--   'reservada'    pode criar no gateway, na conta devolvida
+--   'orfa'         havia reserva antiga sem gateway_id. Antes de reemitir,
+--                  consultar a conta devolvida (a da reserva antiga) por
+--                  externalReference = cobrancas.id. Achou: registrar_emissao_interna.
+--                  Não achou: chamar de novo com p_orfa_conferida = true.
 --   'em_andamento' outra chamada reservou há menos de 2 minutos
 --   'emitida'      já tem gateway_id
-create or replace function public.reservar_emissao_interna(p_cobranca_id uuid, p_user_id uuid)
-returns text
+create or replace function public.reservar_emissao_interna(
+  p_cobranca_id      uuid,
+  p_user_id          uuid,
+  p_gateway_conta_id uuid,
+  p_orfa_conferida   boolean default false
+)
+returns jsonb
 language plpgsql
 security definer
 set search_path = ''
 as $$
 declare
   v_cob public.cobrancas;
-  v_res text;
 begin
   select * into v_cob from public.cobrancas where id = p_cobranca_id for update;
   if not found
@@ -561,23 +584,36 @@ begin
   end if;
 
   if v_cob.gateway_id is not null then
-    return 'emitida';
+    return jsonb_build_object('estado', 'emitida', 'gateway_conta_id', v_cob.gateway_conta_id);
   end if;
 
   if v_cob.status <> 'pendente' then
     raise exception 'Só é possível emitir cobrança pendente';
   end if;
 
-  if v_cob.emissao_iniciada_em is null then
-    v_res := 'reservada';
-  elsif v_cob.emissao_iniciada_em > now() - interval '2 minutes' then
-    return 'em_andamento';
-  else
-    v_res := 'orfa';
+  if not exists (
+    select 1 from public.gateway_contas
+    where id = p_gateway_conta_id and academia_id = v_cob.academia_id and ativa
+  ) then
+    raise exception 'Conecte uma conta de gateway antes de emitir a cobrança';
   end if;
 
+  if v_cob.emissao_iniciada_em is null or p_orfa_conferida then
+    update public.cobrancas
+       set emissao_iniciada_em = now(),
+           emissao_gateway_conta_id = p_gateway_conta_id,
+           emissao_recusa = null
+     where id = p_cobranca_id;
+    return jsonb_build_object('estado', 'reservada', 'gateway_conta_id', p_gateway_conta_id);
+  end if;
+
+  if v_cob.emissao_iniciada_em > now() - interval '2 minutes' then
+    return jsonb_build_object('estado', 'em_andamento', 'gateway_conta_id', v_cob.emissao_gateway_conta_id);
+  end if;
+
+  -- órfã: renova o prazo e mantém a conta da reserva antiga
   update public.cobrancas set emissao_iniciada_em = now() where id = p_cobranca_id;
-  return v_res;
+  return jsonb_build_object('estado', 'orfa', 'gateway_conta_id', v_cob.emissao_gateway_conta_id);
 end
 $$;
 
@@ -600,40 +636,55 @@ begin
     raise exception 'Cobrança não encontrada';
   end if;
 
-  if v_cob.gateway_id is not null
-     and (v_cob.gateway_id <> p_gateway_id or v_cob.gateway_conta_id <> p_gateway_conta_id) then
-    raise exception 'Cobrança já emitida com outro identificador no gateway';
+  if v_cob.gateway_id is not null then
+    if v_cob.gateway_id <> p_gateway_id or v_cob.gateway_conta_id <> p_gateway_conta_id then
+      raise exception 'Cobrança já emitida com outro identificador no gateway';
+    end if;
+    return;  -- repetição
   end if;
 
-  -- a FK composta recusa conta de outra academia
+  if v_cob.emissao_gateway_conta_id is distinct from p_gateway_conta_id then
+    raise exception 'Cobrança sem reserva de emissão para esta conta de gateway';
+  end if;
+
   update public.cobrancas
-     set gateway_conta_id    = p_gateway_conta_id,
-         gateway_id          = p_gateway_id,
-         link_pagamento      = p_link_pagamento,
-         emissao_iniciada_em = coalesce(emissao_iniciada_em, now())
+     set gateway_conta_id = p_gateway_conta_id,
+         gateway_id       = p_gateway_id,
+         link_pagamento   = p_link_pagamento
    where id = p_cobranca_id;
 end
 $$;
 
--- O gateway recusou de vez (ou a consulta por externalReference não achou
--- nada e não vamos tentar de novo): solta a reserva.
-create or replace function public.liberar_emissao_interna(p_cobranca_id uuid)
+-- Solta a reserva. SÓ quando o gateway recusou explicitamente a criação
+-- (ex.: CPF inválido): p_recusa é o motivo, guardado para a secretaria.
+-- Timeout e erro 5xx NÃO liberam: a reserva fica para reconciliar por
+-- externalReference na próxima tentativa ou pelo webhook.
+create or replace function public.liberar_emissao_interna(p_cobranca_id uuid, p_recusa text)
 returns void
-language sql
+language plpgsql
 security definer
 set search_path = ''
 as $$
+begin
+  if coalesce(trim(p_recusa), '') = '' then
+    raise exception 'Informe a recusa do gateway para liberar a reserva';
+  end if;
+
   update public.cobrancas
-     set emissao_iniciada_em = null
+     set emissao_iniciada_em = null,
+         emissao_gateway_conta_id = null,
+         emissao_recusa = left(trim(p_recusa), 300)
    where id = p_cobranca_id
      and gateway_id is null;
+end
 $$;
 
 -- Webhook --------------------------------------------------------------
 -- Aplica o estado reconsultado no gateway (p_estado já normalizado).
 -- A academia vem da conta, que a Edge Function achou pelo token.
--- p_referencia = externalReference (cobrancas.id), para adotar emissão órfã.
--- p_divergencia: aviso do adaptador (ex.: estorno parcial).
+-- p_referencia = externalReference (cobrancas.id): adota emissão órfã, mas só
+-- se a cobrança tiver reserva para esta mesma conta.
+-- p_divergencia: código vindo do adaptador (ex.: 'estorno_parcial').
 -- Devolve 'aplicado', 'sem_mudanca', 'ignorado' ou 'divergente'.
 create or replace function public.aplicar_pagamento_gateway(
   p_gateway_conta_id uuid,
@@ -671,6 +722,10 @@ begin
     raise exception 'Forma de pagamento desconhecida: %', p_forma;
   end if;
 
+  if p_divergencia is not null and p_divergencia not in ('estorno_parcial') then
+    raise exception 'Código de divergência desconhecido: %', p_divergencia;
+  end if;
+
   select * into v_cob
   from public.cobrancas
   where academia_id = v_conta.academia_id
@@ -678,14 +733,15 @@ begin
     and gateway_id = p_gateway_id
   for update;
 
-  -- emissão que caiu antes de gravar o gateway_id: adota pela referência
+  -- emissão que caiu antes de gravar o gateway_id: adota pela referência,
+  -- desde que a reserva seja para a conta deste token
   if not found and p_referencia is not null then
     select * into v_cob
     from public.cobrancas
     where academia_id = v_conta.academia_id
       and id = p_referencia
       and gateway_id is null
-      and emissao_iniciada_em is not null
+      and emissao_gateway_conta_id = v_conta.id
     for update;
 
     if found then
@@ -701,7 +757,7 @@ begin
   elsif v_cob.baixa_em is not null then
     -- baixa manual: a cobrança do gateway foi cancelada por nós
     if p_estado = 'paga' then
-      v_div := 'Pagamento recebido no gateway em cobrança com baixa manual (possível pagamento em duplicidade)';
+      v_div := 'pagamento_duplicado';
       v_res := 'divergente';
     else
       v_res := 'ignorado';
@@ -711,11 +767,11 @@ begin
     v_res := 'sem_mudanca';
 
   elsif v_cob.status = 'estornada' then
-    v_div := 'Gateway informa "' || p_estado || '" em cobrança estornada';
+    v_div := 'estado_apos_estorno';
     v_res := 'divergente';
 
   elsif v_cob.status = 'paga' and p_estado = 'cancelada' then
-    v_div := 'Gateway informa cobrança cancelada, mas ela consta como paga';
+    v_div := 'cancelada_no_gateway';
     v_res := 'divergente';
 
   else
@@ -844,11 +900,13 @@ $$;
 -- Recorrência ----------------------------------------------------------
 -- Uma cobrança por matrícula e competência. O intervalo vem do plano
 -- (1, 3, 6 ou 12 meses), contado do mês de data_inicio.
---   Primeira: competência = mês de data_inicio, vencimento = data_inicio.
---   Demais:   vencimento = dia_vencimento no mês da competência.
--- Gera a partir de N dias antes do vencimento (academias.dias_antecedencia_cobranca),
--- só para a competência corrente e a seguinte, e nunca com vencimento
--- anterior ao cadastro da matrícula (aluno antigo importado não nasce devendo).
+--   Primeira: competência = mês de data_inicio; vence no maior entre
+--             data_inicio e o dia do cadastro da matrícula (fuso da academia),
+--             então matrícula retroativa no mesmo mês gera a primeira para hoje.
+--   Demais:   vencimento = dia_vencimento no mês da competência; não gera
+--             com vencimento anterior ao cadastro (aluno importado não nasce devendo).
+-- Gera a partir de N dias antes do vencimento (academias.dias_antecedencia_cobranca)
+-- e só para a competência corrente e a seguinte.
 -- Competência cancelada não é regerada (o unique barra).
 create or replace function public.gerar_cobrancas(
   p_academia_id  uuid default null,
@@ -879,7 +937,8 @@ begin
       case p.periodicidade
         when 'mensal' then 1 when 'trimestral' then 3 when 'semestral' then 6 else 12
       end as intervalo,
-      date_trunc('month', m.data_inicio::timestamp)::date as primeira
+      date_trunc('month', m.data_inicio::timestamp)::date as primeira,
+      (m.created_at at time zone a.fuso)::date as cadastro
   ) b
   cross join lateral (
     select s::date as competencia
@@ -890,7 +949,7 @@ begin
   ) g
   cross join lateral (
     select case when g.competencia = b.primeira
-                then m.data_inicio
+                then greatest(m.data_inicio, b.cadastro)
                 else g.competencia + (m.dia_vencimento - 1)
            end as vencimento
   ) x
@@ -905,7 +964,7 @@ begin
     and ((extract(year from g.competencia) - extract(year from b.primeira)) * 12
          + extract(month from g.competencia) - extract(month from b.primeira))::int % b.intervalo = 0
     and b.hoje >= x.vencimento - a.dias_antecedencia_cobranca
-    and x.vencimento >= (m.created_at at time zone a.fuso)::date
+    and (g.competencia = b.primeira or x.vencimento >= b.cadastro)
     and (m.data_fim is null or x.vencimento <= m.data_fim)
   on conflict (matricula_id, competencia) do nothing;
 
@@ -938,6 +997,9 @@ $$;
 -- LGPD -----------------------------------------------------------------
 -- Substitui o delete de aluno: apaga os dados pessoais e mantém presenças,
 -- graduações e cobranças (histórico da academia, sem identificação).
+-- Usa tem_papel, não pode_gerir: pedido de titular (LGPD) não depende de a
+-- academia estar com a assinatura em dia. Única exceção à regra
+-- "suspensa lê, mas não altera" (ver AGENTS.md).
 create or replace function public.anonimizar_aluno(p_aluno_id uuid)
 returns void
 language plpgsql
@@ -949,7 +1011,7 @@ declare
 begin
   select * into v_aluno from public.alunos where id = p_aluno_id for update;
   if not found
-     or not public.pode_gerir(v_aluno.academia_id, array['dono', 'admin']) then
+     or not public.tem_papel(v_aluno.academia_id, array['dono', 'admin']) then
     raise exception 'Aluno não encontrado ou sem permissão para anonimizar';
   end if;
 
@@ -1026,9 +1088,9 @@ revoke execute on function
   public.baixar_cobranca_manual(uuid, text, timestamptz, numeric),
   public.cancelar_cobranca_interna(uuid, uuid),
   public.cancelar_cobranca(uuid),
-  public.reservar_emissao_interna(uuid, uuid),
+  public.reservar_emissao_interna(uuid, uuid, uuid, boolean),
   public.registrar_emissao_interna(uuid, uuid, text, text),
-  public.liberar_emissao_interna(uuid),
+  public.liberar_emissao_interna(uuid, text),
   public.aplicar_pagamento_gateway(uuid, text, text, uuid, text, timestamptz, numeric, text, text),
   public.gateway_salvar_conta(uuid, uuid, text, text, text, text, text),
   public.gateway_credencial(uuid),
@@ -1048,9 +1110,9 @@ grant execute on function
   public.membro_pode_gerir(uuid, uuid, text[]),
   public.baixar_cobranca_interna(uuid, uuid, text, timestamptz, numeric),
   public.cancelar_cobranca_interna(uuid, uuid),
-  public.reservar_emissao_interna(uuid, uuid),
+  public.reservar_emissao_interna(uuid, uuid, uuid, boolean),
   public.registrar_emissao_interna(uuid, uuid, text, text),
-  public.liberar_emissao_interna(uuid),
+  public.liberar_emissao_interna(uuid, text),
   public.aplicar_pagamento_gateway(uuid, text, text, uuid, text, timestamptz, numeric, text, text),
   public.gateway_salvar_conta(uuid, uuid, text, text, text, text, text),
   public.gateway_credencial(uuid),

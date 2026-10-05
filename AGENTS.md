@@ -78,6 +78,12 @@ Helpers SQL:
 - `hoje_academia(academia_id)`: data de hoje no fuso da academia. Use no lugar
   de `current_date` em qualquer regra de negócio.
 
+**Única exceção** à regra "suspensa lê, mas não altera": `anonimizar_aluno`
+usa `tem_papel` (dono, admin) sem checar a assinatura, porque pedido de
+titular (LGPD) não depende de pagamento. Coberta por
+`supabase/tests/financeiro/permissoes.test.sql`. Não crie outra exceção sem
+aprovação.
+
 Plano, status e slug da academia só mudam via `service_role` (billing do SaaS).
 
 ## RPCs e views existentes
