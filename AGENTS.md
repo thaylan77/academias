@@ -24,7 +24,8 @@ Usuários:
 ## Comandos
 
 ```bash
-supabase migration new <nome>       # nova migration
+# CLI do Supabase sempre na versão fixada no CI (a saída de gen types varia):
+npx supabase@2.119.0 migration new <nome>   # nova migration
 npm run dev | npm run build | npm run lint | npm test
 
 # Só com Docker (não é o caso da máquina principal do projeto):
@@ -47,17 +48,23 @@ supabase test db                    # roda os testes pgTAP no banco local
   `supabase db push`, depois do merge. Nunca aplique branch de feature nem
   rode `db reset` nele.
 - Depois de cada merge que traga migration, na pasta original (`academias`,
-  em `main`, já linkada ao projeto):
-  `supabase db push` e, em seguida,
-  `supabase gen types typescript --linked > src/types/database.ts`,
-  com commit dos tipos em `main`. Precisa de `supabase login` na máquina.
+  em `main`, já linkada ao projeto): `npx supabase@2.119.0 db push`.
+  Precisa de `supabase login` na máquina.
 - O front de dev aponta para o `honorteam-dev` só com a URL e a chave
   `anon`/publishable. A `service_role` desse projeto não vai para `.env`
   de front nem para o repositório.
 - **Testes pgTAP nunca rodam contra o `honorteam-dev`** (nada de
   `supabase test db --linked` nem `--db-url` apontando para ele).
-- Os tipos (`src/types/database.ts`) saem do `honorteam-dev`:
-  `supabase gen types typescript --linked > src/types/database.ts`.
+- **Os tipos (`src/types/database.ts`) saem do CI**, nunca do
+  `honorteam-dev`. O workflow `Banco` roda
+  `supabase gen types typescript --local`, publica o resultado como artifact
+  `database-types` e **falha se ele diferir do arquivo commitado**.
+  PR que muda o schema: espere o CI falhar nesse passo, baixe o artifact
+  daquela execução (`gh run download <run> -n database-types`) e commite como
+  `src/types/database.ts` na própria branch. Não edite o arquivo à mão nem
+  gere com `--linked`: a saída tem outro formato e o CI recusa.
+- A versão da CLI é fixa (`2.119.0`) no workflow e no `npx` dos agentes.
+  Para trocar, mude os dois no mesmo PR e regenere os tipos.
 
 ## Estrutura
 
@@ -170,8 +177,8 @@ Plano, status e slug da academia só mudam via `service_role` (billing do SaaS).
 - [ ] Tabela nova: `academia_id` + RLS + políticas + FK composta + trigger
       de academia imutável
 - [ ] Testado com 2 academias: usuário de A não lê nem altera nada de B
-- [ ] Tipos regenerados: depois do merge, a partir do `honorteam-dev`
-      (`gen types --linked`); o PR diz se o schema mudou
+- [ ] Tipos: `src/types/database.ts` igual ao artifact `database-types` do
+      CI da própria branch (o passo de conferência do CI passa)
 - [ ] `npm run lint`, `npm run build` e `npm test` passando
 
 ## Backlog conhecido

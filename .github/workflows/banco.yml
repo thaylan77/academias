@@ -8,10 +8,28 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Versão fixa: a saída de `gen types` muda entre versões da CLI.
+      # Os agentes usam a mesma (`npx supabase@2.119.0`, ver AGENTS.md).
       - uses: supabase/setup-cli@v1
         with:
-          version: latest
+          version: 2.119.0
 
       - run: supabase db start
 
+      - name: Gera os tipos a partir do banco local
+        run: supabase gen types typescript --local > "$RUNNER_TEMP/database.ts"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: database-types
+          path: ${{ runner.temp }}/database.ts
+
       - run: supabase test db
+
+      - name: Confere se src/types/database.ts está atualizado
+        if: ${{ !cancelled() }}
+        run: |
+          if ! diff -u src/types/database.ts "$RUNNER_TEMP/database.ts"; then
+            echo "::error file=src/types/database.ts::Tipos desatualizados. Baixe o artifact database-types desta execução e commite como src/types/database.ts."
+            exit 1
+          fi
