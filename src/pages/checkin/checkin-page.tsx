@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { CheckinResultado, AlunoCheckinInfo } from "../../types/database";
+import { CheckinResultado, AlunoCheckinInfo } from "../../types/app";
 import { realizarCheckin } from "../../lib/supabase";
 import { QRScanner } from "../../components/qr/qr-scanner";
 import { Card, CardContent, CardTitle, CardDescription } from "../../components/ui/card";

@@ -1,16 +1,19 @@
 import { createClient } from "@supabase/supabase-js";
+import { Database } from "../types/database";
 import {
   AcademiaPublica,
   MatriculaOnlinePayload,
   CheckinResultado,
-} from "../types/database";
+  UsuarioEquipe,
+} from "../types/app";
 import { ACADEMIA_DEMO_A, ACADEMIA_DEMO_B } from "./mock-data";
+import { mapearErroRpc } from "./rpc-errors";
 
 const supabaseUrl = import.meta.env?.VITE_SUPABASE_URL || "";
 const supabaseAnonKey = import.meta.env?.VITE_SUPABASE_ANON_KEY || "";
 
 export const supabase = (supabaseUrl && supabaseAnonKey)
-  ? createClient(supabaseUrl, supabaseAnonKey)
+  ? createClient<Database>(supabaseUrl, supabaseAnonKey)
   : null;
 
 // Helper unificado para buscar dados públicos da academia
@@ -23,10 +26,9 @@ export async function obterAcademiaPublica(slug: string): Promise<AcademiaPublic
         p_slug: slugNormalizado,
       });
       if (error) {
-        console.error("Erro na RPC academia_publica:", error);
         throw error;
       }
-      return data as AcademiaPublica;
+      return data as unknown as AcademiaPublica;
     } catch (e) {
       console.warn("Falha ao consultar Supabase, caindo no mock se disponível:", e);
     }
@@ -39,7 +41,6 @@ export async function obterAcademiaPublica(slug: string): Promise<AcademiaPublic
   if (slugNormalizado === "honor-demo-b") {
     return ACADEMIA_DEMO_B;
   }
-  // Se for qualquer outro slug em modo mock, devolve modelo padrão ativo
   return {
     ...ACADEMIA_DEMO_A,
     nome: `Academia ${slug.toUpperCase()}`,
@@ -50,37 +51,49 @@ export async function obterAcademiaPublica(slug: string): Promise<AcademiaPublic
 export async function submeterMatriculaOnline(
   slug: string,
   dados: MatriculaOnlinePayload
-): Promise<{ sucesso: boolean; matricula_id?: string; mensagem?: string }> {
+): Promise<{ sucesso: boolean; matricula_id?: string; mensagem?: string; titulo?: string; acao?: string }> {
   if (supabase) {
     try {
       const { data, error } = await supabase.rpc("matricula_online", {
         p_slug: slug.toLowerCase().trim(),
-        p_dados: dados,
+        p_dados: dados as any,
       });
       if (error) {
+        const erroMapeado = mapearErroRpc(error);
         return {
           sucesso: false,
-          mensagem: error.message || "Erro ao realizar matrícula online.",
+          titulo: erroMapeado.titulo,
+          mensagem: erroMapeado.mensagem,
+          acao: erroMapeado.acaoSugerida,
         };
       }
       return { sucesso: true, matricula_id: data as string };
     } catch (err: any) {
+      const erroMapeado = mapearErroRpc(err);
       return {
         sucesso: false,
-        mensagem: err.message || "Falha na conexão com o servidor.",
+        titulo: erroMapeado.titulo,
+        mensagem: erroMapeado.mensagem,
+        acao: erroMapeado.acaoSugerida,
       };
     }
   }
 
   // Simulação local para demonstração
-  await new Promise((r) => setTimeout(r, 600)); // Simula latência de rede
+  await new Promise((r) => setTimeout(r, 600));
 
-  // Simular validação de CPF repetido se CPF for '111.111.111-11'
   const cpfLimpo = (dados.cpf || "").replace(/\D/g, "");
   if (cpfLimpo === "11111111111") {
+    const erroMapeado = mapearErroRpc({
+      message: "Já existe um cadastro com esse CPF nesta academia. Procure a recepção.",
+      code: "23505",
+      hint: "CPF_DUPLICADO",
+    });
     return {
       sucesso: false,
-      mensagem: "Já existe um cadastro com esse CPF nesta academia. Procure a recepção.",
+      titulo: erroMapeado.titulo,
+      mensagem: erroMapeado.mensagem,
+      acao: erroMapeado.acaoSugerida,
     };
   }
 
@@ -94,7 +107,7 @@ export async function submeterMatriculaOnline(
 export async function realizarCheckin(
   turmaId: string,
   alunoId?: string,
-  simulacaoCenario?: 'sucesso' | 'inadimplente' | 'multiplos'
+  simulacaoCenario?: "sucesso" | "inadimplente" | "multiplos"
 ): Promise<CheckinResultado> {
   if (supabase && !simulacaoCenario) {
     try {
@@ -104,30 +117,23 @@ export async function realizarCheckin(
       });
 
       if (error) {
-        const msg = error.message;
-        if (msg.includes("mensalidade em atraso")) {
-          return {
-            sucesso: false,
-            codigo_erro: "INADIMPLENTE",
-            mensagem: "Check-in bloqueado: mensalidade em atraso. Procure a recepção.",
-          };
-        }
-        if (msg.includes("Mais de um aluno")) {
-          return {
-            sucesso: false,
-            codigo_erro: "MULTIPLOS_ALUNOS",
-            mensagem: "Mais de um aluno encontrado neste cadastro. Selecione quem está no treino.",
-            alunos_disponiveis: [
-              { id: "aluno-1", nome: "Lucas Silva (Filho)", status: "ativo" },
-              { id: "aluno-2", nome: "Mariana Silva (Filha)", status: "ativo" },
-            ],
-          };
-        }
-        return {
+        const erroMapeado = mapearErroRpc(error);
+        const resultado: CheckinResultado = {
           sucesso: false,
-          codigo_erro: "GENERICO",
-          mensagem: error.message || "Não foi possível confirmar o check-in.",
+          codigo_erro: erroMapeado.codigo,
+          titulo: erroMapeado.titulo,
+          mensagem: erroMapeado.mensagem,
+          acao_sugerida: erroMapeado.acaoSugerida,
         };
+
+        if (erroMapeado.codigo === "MULTIPLOS_ALUNOS") {
+          resultado.alunos_disponiveis = [
+            { id: "aluno-1", nome: "Lucas Silva (Filho)", status: "ativo" },
+            { id: "aluno-2", nome: "Mariana Silva (Filha)", status: "ativo" },
+          ];
+        }
+
+        return resultado;
       }
 
       return {
@@ -137,30 +143,45 @@ export async function realizarCheckin(
         horario: new Date().toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" }),
       };
     } catch (err: any) {
+      const erroMapeado = mapearErroRpc(err);
       return {
         sucesso: false,
-        codigo_erro: "GENERICO",
-        mensagem: err.message || "Erro inesperado ao registrar check-in.",
+        codigo_erro: erroMapeado.codigo,
+        titulo: erroMapeado.titulo,
+        mensagem: erroMapeado.mensagem,
+        acao_sugerida: erroMapeado.acaoSugerida,
       };
     }
   }
 
   // Simulação interativa
-  await new Promise((r) => setTimeout(r, 500));
+  await new Promise((r) => setTimeout(r, 400));
 
   if (simulacaoCenario === "inadimplente") {
+    const erroMapeado = mapearErroRpc({
+      message: "Check-in bloqueado: mensalidade em atraso. Procure a recepção.",
+      hint: "INADIMPLENTE",
+    });
     return {
       sucesso: false,
-      codigo_erro: "INADIMPLENTE",
-      mensagem: "Check-in bloqueado: mensalidade em atraso. Procure a recepção para regularizar.",
+      codigo_erro: erroMapeado.codigo,
+      titulo: erroMapeado.titulo,
+      mensagem: erroMapeado.mensagem,
+      acao_sugerida: erroMapeado.acaoSugerida,
     };
   }
 
   if (simulacaoCenario === "multiplos" && !alunoId) {
+    const erroMapeado = mapearErroRpc({
+      message: "Mais de um aluno neste login: informe qual (p_aluno_id)",
+      hint: "MULTIPLOS_ALUNOS",
+    });
     return {
       sucesso: false,
-      codigo_erro: "MULTIPLOS_ALUNOS",
-      mensagem: "Mais de um dependente encontrado neste acesso. Selecione o aluno:",
+      codigo_erro: erroMapeado.codigo,
+      titulo: erroMapeado.titulo,
+      mensagem: erroMapeado.mensagem,
+      acao_sugerida: erroMapeado.acaoSugerida,
       alunos_disponiveis: [
         { id: "aluno-1", nome: "Lucas Silva (Filho)", status: "ativo" },
         { id: "aluno-2", nome: "Mariana Silva (Filha)", status: "ativo" },
@@ -176,4 +197,61 @@ export async function realizarCheckin(
     horario: new Date().toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" }),
     mensagem: "Presença confirmada com sucesso! Oss!",
   };
+}
+
+// Controle de sessão da equipe para o Totem
+let sessaoEquipeMock: UsuarioEquipe | null = null;
+
+export async function obterSessaoEquipe(): Promise<UsuarioEquipe | null> {
+  if (supabase) {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return null;
+    return {
+      id: user.id,
+      nome: user.user_metadata?.nome || user.email?.split("@")[0] || "Membro da Equipe",
+      email: user.email || "",
+      papel: (user.user_metadata?.papel as any) || "professor",
+    };
+  }
+  return sessaoEquipeMock;
+}
+
+export async function loginEquipe(
+  email: string,
+  senha?: string,
+  papel: UsuarioEquipe["papel"] = "professor"
+): Promise<{ sucesso: boolean; usuario?: UsuarioEquipe; mensagem?: string }> {
+  if (supabase && senha) {
+    const { data, error } = await supabase.auth.signInWithPassword({ email, password: senha });
+    if (error) {
+      return { sucesso: false, mensagem: error.message };
+    }
+    const user = data.user;
+    return {
+      sucesso: true,
+      usuario: {
+        id: user.id,
+        nome: user.user_metadata?.nome || email.split("@")[0],
+        email: user.email || email,
+        papel,
+      },
+    };
+  }
+
+  // Mock login da equipe para sandbox
+  sessaoEquipeMock = {
+    id: "equipe-demo-01",
+    nome: email.includes("recepcao") ? "Recepção Central" : "Professor Pedro",
+    email,
+    papel,
+  };
+
+  return { sucesso: true, usuario: sessaoEquipeMock };
+}
+
+export async function logoutEquipe(): Promise<void> {
+  if (supabase) {
+    await supabase.auth.signOut();
+  }
+  sessaoEquipeMock = null;
 }

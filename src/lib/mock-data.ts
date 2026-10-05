@@ -1,4 +1,4 @@
-import { AcademiaPublica } from "../types/database";
+import { AcademiaPublica } from "../types/app";
 
 export const ACADEMIA_DEMO_A: AcademiaPublica = {
   id: "de000000-0000-4000-8000-000000000001",

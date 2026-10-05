@@ -1,10 +1,18 @@
 import React, { useEffect, useState } from "react";
-import { obterAcademiaPublica } from "../../lib/supabase";
-import { AcademiaPublica, TurmaPublica } from "../../types/database";
+import {
+  obterAcademiaPublica,
+  obterSessaoEquipe,
+  loginEquipe,
+  logoutEquipe,
+} from "../../lib/supabase";
+import { AcademiaPublica, TurmaPublica, UsuarioEquipe } from "../../types/app";
 import { QRGenerator } from "../../components/qr/qr-generator";
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "../../components/ui/card";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
+import { Input } from "../../components/ui/input";
+import { Label } from "../../components/ui/label";
+import { Alert, AlertDescription } from "../../components/ui/alert";
 import {
   Maximize,
   Minimize,
@@ -12,6 +20,10 @@ import {
   Sparkles,
   QrCode,
   Users,
+  Lock,
+  LogOut,
+  ShieldCheck,
+  UserCheck,
 } from "lucide-react";
 
 interface TotemPageProps {
@@ -25,8 +37,15 @@ export const TotemPage: React.FC<TotemPageProps> = ({ slug }) => {
   const [currentTime, setCurrentTime] = useState<string>("");
   const [isFullScreen, setIsFullScreen] = useState<boolean>(false);
 
+  // Estado de autenticação da equipe
+  const [usuarioEquipe, setUsuarioEquipe] = useState<UsuarioEquipe | null>(null);
+  const [emailLogin, setEmailLogin] = useState<string>("professor@honorteam.com.br");
+  const [senhaLogin, setSenhaLogin] = useState<string>("");
+  const [erroLogin, setErroLogin] = useState<string | null>(null);
+  const [autenticando, setAutenticando] = useState<boolean>(false);
+
   useEffect(() => {
-    carregarAcademia();
+    verificarAcesso();
     const timer = setInterval(() => {
       setCurrentTime(
         new Date().toLocaleTimeString("pt-BR", {
@@ -39,13 +58,38 @@ export const TotemPage: React.FC<TotemPageProps> = ({ slug }) => {
     return () => clearInterval(timer);
   }, [slug]);
 
-  const carregarAcademia = async () => {
-    setLoading(false);
+  const verificarAcesso = async () => {
+    setLoading(true);
+    const user = await obterSessaoEquipe();
+    setUsuarioEquipe(user);
+
     const data = await obterAcademiaPublica(slug);
     setAcademia(data);
     if (data && data.turmas.length > 0) {
       setTurmaSelecionada(data.turmas[0]);
     }
+    setLoading(false);
+  };
+
+  const handleLogin = async (e?: React.FormEvent, papelOverride?: UsuarioEquipe["papel"]) => {
+    if (e) e.preventDefault();
+    setErroLogin(null);
+    setAutenticando(true);
+
+    const email = papelOverride === "recepcao" ? "recepcao@honorteam.com.br" : emailLogin;
+    const res = await loginEquipe(email, senhaLogin || "123456", papelOverride || "professor");
+    setAutenticando(false);
+
+    if (res.sucesso && res.usuario) {
+      setUsuarioEquipe(res.usuario);
+    } else {
+      setErroLogin(res.mensagem || "Não foi possível autenticar. Verifique suas credenciais.");
+    }
+  };
+
+  const handleLogout = async () => {
+    await logoutEquipe();
+    setUsuarioEquipe(null);
   };
 
   const toggleFullScreen = () => {
@@ -58,15 +102,110 @@ export const TotemPage: React.FC<TotemPageProps> = ({ slug }) => {
     }
   };
 
-  if (loading || !academia) {
+  if (loading) {
     return (
       <div className="container mx-auto px-4 py-16 text-center text-zinc-400">
-        Carregando totem da academia...
+        Verificando permissões da equipe...
       </div>
     );
   }
 
-  // Gera a URL direta que o aluno abrirá ao escanear
+  // 1. Tela de Bloqueio — Exige Login da Equipe
+  if (!usuarioEquipe) {
+    return (
+      <div className="container mx-auto max-w-md px-4 py-16">
+        <Card className="border-zinc-800 bg-zinc-950/90 shadow-2xl">
+          <CardHeader className="text-center pb-4">
+            <div className="w-16 h-16 rounded-2xl bg-red-600/10 border border-red-600/30 flex items-center justify-center mx-auto mb-3 text-red-500">
+              <Lock className="w-8 h-8" />
+            </div>
+            <Badge variant="outline" className="mx-auto mb-2 text-[10px] border-zinc-700 text-zinc-400">
+              Uso Restrito • Equipe da Academia
+            </Badge>
+            <CardTitle className="text-xl text-white">
+              Acesso ao Totem de Presença
+            </CardTitle>
+            <CardDescription className="text-xs text-zinc-400">
+              Esta tela projeta o QR Code de check-in para os alunos e exige autenticação de um membro da equipe (dono, admin, professor ou recepção).
+            </CardDescription>
+          </CardHeader>
+
+          <CardContent className="space-y-4">
+            {erroLogin && (
+              <Alert variant="destructive">
+                <AlertDescription className="text-xs">{erroLogin}</AlertDescription>
+              </Alert>
+            )}
+
+            <form onSubmit={handleLogin} className="space-y-3">
+              <div>
+                <Label htmlFor="emailEquipe">E-mail da Equipe</Label>
+                <Input
+                  id="emailEquipe"
+                  type="email"
+                  value={emailLogin}
+                  onChange={(e) => setEmailLogin(e.target.value)}
+                  placeholder="professor@honorteam.com.br"
+                  className="mt-1"
+                  required
+                />
+              </div>
+
+              <div>
+                <Label htmlFor="senhaEquipe">Senha de Acesso</Label>
+                <Input
+                  id="senhaEquipe"
+                  type="password"
+                  value={senhaLogin}
+                  onChange={(e) => setSenhaLogin(e.target.value)}
+                  placeholder="••••••••"
+                  className="mt-1"
+                />
+              </div>
+
+              <Button
+                type="submit"
+                disabled={autenticando}
+                className="w-full gap-2 font-bold shadow-md shadow-red-900/30"
+              >
+                {autenticando ? "Autenticando..." : "Entrar no Totem"}
+              </Button>
+            </form>
+
+            <div className="pt-4 border-t border-zinc-800 text-center">
+              <p className="text-[11px] text-zinc-500 mb-2 font-mono">
+                Acesso Rápido para Demonstração:
+              </p>
+              <div className="flex gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => handleLogin(undefined, "professor")}
+                  className="flex-1 text-xs gap-1 border-zinc-800 hover:bg-zinc-900"
+                >
+                  <UserCheck className="w-3.5 h-3.5 text-red-400" />
+                  Professor Pedro
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => handleLogin(undefined, "recepcao")}
+                  className="flex-1 text-xs gap-1 border-zinc-800 hover:bg-zinc-900"
+                >
+                  <ShieldCheck className="w-3.5 h-3.5 text-blue-400" />
+                  Recepção
+                </Button>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
+  // 2. Tela Liberada para a Equipe
   const currentOrigin = typeof window !== "undefined" ? window.location.origin : "https://app.honorteam.com.br";
   const checkinUrl = turmaSelecionada
     ? `${currentOrigin}/?slug=${slug}&turma=${turmaSelecionada.id}&tab=checkin`
@@ -82,9 +221,13 @@ export const TotemPage: React.FC<TotemPageProps> = ({ slug }) => {
             <Badge variant="outline" className="border-emerald-800 text-emerald-400 bg-emerald-950/40">
               Totem Ativo • Quiosque do Tatame
             </Badge>
+            <span className="text-xs text-zinc-400 flex items-center gap-1 ml-2 font-mono">
+              <UserCheck className="w-3.5 h-3.5 text-red-500" />
+              Operador: <strong className="text-white">{usuarioEquipe.nome}</strong> ({usuarioEquipe.papel})
+            </span>
           </div>
           <h2 className="text-2xl font-black text-white tracking-tight mt-1">
-            {academia.nome}
+            {academia?.nome || "Honor Team"}
           </h2>
         </div>
 
@@ -112,6 +255,17 @@ export const TotemPage: React.FC<TotemPageProps> = ({ slug }) => {
               </>
             )}
           </Button>
+
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={handleLogout}
+            className="text-xs text-zinc-400 hover:text-red-400 gap-1"
+            title="Desconectar equipe do totem"
+          >
+            <LogOut className="w-3.5 h-3.5" />
+            Encerrar Sessão
+          </Button>
         </div>
       </div>
 
@@ -129,7 +283,7 @@ export const TotemPage: React.FC<TotemPageProps> = ({ slug }) => {
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-2">
-              {academia.turmas.map((t) => {
+              {(academia?.turmas || []).map((t) => {
                 const ativo = turmaSelecionada?.id === t.id;
                 return (
                   <button
@@ -161,16 +315,16 @@ export const TotemPage: React.FC<TotemPageProps> = ({ slug }) => {
             <CardContent className="p-4 text-xs text-zinc-400 space-y-2">
               <div className="flex items-center gap-2 text-zinc-200 font-semibold">
                 <Sparkles className="w-4 h-4 text-amber-400" />
-                Como o aluno faz check-in?
+                Instruções para o Tatame:
               </div>
               <p>
-                1. O aluno abre a câmera do próprio celular ou o app Honor Team.
+                1. Mantenha o QR Code em local visível próximo à entrada do dojo/tatame.
               </p>
               <p>
-                2. Ao apontar para este QR Code, o sistema registra a presença automaticamente na RPC.
+                2. Os alunos apontam a câmera para validar a frequência antes do início do treino.
               </p>
               <p>
-                3. O sistema valida se o aluno está ativo e com a mensalidade em dia.
+                3. O sistema valida automaticamente se a mensalidade está regular antes de confirmar o check-in.
               </p>
             </CardContent>
           </Card>

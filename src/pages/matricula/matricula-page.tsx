@@ -2,7 +2,7 @@ import React, { useEffect, useState } from "react";
 import {
   AcademiaPublica,
   MatriculaOnlinePayload,
-} from "../../types/database";
+} from "../../types/app";
 import { obterAcademiaPublica, submeterMatriculaOnline } from "../../lib/supabase";
 import {
   formatarCPF,
