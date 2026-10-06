@@ -10,19 +10,6 @@ export type CodigoErroRpc =
   | "menor_sem_responsavel"
   | "dados_invalidos"
   | "sem_permissao"
-  | "INADIMPLENTE"
-  | "MULTIPLOS_ALUNOS"
-  | "CPF_DUPLICADO"
-  | "MENOR_SEM_RESPONSAVEL"
-  | "NOME_OBRIGATORIO"
-  | "TERMO_NAO_ACEITO"
-  | "PLANO_INVALIDO"
-  | "TURMA_NAO_ENCONTRADA"
-  | "ACADEMIA_SUSPENSA"
-  | "SEM_MATRICULA_ATIVA"
-  | "MATRICULA_INDISPONIVEL"
-  | "EMAIL_NAO_CONFIRMADO"
-  | "ACESSO_NEGADO_EQUIPE"
   | "GENERICO";
 
 export interface CandidatoDependente {
@@ -40,17 +27,24 @@ export interface ErroRpcMapeado {
 }
 
 /**
+ * Retorna true se o erro do totem é transitório (rede, timeout, 5xx, erro não identificado),
+ * permitindo retentativa automática com espera crescente.
+ */
+export function isErroTransitorioTotem(erro: ErroRpcMapeado): boolean {
+  return erro.codigo !== "academia_suspensa" && erro.codigo !== "sem_permissao";
+}
+
+/**
  * Centralizador de tratamento de erros das RPCs do Supabase.
  *
  * REGRA DE NEGÓCIO:
  * No PostgreSQL/Supabase, todo `raise exception` emite o SQLSTATE genérico 'P0001' em error.code.
- * Portanto, error.code NÃO deve ser usado para distinguir erros de negócio.
  * O código canônico da regra de negócio é emitido pelo banco exclusivamente em `error.hint`.
  *
  * Ordem de prioridade:
- * 1. error.hint (código de negócio emitido pela RPC: ex. checkin_token_invalido, checkin_inadimplente)
- * 2. error.code exclusivamente para constraints do PostgreSQL (ex. 23505 = unique_violation)
- * 3. error.message (matching de texto em mensagens legadas)
+ * 1. error.hint (código canônico emitido pela RPC via using hint = '<codigo>')
+ * 2. error.code para constraints do PostgreSQL (ex. 23505 = unique_violation)
+ * 3. Fallback genérico para erros de rede, timeout ou não mapeados.
  */
 export function mapearErroRpc(error: any): ErroRpcMapeado {
   if (!error) {
@@ -65,9 +59,9 @@ export function mapearErroRpc(error: any): ErroRpcMapeado {
   const rawCode = typeof error?.code === "string" ? error.code.trim().toUpperCase() : "";
   const rawMessage = (typeof error === "string" ? error : error?.message || "").toLowerCase();
 
-  // 1. PRIORIDADE MÁXIMA: Código de negócio semântico vindo em error.hint
+  // 1. PRIORIDADE MÁXIMA: Código de negócio canônico emitido no hint pelo PostgreSQL
   if (rawHint) {
-    if (rawHint === "checkin_token_invalido" || rawHint.includes("token_invalido")) {
+    if (rawHint === "checkin_token_invalido") {
       return {
         codigo: "checkin_token_invalido",
         titulo: "QR Code Expirado ou Inválido",
@@ -77,7 +71,7 @@ export function mapearErroRpc(error: any): ErroRpcMapeado {
       };
     }
 
-    if (rawHint === "checkin_inadimplente" || rawHint === "inadimplente" || rawHint.includes("debt")) {
+    if (rawHint === "checkin_inadimplente") {
       return {
         codigo: "checkin_inadimplente",
         titulo: "Mensalidade em Atraso",
@@ -87,7 +81,7 @@ export function mapearErroRpc(error: any): ErroRpcMapeado {
       };
     }
 
-    if (rawHint === "checkin_multiplos_alunos" || rawHint === "multiplos_alunos") {
+    if (rawHint === "checkin_multiplos_alunos") {
       let candidatos: CandidatoDependente[] = [];
       try {
         const detailsValue = error?.details || error?.detail;
@@ -140,7 +134,7 @@ export function mapearErroRpc(error: any): ErroRpcMapeado {
       };
     }
 
-    if (rawHint === "matricula_fechada" || rawHint === "matricula_indisponivel") {
+    if (rawHint === "matricula_fechada") {
       return {
         codigo: "matricula_fechada",
         titulo: "Matrículas Online Suspensas",
@@ -191,7 +185,7 @@ export function mapearErroRpc(error: any): ErroRpcMapeado {
     }
   }
 
-  // 2. PRIORIDADE SECUNDÁRIA: SQLSTATE de violação de constraint do PostgreSQL
+  // 2. Constraint violation do PostgreSQL (CPF duplicado)
   if (rawCode === "23505") {
     return {
       codigo: "cpf_duplicado",
@@ -202,95 +196,13 @@ export function mapearErroRpc(error: any): ErroRpcMapeado {
     };
   }
 
-  // 3. PRIORIDADE TERCIÁRIA: Mensagens legadas via matching de texto
-  if (rawMessage.includes("mensalidade em atraso") || rawMessage.includes("check-in bloqueado") || rawMessage.includes("inadimplente")) {
+  // 3. Fallback restrito para mensagens legadas sem hint
+  if (rawMessage.includes("mensalidade em atraso") || rawMessage.includes("inadimplente")) {
     return {
       codigo: "checkin_inadimplente",
       titulo: "Mensalidade em Atraso",
       mensagem: "Check-in bloqueado: mensalidade em atraso. Procure a recepção.",
       acaoSugerida: "Acesse o portal do aluno para regularizar sua pendência ou fale com a recepção.",
-      detalhesOriginais: error,
-    };
-  }
-
-  if (rawMessage.includes("mais de um aluno neste login") || rawMessage.includes("multiplos alunos")) {
-    return {
-      codigo: "checkin_multiplos_alunos",
-      titulo: "Múltiplos Alunos Encontrados",
-      mensagem: "Mais de um aluno neste login: informe qual está no treino.",
-      acaoSugerida: "Selecione o dependente desejado na lista abaixo.",
-      detalhesOriginais: error,
-    };
-  }
-
-  if (rawMessage.includes("cpf") && (rawMessage.includes("duplicado") || rawMessage.includes("já cadastrado"))) {
-    return {
-      codigo: "cpf_duplicado",
-      titulo: "CPF Já Cadastrado",
-      mensagem: "Já existe um cadastro com esse CPF nesta academia.",
-      acaoSugerida: "Procure a recepção da academia para reativar seu plano.",
-      detalhesOriginais: error,
-    };
-  }
-
-  if (rawMessage.includes("menor de 18") || rawMessage.includes("responsável")) {
-    return {
-      codigo: "menor_sem_responsavel",
-      titulo: "Dados do Responsável Necessários",
-      mensagem: "Para menores de 18 anos, os dados do responsável são obrigatórios.",
-      acaoSugerida: "Informe nome e CPF do responsável legal.",
-      detalhesOriginais: error,
-    };
-  }
-
-  if (rawMessage.includes("turma") && rawMessage.includes("não encontrada")) {
-    return {
-      codigo: "checkin_token_invalido",
-      titulo: "Turma Não Localizada",
-      mensagem: "A turma especificada não foi encontrada ou foi desativada.",
-      acaoSugerida: "Escaneie novamente o QR Code atualizado no totem.",
-      detalhesOriginais: error,
-    };
-  }
-
-  if (
-    rawMessage.includes("matrícula online indisponível") ||
-    rawMessage.includes("matricula online indisponivel") ||
-    rawMessage.includes("matrícula fechada") ||
-    rawMessage.includes("matricula fechada") ||
-    rawMessage.includes("matrícula indisponível") ||
-    rawMessage.includes("matricula indisponivel")
-  ) {
-    return {
-      codigo: "matricula_fechada",
-      titulo: "Matrículas Online Suspensas",
-      mensagem: "Matrícula online indisponível para esta unidade no momento.",
-      acaoSugerida: "Entre em contato diretamente pelos canais oficiais da academia.",
-      detalhesOriginais: error,
-    };
-  }
-
-  if (rawMessage.includes("suspensa") || rawMessage.includes("trial vencido")) {
-    return {
-      codigo: "academia_suspensa",
-      titulo: "Acesso da academia suspenso",
-      mensagem: "A academia está com acesso suspenso temporariamente.",
-      acaoSugerida: "Procure a administração da unidade para regularização.",
-      detalhesOriginais: error,
-    };
-  }
-
-  if (
-    rawMessage.includes("sem permissão") ||
-    rawMessage.includes("sem permissao") ||
-    rawMessage.includes("não tem permissão") ||
-    rawMessage.includes("não pode operar")
-  ) {
-    return {
-      codigo: "sem_permissao",
-      titulo: "Acesso Não Permitido",
-      mensagem: "Este login não pode operar o totem.",
-      acaoSugerida: "Verifique suas credenciais ou solicite acesso à administração da academia.",
       detalhesOriginais: error,
     };
   }

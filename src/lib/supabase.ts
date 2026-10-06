@@ -307,20 +307,26 @@ export async function realizarCheckin(
   };
 }
 
-// Helper para ler papel da equipe em membros_academia (imune a edições manuais em user_metadata)
+// Helper para ler papel da equipe em membros_academia (com isolamento multi-tenant por academia_id)
 export async function resolverPapelEquipe(
   client: any,
   userId: string,
+  academiaId?: string,
   papelFallback: UsuarioEquipe["papel"] = "professor"
 ): Promise<UsuarioEquipe["papel"]> {
   if (!client) return papelFallback;
   try {
-    const { data: membro } = await client
+    let query = client
       .from("membros_academia")
       .select("papel")
       .eq("user_id", userId)
-      .eq("ativo", true)
-      .maybeSingle();
+      .eq("ativo", true);
+
+    if (academiaId) {
+      query = query.eq("academia_id", academiaId);
+    }
+
+    const { data: membro } = await query.maybeSingle();
 
     if (membro?.papel) {
       return membro.papel as UsuarioEquipe["papel"];
@@ -334,13 +340,13 @@ export async function resolverPapelEquipe(
 // Controle de sessão da equipe para o Totem
 let sessaoEquipeMock: UsuarioEquipe | null = null;
 
-export async function obterSessaoEquipe(): Promise<UsuarioEquipe | null> {
+export async function obterSessaoEquipe(academiaId?: string): Promise<UsuarioEquipe | null> {
   if (supabase) {
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) return null;
 
     const papelFallback = (user.user_metadata?.papel as any) || "professor";
-    const papel = await resolverPapelEquipe(supabase, user.id, papelFallback);
+    const papel = await resolverPapelEquipe(supabase, user.id, academiaId, papelFallback);
 
     return {
       id: user.id,
@@ -359,7 +365,8 @@ export async function obterSessaoEquipe(): Promise<UsuarioEquipe | null> {
 export async function loginEquipe(
   email: string,
   senha?: string,
-  papel: UsuarioEquipe["papel"] = "professor"
+  papel: UsuarioEquipe["papel"] = "professor",
+  academiaId?: string
 ): Promise<{ sucesso: boolean; usuario?: UsuarioEquipe; mensagem?: string }> {
   if (supabase && senha) {
     const { data, error } = await supabase.auth.signInWithPassword({ email, password: senha });
@@ -368,7 +375,7 @@ export async function loginEquipe(
     }
     const user = data.user;
     const papelFallback = (user.user_metadata?.papel as any) || papel;
-    const papelFinal = await resolverPapelEquipe(supabase, user.id, papelFallback);
+    const papelFinal = await resolverPapelEquipe(supabase, user.id, academiaId, papelFallback);
 
     return {
       sucesso: true,

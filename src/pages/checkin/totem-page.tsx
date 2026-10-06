@@ -7,7 +7,7 @@ import {
   obterTurmasAbertasTotem,
   emitirTokenCheckin,
 } from "../../lib/supabase";
-import { mapearErroRpc, ErroRpcMapeado } from "../../lib/rpc-errors";
+import { mapearErroRpc, ErroRpcMapeado, isErroTransitorioTotem } from "../../lib/rpc-errors";
 import { AcademiaPublica, TurmaAbertaTotem, TokenCheckinInfo, UsuarioEquipe } from "../../types/app";
 import { QRGenerator } from "../../components/qr/qr-generator";
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "../../components/ui/card";
@@ -27,12 +27,16 @@ import {
   UserCheck,
   AlertTriangle,
   RefreshCw,
+  WifiOff,
 } from "lucide-react";
 
 interface TotemPageProps {
   slug: string;
   onSessionChange?: (autenticado: boolean) => void;
 }
+
+const INTERVALOS_BACKOFF = [5, 15, 30, 60];
+const INTERVALO_ERRO_PERMANENTE = 60;
 
 export const TotemPage: React.FC<TotemPageProps> = ({ slug, onSessionChange }) => {
   const [academia, setAcademia] = useState<AcademiaPublica | null>(null);
@@ -43,11 +47,17 @@ export const TotemPage: React.FC<TotemPageProps> = ({ slug, onSessionChange }) =
   const [isFullScreen, setIsFullScreen] = useState<boolean>(false);
   const [segundosRestantes, setSegundosRestantes] = useState<number>(30);
 
-  // Estados de erro das RPCs do totem
+  // Estados de erro e resiliência das RPCs do totem
   const [erroTotem, setErroTotem] = useState<ErroRpcMapeado | null>(null);
   const [errosTokens, setErrosTokens] = useState<Record<string, ErroRpcMapeado>>({});
-  const erroTotemRef = useRef<ErroRpcMapeado | null>(null);
-  erroTotemRef.current = erroTotem;
+  const [statusConexao, setStatusConexao] = useState<"conectado" | "reconectando" | "bloqueado">("conectado");
+  const [tentativasFalhas, setTentativasFalhas] = useState<number>(0);
+  const [carregandoCiclo, setCarregandoCiclo] = useState<boolean>(false);
+
+  const tentativasFalhasRef = useRef<number>(0);
+  tentativasFalhasRef.current = tentativasFalhas;
+  const carregandoCicloRef = useRef<boolean>(false);
+  carregandoCicloRef.current = carregandoCiclo;
 
   // Estado de autenticação da equipe (sem credenciais hardcoded)
   const [usuarioEquipe, setUsuarioEquipe] = useState<UsuarioEquipe | null>(null);
@@ -70,13 +80,16 @@ export const TotemPage: React.FC<TotemPageProps> = ({ slug, onSessionChange }) =
     return () => clearInterval(clockTimer);
   }, [slug]);
 
-  // Função centralizada para atualizar turmas abertas e tokens
+  // Função centralizada para atualizar turmas abertas e tokens com controle de resiliência
   const atualizarCiclo = async () => {
-    if (!academia) return;
+    if (!academia || carregandoCicloRef.current) return;
+    setCarregandoCiclo(true);
     try {
-      setErroTotem(null);
       const abertas = await obterTurmasAbertasTotem(academia.id);
       setTurmasAbertas(abertas);
+      setErroTotem(null);
+      setStatusConexao("conectado");
+      setTentativasFalhas(0);
 
       if (abertas.length > 0) {
         const novoMapaTokens: Record<string, TokenCheckinInfo> = {};
@@ -114,55 +127,71 @@ export const TotemPage: React.FC<TotemPageProps> = ({ slug, onSessionChange }) =
       } else {
         setTokens({});
         setErrosTokens({});
+        setSegundosRestantes(30);
       }
     } catch (err: any) {
       const erroMapeado = mapearErroRpc(err);
       setErroTotem(erroMapeado);
-      setTurmasAbertas([]);
-      setTokens({});
-      setErrosTokens({});
+
+      if (isErroTransitorioTotem(erroMapeado)) {
+        // Erro transitório (rede, timeout, 5xx): espera crescente 5 s, 15 s, 30 s, até 60 s
+        const tentAtual = tentativasFalhasRef.current;
+        const indexIntervalo = Math.min(tentAtual, INTERVALOS_BACKOFF.length - 1);
+        const espera = INTERVALOS_BACKOFF[indexIntervalo];
+        setStatusConexao("reconectando");
+        setTentativasFalhas((prev) => prev + 1);
+        setSegundosRestantes(espera);
+      } else {
+        // Erro permanente (sem_permissao, academia_suspensa):
+        // Checa novamente a cada 60 s para retornar sozinho quando a situação mudar
+        setStatusConexao("bloqueado");
+        setTurmasAbertas([]);
+        setTokens({});
+        setErrosTokens({});
+        setSegundosRestantes(INTERVALO_ERRO_PERMANENTE);
+      }
+    } finally {
+      setCarregandoCiclo(false);
     }
   };
 
-  // Efeito para ciclo de rotação do token e atualização de turmas abertas
+  // Disparo inicial quando a sessão e a academia estão prontas
+  useEffect(() => {
+    if (!usuarioEquipe || !academia) return;
+    atualizarCiclo();
+  }, [usuarioEquipe, academia?.id]);
+
+  // Temporizador regressivo puro: decrementa 1 segundo sem efeitos colaterais dentro do updater
   useEffect(() => {
     if (!usuarioEquipe || !academia) return;
 
-    // Executa imediatamente
-    atualizarCiclo();
-
-    // Cronômetro regressivo segundo a segundo
-    const intervalTimer = setInterval(() => {
-      // Se houver erro de conexão/autorização no totem (ex: suspensa, sem permissão),
-      // pausamos o cronômetro e a sincronização automática enquanto o erro persistir.
-      if (erroTotemRef.current) {
-        return;
-      }
-
-      setSegundosRestantes((prev) => {
-        if (prev <= 1) {
-          atualizarCiclo();
-          return 30;
-        }
-        return prev - 1;
-      });
+    const timer = setInterval(() => {
+      setSegundosRestantes((prev) => Math.max(0, prev - 1));
     }, 1000);
 
-    return () => {
-      clearInterval(intervalTimer);
-    };
+    return () => clearInterval(timer);
   }, [usuarioEquipe, academia?.id]);
+
+  // Disparo reativo ao zerar o contador regressivo
+  useEffect(() => {
+    if (!usuarioEquipe || !academia) return;
+
+    if (segundosRestantes === 0 && !carregandoCicloRef.current) {
+      atualizarCiclo();
+    }
+  }, [segundosRestantes, usuarioEquipe, academia?.id]);
 
   const verificarAcesso = async () => {
     setLoading(true);
-    const user = await obterSessaoEquipe();
+    const data = await obterAcademiaPublica(slug);
+    setAcademia(data);
+
+    // Consulta de papel da equipe com filtro por academia_id (regra multi-tenant)
+    const user = await obterSessaoEquipe(data?.id);
     setUsuarioEquipe(user);
     if (onSessionChange) {
       onSessionChange(!!user);
     }
-
-    const data = await obterAcademiaPublica(slug);
-    setAcademia(data);
     setLoading(false);
   };
 
@@ -178,7 +207,7 @@ export const TotemPage: React.FC<TotemPageProps> = ({ slug, onSessionChange }) =
 
     const email = emailDemo || emailLogin;
     const senha = senhaDemo !== undefined ? senhaDemo : senhaLogin;
-    const res = await loginEquipe(email, senha, papelOverride || "professor");
+    const res = await loginEquipe(email, senha, papelOverride || "professor", academia?.id);
     setAutenticando(false);
 
     if (res.sucesso && res.usuario) {
@@ -392,7 +421,7 @@ export const TotemPage: React.FC<TotemPageProps> = ({ slug, onSessionChange }) =
       </div>
 
       {/* Conteúdo do Totem: Turmas Abertas com QR Codes */}
-      {erroTotem ? (
+      {statusConexao === "bloqueado" && erroTotem ? (
         <div className="py-16">
           <Card className="border-red-900/50 bg-red-950/20 p-12 text-center max-w-lg mx-auto shadow-2xl">
             <div className="w-16 h-16 rounded-2xl bg-red-900/30 border border-red-800 flex items-center justify-center mx-auto mb-4 text-red-400">
@@ -409,14 +438,50 @@ export const TotemPage: React.FC<TotemPageProps> = ({ slug, onSessionChange }) =
                 {erroTotem.acaoSugerida}
               </p>
             )}
+            <div className="mb-6 flex items-center justify-center gap-2 text-xs text-zinc-400 font-mono">
+              <span className="w-2 h-2 rounded-full bg-amber-500 animate-pulse" />
+              Verificando novamente em {segundosRestantes}s...
+            </div>
             <Button
               variant="outline"
               size="sm"
               onClick={() => atualizarCiclo()}
+              disabled={carregandoCiclo}
               className="gap-2 border-red-800 bg-red-950/40 text-red-200 hover:bg-red-900/50"
             >
-              <RefreshCw className="w-4 h-4" />
+              <RefreshCw className={`w-4 h-4 ${carregandoCiclo ? "animate-spin" : ""}`} />
               Tentar Reconectar
+            </Button>
+          </Card>
+        </div>
+      ) : statusConexao === "reconectando" && turmasAbertas.length === 0 ? (
+        <div className="py-16">
+          <Card className="border-amber-800/50 bg-amber-950/20 p-12 text-center max-w-lg mx-auto shadow-2xl">
+            <div className="w-16 h-16 rounded-2xl bg-amber-900/30 border border-amber-800 flex items-center justify-center mx-auto mb-4 text-amber-400">
+              <WifiOff className="w-8 h-8" />
+            </div>
+            <Badge variant="outline" className="mx-auto mb-2 text-xs border-amber-800 text-amber-400 bg-amber-950/40">
+              Conexão Instável
+            </Badge>
+            <h3 className="text-xl font-bold text-white mb-2">
+              Reconectando ao tatame...
+            </h3>
+            <p className="text-sm text-zinc-300 max-w-sm mx-auto leading-relaxed mb-4">
+              Houve uma oscilação na rede ou no servidor. O totem tentará restabelecer a comunicação automaticamente.
+            </p>
+            <div className="flex items-center justify-center gap-2 text-xs text-amber-300 font-mono mb-6">
+              <RefreshCw className="w-4 h-4 animate-spin text-amber-400" />
+              Reconectando em {segundosRestantes}s...
+            </div>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => atualizarCiclo()}
+              disabled={carregandoCiclo}
+              className="gap-2 border-amber-800 bg-amber-950/40 text-amber-200 hover:bg-amber-900/50"
+            >
+              <RefreshCw className={`w-4 h-4 ${carregandoCiclo ? "animate-spin" : ""}`} />
+              Reconectar Agora
             </Button>
           </Card>
         </div>
@@ -440,6 +505,24 @@ export const TotemPage: React.FC<TotemPageProps> = ({ slug, onSessionChange }) =
         </div>
       ) : (
         <div className="space-y-6">
+          {statusConexao === "reconectando" && (
+            <div className="p-3.5 rounded-xl border border-amber-800/60 bg-amber-950/40 flex items-center justify-between text-xs text-amber-200 shadow-lg">
+              <div className="flex items-center gap-2">
+                <WifiOff className="w-4 h-4 text-amber-400 animate-pulse" />
+                <span>Oscilação de rede detectada. <strong>Reconectando em {segundosRestantes}s...</strong></span>
+              </div>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => atualizarCiclo()}
+                disabled={carregandoCiclo}
+                className="h-7 text-xs border-amber-700 bg-amber-900/50 hover:bg-amber-800 text-amber-100 gap-1"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${carregandoCiclo ? "animate-spin" : ""}`} />
+                Reconectar Agora
+              </Button>
+            </div>
+          )}
           <div className={`grid gap-6 ${turmasAbertas.length === 1 ? "max-w-md mx-auto" : "grid-cols-1 md:grid-cols-2"}`}>
             {turmasAbertas.map((turma) => {
               const tokenInfo = tokens[turma.id];
