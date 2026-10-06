@@ -49,49 +49,35 @@ avise.
   passo de tipos, baixe o artifact `database-types` daquela execução, commite
   como `src/types/database.ts` e faça push. A revisão roda no head que já
   tem os tipos.
-- Os scripts dos plugins ficam em
-  `~/.claude/plugins/cache/<marketplace>/<plugin>/<versão>/scripts/`
-  (`openai-codex/codex` e `dpa-antigravity/antigravity`).
-- **Toda revisão externa (Codex e Gemini) roda com duas proteções**, sem
-  exceção:
-  1. **Worktree descartável**, criado no head já publicado e removido no
-     fim. O revisor vê só o que está commitado: nada de `.env`, arquivo
-     ignorado ou alteração solta, e nada do worktree de trabalho.
-  2. **Ambiente sem segredos**: o processo é chamado sem
-     `SUPABASE_DB_PASSWORD`, `SUPABASE_ACCESS_TOKEN` nem qualquer outra
-     variável cujo nome indique senha, token ou chave.
+- **Toda revisão externa (Codex e Gemini) roda por
+  `scripts/revisao-externa.sh`**, sem exceção. Nunca chame os plugins direto
+  no worktree de trabalho. O script garante:
+  1. **Worktree descartável** (`../honorteam-revisao-<sha>`), criado no head
+     já publicado e removido no fim. O revisor vê só o que está commitado:
+     nada de `.env`, arquivo ignorado ou alteração solta.
+  2. **Ambiente por lista de permissão**: o processo do revisor recebe só
+     `PATH`, `PATHEXT`, `SYSTEMROOT`, `COMSPEC`, `USERPROFILE`, `HOME`,
+     `APPDATA`, `LOCALAPPDATA`, `TEMP` e `TMP`. Nenhuma outra variável passa,
+     tenha ou não nome de segredo (`SUPABASE_DB_PASSWORD`,
+     `SUPABASE_ACCESS_TOKEN`, `GH_PAT`...). Codex e `agy` autenticam por
+     arquivo e pelo Gerenciador de Credenciais, não por variável.
 
   ```bash
-  git fetch origin
-  SHA=$(git rev-parse HEAD)                     # tem de ser o head do PR
-  [ "$SHA" = "$(git rev-parse "origin/$(git branch --show-current)")" ] || exit 1
-  REV="../honorteam-revisao-${SHA:0:12}"
-  git worktree add --detach "$REV" "$SHA"
-  trap 'git worktree remove --force "$REV"' EXIT   # limpa mesmo se algo falhar
-
-  # tira do ambiente tudo que tenha cara de segredo (só para o comando chamado)
-  sem_segredos() {
-    local args=() v
-    for v in $(compgen -e | grep -iE \
-      'PASSWORD|PASSWD|SENHA|TOKEN|SECRET|CREDENTIAL|KEY|SUPABASE|DATABASE_URL|PGPASS'); do
-      args+=(-u "$v")
-    done
-    env "${args[@]}" "$@"
-  }
-
-  ( cd "$REV" && sem_segredos node \
-      "<raiz do plugin codex>/scripts/codex-companion.mjs" adversarial-review \
-      --wait --base origin/main --scope branch "<foco>" ) > "<saída>"
+  scripts/revisao-externa.sh codex "$(git rev-parse HEAD)" "<saída>" "<foco>"
   ```
 
-  Confira antes de publicar que `git worktree list` não mostra mais a pasta.
-  O worktree descartável não tem `node_modules`: a revisão é estática, e
-  quem roda lint, testes e build é você (passo 4) e o CI.
+  O sha tem de ser o head publicado do PR. Depois de rodar, confira que
+  `git worktree list` não mostra mais a pasta de revisão. O worktree
+  descartável não tem `node_modules`: a revisão é estática, e quem roda lint,
+  testes e build é você (passo 4) e o CI. Para mudar a lista de variáveis,
+  mude o script por PR.
 
   O foco diz o que a issue pede, manda seguir o `AGENTS.md`, responder em
-  português e terminar com uma única linha final, fora de lista e sem
-  marcador: `APROVADO: <sha completo do head>` ou
-  `MUDANÇAS: <sha completo do head>`.
+  português e terminar com uma única linha final:
+  `APROVADO: <sha completo do head>` ou `MUDANÇAS: <sha completo do head>`.
+  O plugin devolve essa linha como último item da lista "Next steps"
+  (`- APROVADO: <sha>`): vale assim, desde que seja a última linha, o sha
+  seja o head e o campo `Verdict` do Codex concorde (`approve`).
 - Publique a saída de **cada rodada** como comentário no PR, **sem editar**.
   Nunca escreva nem corrija a linha de decisão você mesmo.
 - `MUDANÇAS`: corrija os bloqueadores, commit, push e repita a revisão no head
@@ -106,14 +92,21 @@ demais, pule.
   em modo só leitura (`review` ou `adversarial-review`; nunca `delegate`):
 
   ```bash
-  ( cd "$REV" && sem_segredos node \
-      "<raiz do plugin antigravity>/scripts/antigravity.mjs" adversarial-review \
-      --wait --base origin/main "<foco>" ) > "<saída>"
+  scripts/revisao-externa.sh gemini "$(git rev-parse HEAD)" "<saída>" "<foco>"
   ```
 
-  Mesmas duas proteções do Codex: worktree descartável no head publicado
-  (pode ser o mesmo, se as duas revisões rodarem em seguida; remova no fim)
-  e `sem_segredos`.
+  **Diff acima de ~30 KB**: no Windows o plugin passa o diff inteiro na linha
+  de comando e volta vazio em segundos. Nesse caso divida por grupo de
+  arquivos, passando-os no fim (uma chamada por parte, até ~25 KB de diff
+  cada, mantendo juntos os arquivos que se explicam):
+
+  ```bash
+  scripts/revisao-externa.sh gemini "$SHA" "<saída-1>" "<foco, parte 1 de N>" src/a.tsx src/b.ts
+  scripts/revisao-externa.sh gemini "$SHA" "<saída-2>" "<foco, parte 2 de N>" src/c.ts
+  ```
+
+  Registre no PR que a revisão foi em partes e quais arquivos ficaram em
+  cada uma. Erro 503 do serviço é passageiro: repita.
 
   O foco manda responder em português e **só com base no diff do prompt, sem
   usar ferramentas nem executar comandos**: no modo só leitura o comando é

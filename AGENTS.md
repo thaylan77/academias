@@ -195,8 +195,12 @@ Plano, status e slug da academia só mudam via `service_role` (billing do SaaS).
 - O Claude roda a revisão do Codex pelo plugin, com a branch já atualizada
   com `main`, e publica a saída de cada rodada no PR **sem editar**. A linha
   de decisão é escrita pelo Codex, nunca pelo Claude.
-- **Aprovação = última linha do comentário de revisão**, sozinha (fora de
-  lista), com o sha completo do head revisado:
+- Toda revisão externa roda por `scripts/revisao-externa.sh`: worktree
+  descartável no head publicado e ambiente por lista de permissão (o revisor
+  não herda variável de senha, token ou chave).
+- **Aprovação = última linha do comentário de revisão**, com o sha completo
+  do head revisado (o plugin a devolve como item de lista, `- APROVADO:
+  <sha>`; vale assim):
   - `APROVADO: <sha>` aprova aquele commit, e só ele;
   - `MUDANÇAS: <sha>` pede correção; não é aprovação, mesmo "sem bloqueadores".
 - Push depois da aprovação invalida a aprovação: o head novo precisa de
