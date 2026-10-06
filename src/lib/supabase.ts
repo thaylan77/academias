@@ -307,19 +307,21 @@ export async function realizarCheckin(
   };
 }
 
-// Helper para ler papel da equipe em membros_academia (imune a edições manuais em user_metadata)
+// Helper para ler papel da equipe em membros_academia (com isolamento multi-tenant obrigatório por academia_id)
 export async function resolverPapelEquipe(
   client: any,
   userId: string,
+  academiaId: string,
   papelFallback: UsuarioEquipe["papel"] = "professor"
 ): Promise<UsuarioEquipe["papel"]> {
-  if (!client) return papelFallback;
+  if (!client || !academiaId) return papelFallback;
   try {
     const { data: membro } = await client
       .from("membros_academia")
       .select("papel")
       .eq("user_id", userId)
       .eq("ativo", true)
+      .eq("academia_id", academiaId)
       .maybeSingle();
 
     if (membro?.papel) {
@@ -334,13 +336,13 @@ export async function resolverPapelEquipe(
 // Controle de sessão da equipe para o Totem
 let sessaoEquipeMock: UsuarioEquipe | null = null;
 
-export async function obterSessaoEquipe(): Promise<UsuarioEquipe | null> {
+export async function obterSessaoEquipe(academiaId: string): Promise<UsuarioEquipe | null> {
   if (supabase) {
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) return null;
 
     const papelFallback = (user.user_metadata?.papel as any) || "professor";
-    const papel = await resolverPapelEquipe(supabase, user.id, papelFallback);
+    const papel = await resolverPapelEquipe(supabase, user.id, academiaId, papelFallback);
 
     return {
       id: user.id,
@@ -359,7 +361,8 @@ export async function obterSessaoEquipe(): Promise<UsuarioEquipe | null> {
 export async function loginEquipe(
   email: string,
   senha?: string,
-  papel: UsuarioEquipe["papel"] = "professor"
+  papel: UsuarioEquipe["papel"] = "professor",
+  academiaId?: string
 ): Promise<{ sucesso: boolean; usuario?: UsuarioEquipe; mensagem?: string }> {
   if (supabase && senha) {
     const { data, error } = await supabase.auth.signInWithPassword({ email, password: senha });
@@ -368,7 +371,9 @@ export async function loginEquipe(
     }
     const user = data.user;
     const papelFallback = (user.user_metadata?.papel as any) || papel;
-    const papelFinal = await resolverPapelEquipe(supabase, user.id, papelFallback);
+    const papelFinal = academiaId
+      ? await resolverPapelEquipe(supabase, user.id, academiaId, papelFallback)
+      : papelFallback;
 
     return {
       sucesso: true,
@@ -401,3 +406,56 @@ export async function logoutEquipe(): Promise<void> {
   }
   sessaoEquipeMock = null;
 }
+
+/**
+ * Tenta renovar a sessão atual via refresh token (supabase.auth.refreshSession).
+ * Evita deslogar o quiosque/totem quando o dispositivo acorda do modo de repouso (suspensão noturna).
+ * Retorna ehTransitorio: true caso a falha seja de rede ou erro 5xx, evitando logout indevido.
+ */
+export async function renovarSessao(): Promise<{
+  sucesso: boolean;
+  ehTransitorio?: boolean;
+  erro?: any;
+}> {
+  if (supabase?.auth?.refreshSession) {
+    try {
+      const { data, error } = await supabase.auth.refreshSession();
+      if (error) {
+        const status = (error as any).status || (error as any).statusCode;
+        const msg = (error.message || "").toLowerCase();
+        const ehTransitorio =
+          status === 500 ||
+          status === 502 ||
+          status === 503 ||
+          status === 504 ||
+          msg.includes("fetch") ||
+          msg.includes("network") ||
+          msg.includes("timeout") ||
+          (error as any).name === "AuthRetryableFetchError";
+
+        return { sucesso: false, ehTransitorio, erro: error };
+      }
+      if (!data?.session) {
+        return { sucesso: false, ehTransitorio: false, erro: new Error("Sessão não retornada após renovação") };
+      }
+      return { sucesso: true };
+    } catch (e: any) {
+      const msg = (e?.message || "").toLowerCase();
+      const ehTransitorio =
+        msg.includes("network") ||
+        msg.includes("fetch") ||
+        msg.includes("timeout") ||
+        e?.name === "AuthRetryableFetchError";
+
+      return { sucesso: false, ehTransitorio, erro: e };
+    }
+  }
+
+  // Em modo de desenvolvimento / testes com sessão simulada
+  if (import.meta.env.DEV && sessaoEquipeMock) {
+    return { sucesso: true };
+  }
+
+  return { sucesso: false, ehTransitorio: false, erro: new Error("Supabase não inicializado ou sem sessão ativa") };
+}
+

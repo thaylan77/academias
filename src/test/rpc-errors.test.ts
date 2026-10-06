@@ -103,6 +103,17 @@ describe("Centralizador de Tratamento de Erros de RPC (mapearErroRpc)", () => {
     expect(mapeado.codigo).toBe("checkin_inadimplente");
   });
 
+  it("deve mapear erros de autenticação (401 / JWT expirado) para sessao_expirada", () => {
+    const erroJwt = {
+      status: 401,
+      message: "JWT expired",
+    };
+    const mapeado = mapearErroRpc(erroJwt);
+    expect(mapeado.codigo).toBe("sessao_expirada");
+    expect(mapeado.titulo).toBe("Sessão Encerrada");
+    expect(mapeado.mensagem).toBe("Sessão encerrada, faça login novamente.");
+  });
+
   it("deve retornar GENERICO para erros não mapeados sem quebrar", () => {
     const erro = {
       message: "Falha de rede ou timeout temporário",
@@ -110,3 +121,4 @@ describe("Centralizador de Tratamento de Erros de RPC (mapearErroRpc)", () => {
     expect(mapearErroRpc(erro).codigo).toBe("GENERICO");
   });
 });
+

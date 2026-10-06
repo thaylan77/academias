@@ -4,10 +4,11 @@ import {
   obterSessaoEquipe,
   loginEquipe,
   logoutEquipe,
+  renovarSessao,
   obterTurmasAbertasTotem,
   emitirTokenCheckin,
 } from "../../lib/supabase";
-import { mapearErroRpc, ErroRpcMapeado } from "../../lib/rpc-errors";
+import { mapearErroRpc, ErroRpcMapeado, isErroTransitorioTotem, isErroAutenticacao } from "../../lib/rpc-errors";
 import { AcademiaPublica, TurmaAbertaTotem, TokenCheckinInfo, UsuarioEquipe } from "../../types/app";
 import { QRGenerator } from "../../components/qr/qr-generator";
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "../../components/ui/card";
@@ -27,12 +28,16 @@ import {
   UserCheck,
   AlertTriangle,
   RefreshCw,
+  WifiOff,
 } from "lucide-react";
 
 interface TotemPageProps {
   slug: string;
   onSessionChange?: (autenticado: boolean) => void;
 }
+
+const INTERVALOS_BACKOFF = [5, 15, 30, 60];
+const INTERVALO_ERRO_PERMANENTE = 60;
 
 export const TotemPage: React.FC<TotemPageProps> = ({ slug, onSessionChange }) => {
   const [academia, setAcademia] = useState<AcademiaPublica | null>(null);
@@ -43,11 +48,17 @@ export const TotemPage: React.FC<TotemPageProps> = ({ slug, onSessionChange }) =
   const [isFullScreen, setIsFullScreen] = useState<boolean>(false);
   const [segundosRestantes, setSegundosRestantes] = useState<number>(30);
 
-  // Estados de erro das RPCs do totem
+  // Estados de erro e resiliência das RPCs do totem
   const [erroTotem, setErroTotem] = useState<ErroRpcMapeado | null>(null);
   const [errosTokens, setErrosTokens] = useState<Record<string, ErroRpcMapeado>>({});
-  const erroTotemRef = useRef<ErroRpcMapeado | null>(null);
-  erroTotemRef.current = erroTotem;
+  const [statusConexao, setStatusConexao] = useState<"conectado" | "reconectando" | "bloqueado">("conectado");
+  const [tentativasFalhas, setTentativasFalhas] = useState<number>(0);
+  const [carregandoCiclo, setCarregandoCiclo] = useState<boolean>(false);
+
+  const tentativasFalhasRef = useRef<number>(0);
+  tentativasFalhasRef.current = tentativasFalhas;
+  const carregandoCicloRef = useRef<boolean>(false);
+  carregandoCicloRef.current = carregandoCiclo;
 
   // Estado de autenticação da equipe (sem credenciais hardcoded)
   const [usuarioEquipe, setUsuarioEquipe] = useState<UsuarioEquipe | null>(null);
@@ -70,99 +81,187 @@ export const TotemPage: React.FC<TotemPageProps> = ({ slug, onSessionChange }) =
     return () => clearInterval(clockTimer);
   }, [slug]);
 
-  // Função centralizada para atualizar turmas abertas e tokens
+  // Função centralizada para atualizar turmas abertas e tokens com controle de resiliência e renovação de sessão
   const atualizarCiclo = async () => {
-    if (!academia) return;
+    if (!academia || carregandoCicloRef.current) return;
+    setCarregandoCiclo(true);
     try {
-      setErroTotem(null);
-      const abertas = await obterTurmasAbertasTotem(academia.id);
-      setTurmasAbertas(abertas);
+      let executou = false;
+      let tentativa = 0;
 
-      if (abertas.length > 0) {
-        const novoMapaTokens: Record<string, TokenCheckinInfo> = {};
-        const novoMapaErros: Record<string, ErroRpcMapeado> = {};
-        let menorTempoRestante = 30;
+      while (!executou && tentativa < 2) {
+        tentativa++;
+        try {
+          const abertas = await obterTurmasAbertasTotem(academia.id);
+          setTurmasAbertas(abertas);
+          setErroTotem(null);
+          setStatusConexao("conectado");
+          setTentativasFalhas(0);
 
-        for (const turma of abertas) {
-          try {
-            const info = await emitirTokenCheckin(turma.id);
-            if (info && info.token) {
-              novoMapaTokens[turma.id] = info;
-              if (info.expira_em) {
-                const ms = new Date(info.expira_em).getTime() - Date.now();
-                const segs = Math.max(1, Math.floor(ms / 1000));
-                menorTempoRestante = Math.min(menorTempoRestante, segs);
-              } else if (info.periodo_segundos) {
-                menorTempoRestante = Math.min(menorTempoRestante, info.periodo_segundos);
+          if (abertas.length > 0) {
+            const novoMapaTokens: Record<string, TokenCheckinInfo> = {};
+            const novoMapaErros: Record<string, ErroRpcMapeado> = {};
+            let menorTempoRestante = 30;
+
+            for (const turma of abertas) {
+              try {
+                const info = await emitirTokenCheckin(turma.id);
+                if (info && info.token) {
+                  novoMapaTokens[turma.id] = info;
+                  if (info.expira_em) {
+                    const ms = new Date(info.expira_em).getTime() - Date.now();
+                    const segs = Math.max(1, Math.floor(ms / 1000));
+                    menorTempoRestante = Math.min(menorTempoRestante, segs);
+                  } else if (info.periodo_segundos) {
+                    menorTempoRestante = Math.min(menorTempoRestante, info.periodo_segundos);
+                  }
+                } else {
+                  novoMapaErros[turma.id] = {
+                    codigo: "GENERICO",
+                    titulo: "Token Indisponível",
+                    mensagem: "Não foi possível emitir o token de check-in para esta turma.",
+                    acaoSugerida: "Aguarde a próxima renovação.",
+                  };
+                }
+              } catch (errTurma: any) {
+                if (isErroAutenticacao(errTurma)) {
+                  throw errTurma;
+                }
+                novoMapaErros[turma.id] = mapearErroRpc(errTurma);
               }
-            } else {
-              novoMapaErros[turma.id] = {
-                codigo: "GENERICO",
-                titulo: "Token Indisponível",
-                mensagem: "Não foi possível emitir o token de check-in para esta turma.",
-                acaoSugerida: "Aguarde a próxima renovação.",
-              };
             }
-          } catch (errTurma: any) {
-            novoMapaErros[turma.id] = mapearErroRpc(errTurma);
-          }
-        }
 
-        setTokens(novoMapaTokens);
-        setErrosTokens(novoMapaErros);
-        setSegundosRestantes(menorTempoRestante);
-      } else {
-        setTokens({});
-        setErrosTokens({});
+            setTokens(novoMapaTokens);
+            setErrosTokens(novoMapaErros);
+            setSegundosRestantes(menorTempoRestante);
+          } else {
+            setTokens({});
+            setErrosTokens({});
+            setSegundosRestantes(30);
+          }
+          executou = true;
+        } catch (err: any) {
+          const erroMapeado = mapearErroRpc(err);
+          const ehAuth = isErroAutenticacao(err) || erroMapeado.codigo === "sessao_expirada";
+
+          // Categoria 3: Erro de autenticação (sessão expirada/revogada, 401/JWT)
+          // Dispositivo que acorda de repouso: tenta renovar via refresh token antes de deslogar.
+          if (ehAuth && tentativa === 1) {
+            const resRenovacao = await renovarSessao();
+            if (resRenovacao.sucesso) {
+              // Repete imediatamente dentro do mesmo ciclo, sem soltar o lock carregandoCiclo
+              continue;
+            }
+
+            // Finding 2 do Codex: falha transitória de refresh (rede, 5xx) preserva a sessão com backoff
+            if (resRenovacao.ehTransitorio) {
+              setErroTotem(mapearErroRpc(resRenovacao.erro || err));
+              const tentAtual = tentativasFalhasRef.current;
+              const indexIntervalo = Math.min(tentAtual, INTERVALOS_BACKOFF.length - 1);
+              const espera = INTERVALOS_BACKOFF[indexIntervalo];
+              setStatusConexao("reconectando");
+              setTentativasFalhas((prev) => prev + 1);
+              setSegundosRestantes(espera);
+              executou = true;
+              return;
+            }
+
+            // Falha definitiva de credenciais: encerra a sessão
+            await logoutEquipe();
+            setUsuarioEquipe(null);
+            if (onSessionChange) {
+              onSessionChange(false);
+            }
+            setErroLogin("Sessão encerrada, faça login novamente.");
+            setErroTotem(null);
+            setStatusConexao("conectado");
+            setTurmasAbertas([]);
+            setTokens({});
+            setErrosTokens({});
+            executou = true;
+            return;
+          }
+
+          if (ehAuth) {
+            await logoutEquipe();
+            setUsuarioEquipe(null);
+            if (onSessionChange) {
+              onSessionChange(false);
+            }
+            setErroLogin("Sessão encerrada, faça login novamente.");
+            setErroTotem(null);
+            setStatusConexao("conectado");
+            setTurmasAbertas([]);
+            setTokens({});
+            setErrosTokens({});
+            executou = true;
+            return;
+          }
+
+          setErroTotem(erroMapeado);
+
+          if (isErroTransitorioTotem(erroMapeado)) {
+            // Categoria 1: Erro transitório (rede, timeout, 5xx): espera crescente 5 s, 15 s, 30 s, até 60 s
+            const tentAtual = tentativasFalhasRef.current;
+            const indexIntervalo = Math.min(tentAtual, INTERVALOS_BACKOFF.length - 1);
+            const espera = INTERVALOS_BACKOFF[indexIntervalo];
+            setStatusConexao("reconectando");
+            setTentativasFalhas((prev) => prev + 1);
+            setSegundosRestantes(espera);
+          } else {
+            // Categoria 2: Erro permanente (sem_permissao, academia_suspensa):
+            // Checa novamente a cada 60 s para retornar sozinho quando a situação mudar
+            setStatusConexao("bloqueado");
+            setTurmasAbertas([]);
+            setTokens({});
+            setErrosTokens({});
+            setSegundosRestantes(INTERVALO_ERRO_PERMANENTE);
+          }
+          executou = true;
+        }
       }
-    } catch (err: any) {
-      const erroMapeado = mapearErroRpc(err);
-      setErroTotem(erroMapeado);
-      setTurmasAbertas([]);
-      setTokens({});
-      setErrosTokens({});
+    } finally {
+      setCarregandoCiclo(false);
     }
   };
 
-  // Efeito para ciclo de rotação do token e atualização de turmas abertas
+  // Disparo inicial quando a sessão e a academia estão prontas
+  useEffect(() => {
+    if (!usuarioEquipe || !academia) return;
+    atualizarCiclo();
+  }, [usuarioEquipe, academia?.id]);
+
+  // Temporizador regressivo puro: decrementa 1 segundo sem efeitos colaterais dentro do updater
   useEffect(() => {
     if (!usuarioEquipe || !academia) return;
 
-    // Executa imediatamente
-    atualizarCiclo();
-
-    // Cronômetro regressivo segundo a segundo
-    const intervalTimer = setInterval(() => {
-      // Se houver erro de conexão/autorização no totem (ex: suspensa, sem permissão),
-      // pausamos o cronômetro e a sincronização automática enquanto o erro persistir.
-      if (erroTotemRef.current) {
-        return;
-      }
-
-      setSegundosRestantes((prev) => {
-        if (prev <= 1) {
-          atualizarCiclo();
-          return 30;
-        }
-        return prev - 1;
-      });
+    const timer = setInterval(() => {
+      setSegundosRestantes((prev) => Math.max(0, prev - 1));
     }, 1000);
 
-    return () => {
-      clearInterval(intervalTimer);
-    };
+    return () => clearInterval(timer);
   }, [usuarioEquipe, academia?.id]);
+
+  // Disparo reativo ao zerar o contador regressivo
+  useEffect(() => {
+    if (!usuarioEquipe || !academia) return;
+
+    if (segundosRestantes === 0 && !carregandoCicloRef.current) {
+      atualizarCiclo();
+    }
+  }, [segundosRestantes, usuarioEquipe, academia?.id]);
 
   const verificarAcesso = async () => {
     setLoading(true);
-    const user = await obterSessaoEquipe();
+    const data = await obterAcademiaPublica(slug);
+    setAcademia(data);
+
+    // Consulta de papel da equipe com filtro obrigatório por academia_id (regra multi-tenant)
+    const user = data?.id ? await obterSessaoEquipe(data.id) : null;
     setUsuarioEquipe(user);
     if (onSessionChange) {
       onSessionChange(!!user);
     }
-
-    const data = await obterAcademiaPublica(slug);
-    setAcademia(data);
     setLoading(false);
   };
 
@@ -178,7 +277,7 @@ export const TotemPage: React.FC<TotemPageProps> = ({ slug, onSessionChange }) =
 
     const email = emailDemo || emailLogin;
     const senha = senhaDemo !== undefined ? senhaDemo : senhaLogin;
-    const res = await loginEquipe(email, senha, papelOverride || "professor");
+    const res = await loginEquipe(email, senha, papelOverride || "professor", academia?.id);
     setAutenticando(false);
 
     if (res.sucesso && res.usuario) {
@@ -392,7 +491,7 @@ export const TotemPage: React.FC<TotemPageProps> = ({ slug, onSessionChange }) =
       </div>
 
       {/* Conteúdo do Totem: Turmas Abertas com QR Codes */}
-      {erroTotem ? (
+      {statusConexao === "bloqueado" && erroTotem ? (
         <div className="py-16">
           <Card className="border-red-900/50 bg-red-950/20 p-12 text-center max-w-lg mx-auto shadow-2xl">
             <div className="w-16 h-16 rounded-2xl bg-red-900/30 border border-red-800 flex items-center justify-center mx-auto mb-4 text-red-400">
@@ -409,14 +508,50 @@ export const TotemPage: React.FC<TotemPageProps> = ({ slug, onSessionChange }) =
                 {erroTotem.acaoSugerida}
               </p>
             )}
+            <div className="mb-6 flex items-center justify-center gap-2 text-xs text-zinc-400 font-mono">
+              <span className="w-2 h-2 rounded-full bg-amber-500 animate-pulse" />
+              Verificando novamente em {segundosRestantes}s...
+            </div>
             <Button
               variant="outline"
               size="sm"
               onClick={() => atualizarCiclo()}
+              disabled={carregandoCiclo}
               className="gap-2 border-red-800 bg-red-950/40 text-red-200 hover:bg-red-900/50"
             >
-              <RefreshCw className="w-4 h-4" />
+              <RefreshCw className={`w-4 h-4 ${carregandoCiclo ? "animate-spin" : ""}`} />
               Tentar Reconectar
+            </Button>
+          </Card>
+        </div>
+      ) : statusConexao === "reconectando" && turmasAbertas.length === 0 ? (
+        <div className="py-16">
+          <Card className="border-amber-800/50 bg-amber-950/20 p-12 text-center max-w-lg mx-auto shadow-2xl">
+            <div className="w-16 h-16 rounded-2xl bg-amber-900/30 border border-amber-800 flex items-center justify-center mx-auto mb-4 text-amber-400">
+              <WifiOff className="w-8 h-8" />
+            </div>
+            <Badge variant="outline" className="mx-auto mb-2 text-xs border-amber-800 text-amber-400 bg-amber-950/40">
+              Conexão Instável
+            </Badge>
+            <h3 className="text-xl font-bold text-white mb-2">
+              Reconectando ao tatame...
+            </h3>
+            <p className="text-sm text-zinc-300 max-w-sm mx-auto leading-relaxed mb-4">
+              Houve uma oscilação na rede ou no servidor. O totem tentará restabelecer a comunicação automaticamente.
+            </p>
+            <div className="flex items-center justify-center gap-2 text-xs text-amber-300 font-mono mb-6">
+              <RefreshCw className="w-4 h-4 animate-spin text-amber-400" />
+              Reconectando em {segundosRestantes}s...
+            </div>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => atualizarCiclo()}
+              disabled={carregandoCiclo}
+              className="gap-2 border-amber-800 bg-amber-950/40 text-amber-200 hover:bg-amber-900/50"
+            >
+              <RefreshCw className={`w-4 h-4 ${carregandoCiclo ? "animate-spin" : ""}`} />
+              Reconectar Agora
             </Button>
           </Card>
         </div>
@@ -440,10 +575,32 @@ export const TotemPage: React.FC<TotemPageProps> = ({ slug, onSessionChange }) =
         </div>
       ) : (
         <div className="space-y-6">
+          {statusConexao === "reconectando" && (
+            <div className="p-3.5 rounded-xl border border-amber-800/60 bg-amber-950/40 flex items-center justify-between text-xs text-amber-200 shadow-lg">
+              <div className="flex items-center gap-2">
+                <WifiOff className="w-4 h-4 text-amber-400 animate-pulse" />
+                <span>Oscilação de rede detectada. <strong>Reconectando em {segundosRestantes}s...</strong></span>
+              </div>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => atualizarCiclo()}
+                disabled={carregandoCiclo}
+                className="h-7 text-xs border-amber-700 bg-amber-900/50 hover:bg-amber-800 text-amber-100 gap-1"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${carregandoCiclo ? "animate-spin" : ""}`} />
+                Reconectar Agora
+              </Button>
+            </div>
+          )}
           <div className={`grid gap-6 ${turmasAbertas.length === 1 ? "max-w-md mx-auto" : "grid-cols-1 md:grid-cols-2"}`}>
             {turmasAbertas.map((turma) => {
               const tokenInfo = tokens[turma.id];
-              const token = tokenInfo?.token;
+              const tokenExpirado = tokenInfo?.expira_em
+                ? new Date(tokenInfo.expira_em).getTime() <= Date.now()
+                : false;
+              const tokenValido = !!tokenInfo?.token && !tokenExpirado;
+              const token = tokenValido ? tokenInfo.token : "";
               const erroToken = errosTokens[turma.id];
               const checkinUrl = `${currentOrigin}/?slug=${slug}&turma=${turma.id}&t=${token || ""}&tab=checkin`;
 
@@ -465,7 +622,7 @@ export const TotemPage: React.FC<TotemPageProps> = ({ slug, onSessionChange }) =
                     {turma.nome}
                   </h3>
 
-                  {token ? (
+                  {tokenValido ? (
                     <>
                       <p className="text-xs text-zinc-400 mb-4">
                         Aponte a câmera do seu celular para registrar sua presença no tatame
@@ -483,6 +640,20 @@ export const TotemPage: React.FC<TotemPageProps> = ({ slug, onSessionChange }) =
                         Token rotativo ativo • Renovando em {segundosRestantes}s
                       </div>
                     </>
+                  ) : tokenExpirado ? (
+                    <div className="my-6 p-6 border border-amber-800/40 bg-amber-950/20 rounded-2xl max-w-xs flex flex-col items-center">
+                      <Clock className="w-10 h-10 text-amber-500 mb-2" />
+                      <h4 className="text-sm font-bold text-amber-300 mb-1">
+                        QR Code Expirado
+                      </h4>
+                      <p className="text-xs text-zinc-300 mb-3">
+                        Aguardando renovação do sinal para emitir novo código rotativo.
+                      </p>
+                      <p className="text-[11px] text-amber-400/80 font-mono flex items-center gap-1.5">
+                        <span className="w-2 h-2 rounded-full bg-amber-400 animate-pulse" />
+                        Reconectando em {segundosRestantes}s...
+                      </p>
+                    </div>
                   ) : (
                     <div className="my-6 p-6 border border-amber-800/40 bg-amber-950/20 rounded-2xl max-w-xs flex flex-col items-center">
                       <AlertTriangle className="w-10 h-10 text-amber-500 mb-2" />
