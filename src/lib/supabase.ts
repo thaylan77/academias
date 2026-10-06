@@ -5,6 +5,8 @@ import {
   MatriculaOnlinePayload,
   CheckinResultado,
   UsuarioEquipe,
+  TurmaAbertaTotem,
+  TokenCheckinInfo,
 } from "../types/app";
 import { ACADEMIA_DEMO_A, ACADEMIA_DEMO_B } from "./mock-data";
 import { mapearErroRpc } from "./rpc-errors";
@@ -114,16 +116,80 @@ export async function submeterMatriculaOnline(
   };
 }
 
-// Helper unificado para realização de check-in por QR Code
+// Helper para buscar turmas com check-in aberto neste momento para o Totem
+export async function obterTurmasAbertasTotem(academiaId: string): Promise<TurmaAbertaTotem[]> {
+  if (supabase) {
+    const { data, error } = await (supabase.rpc as any)("totem_turmas_agora", {
+      p_academia_id: academiaId,
+    });
+    if (error) {
+      throw error;
+    }
+    return (data as TurmaAbertaTotem[]) || [];
+  }
+
+  // Fallback para simulação local / dev apenas sem cliente supabase configurado
+  if (import.meta.env.DEV) {
+    return [
+      {
+        id: "turma-jj-01",
+        nome: "Jiu-Jitsu Adulto — Noite",
+        hora_inicio: "19:00",
+        hora_fim: "20:30",
+        modalidade_nome: "Jiu-Jitsu",
+      },
+      {
+        id: "turma-mt-01",
+        nome: "Muay Thai Geral",
+        hora_inicio: "19:30",
+        hora_fim: "21:00",
+        modalidade_nome: "Muay Thai",
+      },
+    ];
+  }
+
+  return [];
+}
+
+// Helper para emitir token HMAC rotativo de check-in para uma turma
+export async function emitirTokenCheckin(turmaId: string): Promise<TokenCheckinInfo | null> {
+  if (supabase) {
+    const { data, error } = await (supabase.rpc as any)("emitir_token_checkin", {
+      p_turma_id: turmaId,
+    });
+    if (error) {
+      throw error;
+    }
+    return data as TokenCheckinInfo;
+  }
+
+  // Mock em ambiente DEV apenas sem cliente supabase configurado
+  if (import.meta.env.DEV) {
+    const randomHex = Math.random().toString(36).substring(2, 10) + Math.random().toString(36).substring(2, 10);
+    return {
+      token: `tok_${randomHex}`,
+      expira_em: new Date(Date.now() + 30000).toISOString(),
+      periodo_segundos: 30,
+    };
+  }
+
+  return null;
+}
+
+// Helper unificado para realização de check-in por QR Code com token obrigatório
 export async function realizarCheckin(
   turmaId: string,
+  token?: string,
   alunoId?: string,
   simulacaoCenario?: "sucesso" | "inadimplente" | "multiplos"
 ): Promise<CheckinResultado> {
+  const tokenEfetivo = token || (import.meta.env.DEV ? "token-dev-simulado" : "");
+
   if (supabase && (!import.meta.env.DEV || !simulacaoCenario)) {
     try {
       const { data, error } = await (supabase.rpc as any)("fazer_checkin", {
         p_turma_id: turmaId,
+        p_token: tokenEfetivo,
         p_aluno_id: alunoId || null,
       });
 
@@ -135,14 +201,12 @@ export async function realizarCheckin(
           titulo: erroMapeado.titulo,
           mensagem: erroMapeado.mensagem,
           acao_sugerida: erroMapeado.acaoSugerida,
+          alunos_disponiveis: erroMapeado.candidatosDependentes?.map((c) => ({
+            id: c.id,
+            nome: c.nome,
+            status: "ativo",
+          })),
         };
-
-        if (erroMapeado.codigo === "MULTIPLOS_ALUNOS" && import.meta.env.DEV) {
-          resultado.alunos_disponiveis = [
-            { id: "aluno-1", nome: "Lucas Silva (Filho)", status: "ativo" },
-            { id: "aluno-2", nome: "Mariana Silva (Filha)", status: "ativo" },
-          ];
-        }
 
         return resultado;
       }
@@ -161,6 +225,11 @@ export async function realizarCheckin(
         titulo: erroMapeado.titulo,
         mensagem: erroMapeado.mensagem,
         acao_sugerida: erroMapeado.acaoSugerida,
+        alunos_disponiveis: erroMapeado.candidatosDependentes?.map((c) => ({
+          id: c.id,
+          nome: c.nome,
+          status: "ativo",
+        })),
       };
     }
   }
@@ -172,7 +241,7 @@ export async function realizarCheckin(
     if (simulacaoCenario === "inadimplente") {
       const erroMapeado = mapearErroRpc({
         message: "Check-in bloqueado: mensalidade em atraso. Procure a recepção.",
-        hint: "INADIMPLENTE",
+        hint: "checkin_inadimplente",
       });
       return {
         sucesso: false,
@@ -184,9 +253,14 @@ export async function realizarCheckin(
     }
 
     if (simulacaoCenario === "multiplos" && !alunoId) {
+      const dependentesMock = [
+        { id: "aluno-1", nome: "Lucas Silva (Filho)" },
+        { id: "aluno-2", nome: "Mariana Silva (Filha)" },
+      ];
       const erroMapeado = mapearErroRpc({
-        message: "Mais de um aluno neste login: informe qual (p_aluno_id)",
-        hint: "MULTIPLOS_ALUNOS",
+        message: "Mais de um aluno associado a este login para esta turma",
+        hint: "checkin_multiplos_alunos",
+        details: JSON.stringify(dependentesMock),
       });
       return {
         sucesso: false,
@@ -194,10 +268,25 @@ export async function realizarCheckin(
         titulo: erroMapeado.titulo,
         mensagem: erroMapeado.mensagem,
         acao_sugerida: erroMapeado.acaoSugerida,
-        alunos_disponiveis: [
-          { id: "aluno-1", nome: "Lucas Silva (Filho)", status: "ativo" },
-          { id: "aluno-2", nome: "Mariana Silva (Filha)", status: "ativo" },
-        ],
+        alunos_disponiveis: dependentesMock.map((d) => ({
+          id: d.id,
+          nome: d.nome,
+          status: "ativo",
+        })),
+      };
+    }
+
+    if (!token && !simulacaoCenario) {
+      const erroMapeado = mapearErroRpc({
+        message: "Token do check-in ausente ou inválido",
+        hint: "checkin_token_invalido",
+      });
+      return {
+        sucesso: false,
+        codigo_erro: erroMapeado.codigo,
+        titulo: erroMapeado.titulo,
+        mensagem: erroMapeado.mensagem,
+        acao_sugerida: erroMapeado.acaoSugerida,
       };
     }
 
@@ -218,6 +307,30 @@ export async function realizarCheckin(
   };
 }
 
+// Helper para ler papel da equipe em membros_academia (imune a edições manuais em user_metadata)
+export async function resolverPapelEquipe(
+  client: any,
+  userId: string,
+  papelFallback: UsuarioEquipe["papel"] = "professor"
+): Promise<UsuarioEquipe["papel"]> {
+  if (!client) return papelFallback;
+  try {
+    const { data: membro } = await client
+      .from("membros_academia")
+      .select("papel")
+      .eq("user_id", userId)
+      .eq("ativo", true)
+      .maybeSingle();
+
+    if (membro?.papel) {
+      return membro.papel as UsuarioEquipe["papel"];
+    }
+  } catch (e) {
+    console.warn("Falha ao consultar papel em membros_academia:", e);
+  }
+  return papelFallback;
+}
+
 // Controle de sessão da equipe para o Totem
 let sessaoEquipeMock: UsuarioEquipe | null = null;
 
@@ -225,11 +338,15 @@ export async function obterSessaoEquipe(): Promise<UsuarioEquipe | null> {
   if (supabase) {
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) return null;
+
+    const papelFallback = (user.user_metadata?.papel as any) || "professor";
+    const papel = await resolverPapelEquipe(supabase, user.id, papelFallback);
+
     return {
       id: user.id,
       nome: user.user_metadata?.nome || user.email?.split("@")[0] || "Membro da Equipe",
       email: user.email || "",
-      papel: (user.user_metadata?.papel as any) || "professor",
+      papel,
     };
   }
   // Em desenvolvimento local, permite resgatar sessão do mock se estiver ativo
@@ -250,13 +367,16 @@ export async function loginEquipe(
       return { sucesso: false, mensagem: error.message };
     }
     const user = data.user;
+    const papelFallback = (user.user_metadata?.papel as any) || papel;
+    const papelFinal = await resolverPapelEquipe(supabase, user.id, papelFallback);
+
     return {
       sucesso: true,
       usuario: {
         id: user.id,
         nome: user.user_metadata?.nome || email.split("@")[0],
         email: user.email || email,
-        papel,
+        papel: papelFinal,
       },
     };
   }
