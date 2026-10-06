@@ -67,6 +67,7 @@ avise.
   [ "$SHA" = "$(git rev-parse "origin/$(git branch --show-current)")" ] || exit 1
   REV="../honorteam-revisao-${SHA:0:12}"
   git worktree add --detach "$REV" "$SHA"
+  trap 'git worktree remove --force "$REV"' EXIT   # limpa mesmo se algo falhar
 
   # tira do ambiente tudo que tenha cara de segredo (só para o comando chamado)
   sem_segredos() {
@@ -81,8 +82,6 @@ avise.
   ( cd "$REV" && sem_segredos node \
       "<raiz do plugin codex>/scripts/codex-companion.mjs" adversarial-review \
       --wait --base origin/main --scope branch "<foco>" ) > "<saída>"
-
-  git worktree remove --force "$REV"            # sempre, mesmo se a revisão falhar
   ```
 
   Confira antes de publicar que `git worktree list` não mostra mais a pasta.
