@@ -1,8 +1,13 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { CheckinPage } from "../pages/checkin/checkin-page";
+import * as supabaseModule from "../lib/supabase";
 
 describe("Tela de Check-in por QR Code", () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+  });
+
   it("deve renderizar o leitor e as instruções de check-in", () => {
     render(<CheckinPage slug="honor-demo-a" />);
 
@@ -12,7 +17,7 @@ describe("Tela de Check-in por QR Code", () => {
   });
 
   it("deve realizar check-in com sucesso e exibir confirmação verde", async () => {
-    render(<CheckinPage slug="honor-demo-a" initialTurmaId="turma-jj-01" />);
+    render(<CheckinPage slug="honor-demo-a" initialTurmaId="turma-jj-01" initialToken="tok-123" />);
 
     await waitFor(() => {
       expect(screen.getByText("Presença Confirmada")).toBeInTheDocument();
@@ -65,5 +70,25 @@ describe("Tela de Check-in por QR Code", () => {
     await waitFor(() => {
       expect(screen.getByText("Presença Confirmada")).toBeInTheDocument();
     });
+  });
+
+  it("deve exibir mensagem amigável quando o token do QR code estiver expirado ou inválido", async () => {
+    vi.spyOn(supabaseModule, "realizarCheckin").mockResolvedValueOnce({
+      sucesso: false,
+      codigo_erro: "checkin_token_invalido",
+      titulo: "QR Code Expirado ou Inválido",
+      mensagem: "O token do check-in expirou ou a turma selecionada não está ativa.",
+      acao_sugerida: "Aponte sua câmera novamente para o QR Code atualizado no totem da academia.",
+    });
+
+    render(<CheckinPage slug="honor-demo-a" initialTurmaId="turma-jj-01" initialToken="token-expirado" />);
+
+    await waitFor(() => {
+      expect(screen.getByText("QR Code Expirado")).toBeInTheDocument();
+      expect(screen.getByText("QR Code Expirado ou Inválido")).toBeInTheDocument();
+    });
+
+    expect(screen.getByText(/Aponte sua câmera novamente para o QR Code atualizado no totem da academia/i)).toBeInTheDocument();
+    expect(screen.getByText("Escanear Novamente")).toBeInTheDocument();
   });
 });

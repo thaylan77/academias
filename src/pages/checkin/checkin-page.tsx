@@ -21,34 +21,53 @@ import {
 interface CheckinPageProps {
   slug: string;
   initialTurmaId?: string | null;
+  initialToken?: string | null;
 }
 
 export const CheckinPage: React.FC<CheckinPageProps> = ({
   slug,
   initialTurmaId,
+  initialToken,
 }) => {
   const [turmaId, setTurmaId] = useState<string | null>(initialTurmaId || null);
+  const [token, setToken] = useState<string | null>(initialToken || null);
   const [loading, setLoading] = useState<boolean>(false);
   const [resultado, setResultado] = useState<CheckinResultado | null>(null);
   const [cenarioSimulado, setCenarioSimulado] = useState<"sucesso" | "inadimplente" | "multiplos">("sucesso");
 
   useEffect(() => {
-    if (initialTurmaId) {
-      setTurmaId(initialTurmaId);
-      executarCheckin(initialTurmaId);
+    let tId = initialTurmaId || null;
+    let tToken = initialToken || null;
+
+    if (typeof window !== "undefined") {
+      const urlParams = new URLSearchParams(window.location.search);
+      if (!tId && urlParams.get("turma")) {
+        tId = urlParams.get("turma");
+      }
+      if (!tToken && (urlParams.get("t") || urlParams.get("token"))) {
+        tToken = urlParams.get("t") || urlParams.get("token");
+      }
     }
-  }, [initialTurmaId]);
+
+    if (tId) {
+      setTurmaId(tId);
+      if (tToken) setToken(tToken);
+      executarCheckin(tId, tToken || undefined);
+    }
+  }, [initialTurmaId, initialToken]);
 
   const executarCheckin = async (
     tId: string,
+    tok?: string,
     alunoId?: string,
     cenarioOverride?: "sucesso" | "inadimplente" | "multiplos"
   ) => {
     setLoading(true);
     setResultado(null);
     try {
+      const tokenEfetivo = tok || token || (import.meta.env.DEV ? "token-dev-simulado" : "");
       const cenario = import.meta.env.DEV ? (cenarioOverride || cenarioSimulado) : undefined;
-      const res = await realizarCheckin(tId, alunoId, cenario);
+      const res = await realizarCheckin(tId, tokenEfetivo, alunoId, cenario);
       setResultado(res);
     } catch (err: any) {
       setResultado({
@@ -62,28 +81,35 @@ export const CheckinPage: React.FC<CheckinPageProps> = ({
   };
 
   const handleScanSuccess = (decodedText: string) => {
-    // Pode ser um UUID de turma direto ou uma URL completa (ex: ...?turma=xyz)
     let parsedTurmaId = decodedText;
+    let parsedToken = "";
+
     try {
-      if (decodedText.includes("turma=")) {
+      if (decodedText.includes("turma=") || decodedText.includes("t=") || decodedText.includes("token=")) {
         const urlObj = new URL(decodedText, window.location.origin);
         parsedTurmaId = urlObj.searchParams.get("turma") || decodedText;
+        parsedToken = urlObj.searchParams.get("t") || urlObj.searchParams.get("token") || "";
       }
     } catch {
-      // mantém decodedText se não for URL válida
+      const matchTurma = decodedText.match(/[?&]turma=([^&]+)/);
+      const matchToken = decodedText.match(/[?&]t=([^&]+)/) || decodedText.match(/[?&]token=([^&]+)/);
+      if (matchTurma) parsedTurmaId = matchTurma[1];
+      if (matchToken) parsedToken = matchToken[1];
     }
 
     setTurmaId(parsedTurmaId);
-    executarCheckin(parsedTurmaId);
+    setToken(parsedToken);
+    executarCheckin(parsedTurmaId, parsedToken);
   };
 
   const handleSelecionarDependente = (aluno: AlunoCheckinInfo) => {
     if (!turmaId) return;
-    executarCheckin(turmaId, aluno.id);
+    executarCheckin(turmaId, token || undefined, aluno.id);
   };
 
   const handleReset = () => {
     setTurmaId(null);
+    setToken(null);
     setResultado(null);
   };
 
@@ -217,7 +243,7 @@ export const CheckinPage: React.FC<CheckinPageProps> = ({
       )}
 
       {/* Estado: Bloqueio por Inadimplência */}
-      {!loading && resultado && resultado.codigo_erro === "INADIMPLENTE" && (
+      {!loading && resultado && (resultado.codigo_erro === "checkin_inadimplente" || resultado.codigo_erro === "INADIMPLENTE") && (
         <Card className="border-red-600/60 bg-gradient-to-b from-zinc-900 to-zinc-950 shadow-2xl overflow-hidden animate-in zoom-in-95">
           <div className="h-2 bg-gradient-to-r from-red-600 to-red-800" />
           <CardContent className="pt-8 text-center">
@@ -230,11 +256,11 @@ export const CheckinPage: React.FC<CheckinPageProps> = ({
             </Badge>
 
             <h3 className="text-xl font-bold text-white tracking-tight">
-              Mensalidade em Atraso
+              {resultado.titulo || "Mensalidade em Atraso"}
             </h3>
 
             <p className="text-zinc-400 text-sm mt-2 max-w-sm mx-auto leading-relaxed">
-              O acesso ao treino foi temporariamente bloqueado devido a pendências financeiras além do prazo de tolerância.
+              {resultado.mensagem}
             </p>
 
             <div className="mt-6 p-4 rounded-xl bg-zinc-950/90 border border-red-900/40 text-left text-xs text-zinc-300 space-y-2">
@@ -269,7 +295,7 @@ export const CheckinPage: React.FC<CheckinPageProps> = ({
       )}
 
       {/* Estado: Múltiplos Dependentes no Login */}
-      {!loading && resultado && resultado.codigo_erro === "MULTIPLOS_ALUNOS" && (
+      {!loading && resultado && (resultado.codigo_erro === "checkin_multiplos_alunos" || resultado.codigo_erro === "MULTIPLOS_ALUNOS") && (
         <Card className="border-amber-600/60 bg-gradient-to-b from-zinc-900 to-zinc-950 shadow-2xl overflow-hidden animate-in zoom-in-95">
           <div className="h-2 bg-gradient-to-r from-amber-500 to-yellow-400" />
           <CardContent className="pt-8 text-center">
@@ -320,12 +346,64 @@ export const CheckinPage: React.FC<CheckinPageProps> = ({
         </Card>
       )}
 
+      {/* Estado: Outros Erros (Token Inválido, Fora de Horário, Sem Matrícula, Suspenso, etc) */}
+      {!loading &&
+        resultado &&
+        !resultado.sucesso &&
+        resultado.codigo_erro !== "checkin_inadimplente" &&
+        resultado.codigo_erro !== "INADIMPLENTE" &&
+        resultado.codigo_erro !== "checkin_multiplos_alunos" &&
+        resultado.codigo_erro !== "MULTIPLOS_ALUNOS" && (
+          <Card className="border-red-600/60 bg-gradient-to-b from-zinc-900 to-zinc-950 shadow-2xl overflow-hidden animate-in zoom-in-95">
+            <div className="h-2 bg-gradient-to-r from-red-600 to-amber-600" />
+            <CardContent className="pt-8 text-center">
+              <div className="w-20 h-20 rounded-full bg-red-600/15 border-2 border-red-600/40 flex items-center justify-center mx-auto mb-5 text-red-500 shadow-lg shadow-red-950/50">
+                <AlertOctagon className="w-12 h-12" />
+              </div>
+
+              <Badge variant="destructive" className="mb-2 text-xs uppercase tracking-wider">
+                {resultado.codigo_erro === "checkin_token_invalido"
+                  ? "QR Code Expirado"
+                  : resultado.codigo_erro === "checkin_fora_do_horario"
+                  ? "Fora da Janela"
+                  : resultado.codigo_erro === "checkin_sem_matricula"
+                  ? "Sem Matrícula"
+                  : "Check-in Recusado"}
+              </Badge>
+
+              <h3 className="text-xl font-bold text-white tracking-tight">
+                {resultado.titulo || "Falha na Validação"}
+              </h3>
+
+              <p className="text-zinc-400 text-sm mt-2 max-w-sm mx-auto leading-relaxed">
+                {resultado.mensagem}
+              </p>
+
+              {resultado.acao_sugerida && (
+                <div className="mt-6 p-4 rounded-xl bg-zinc-950/90 border border-zinc-800 text-left text-xs text-zinc-300 space-y-1">
+                  <p className="font-semibold text-amber-400">Como proceder:</p>
+                  <p className="text-zinc-400">{resultado.acao_sugerida}</p>
+                </div>
+              )}
+
+              <Button
+                variant="outline"
+                onClick={handleReset}
+                className="mt-6 w-full gap-2 border-zinc-700 hover:bg-zinc-800"
+              >
+                <RotateCcw className="w-4 h-4" />
+                Escanear Novamente
+              </Button>
+            </CardContent>
+          </Card>
+        )}
+
       {/* Estado: Scanner Aberto aguardando QR Code */}
       {!loading && !resultado && (
         <div className="space-y-6">
           <QRScanner
             onScanSuccess={handleScanSuccess}
-            simulatedTurmaId={import.meta.env.DEV ? "turma-jj-01" : undefined}
+            simulatedTurmaId={import.meta.env.DEV ? "?turma=turma-jj-01&t=tok_dev_simulado" : undefined}
           />
 
           <Card className="border-zinc-800 bg-zinc-950/60 p-4 text-xs text-zinc-400 space-y-2">

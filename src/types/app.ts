@@ -79,3 +79,18 @@ export interface UsuarioEquipe {
   email: string;
   papel: MembroEquipePapel;
 }
+
+export interface TurmaAbertaTotem {
+  id: string;
+  nome: string;
+  hora_inicio: string;
+  hora_fim: string;
+  modalidade_nome?: string;
+}
+
+export interface TokenCheckinInfo {
+  token: string;
+  expira_em: string;
+  periodo_segundos: number;
+}
+
