@@ -37,8 +37,9 @@ supabase test db                    # roda os testes pgTAP no banco local
 ## Ambientes de banco
 
 - **CI é o "verde" oficial.** O workflow `Banco` (`.github/workflows/banco.yml`)
-  aplica todas as migrations do zero e roda os testes pgTAP a cada push e
-  pull request. Validação feita de outro jeito (PGlite, Postgres temporário)
+  tem dois jobs a cada push e pull request: `testes` aplica todas as
+  migrations do zero, confere os tipos e roda os testes pgTAP; `front` roda
+  `npm ci`, lint, testes e build. Validação feita de outro jeito (PGlite, Postgres temporário)
   ajuda a desenvolver, mas não conta como verde: diga no PR o que rodou onde.
 - **Não há Supabase local na máquina principal** (sem Docker). Não tente
   `supabase start`, `supabase db reset` nem `supabase test db` nela.
@@ -179,10 +180,11 @@ Plano, status e slug da academia só mudam via `service_role` (billing do SaaS).
   - **Codex**: CRUDs, Edge Functions, testes.
   - **Antigravity**: telas e validação no navegador.
 - Quem escreveu o PR não é quem revisa.
-- Somente Claude mescla PRs em `main`.
 
 ## Revisão e merge
 
+- **Nada entra em `main` por commit direto**, nem mudança de regra neste
+  arquivo, nem workflow, nem tipos: tudo por PR, com a branch atualizada.
 - **Só o Claude mescla PRs em `main`.** Nenhum outro agente mescla, nem o
   próprio PR, nem com o CI verde. PR do próprio Claude é revisado pelo Codex
   e mesclado pelo Claude depois da aprovação.
@@ -210,7 +212,8 @@ Plano, status e slug da academia só mudam via `service_role` (billing do SaaS).
 - [ ] Testado com 2 academias: usuário de A não lê nem altera nada de B
 - [ ] Tipos: `src/types/database.ts` igual ao artifact `database-types` do
       CI da própria branch (o passo de conferência do CI passa)
-- [ ] `npm run lint`, `npm run build` e `npm test` passando
+- [ ] `npm run lint`, `npm test` e `npm run build` passando (o job `front`
+      do CI roda os três com Node 22.12.0)
 
 ## Backlog conhecido
 

@@ -33,3 +33,23 @@ jobs:
             echo "::error file=src/types/database.ts::Tipos desatualizados. Baixe o artifact database-types desta execução e commite como src/types/database.ts."
             exit 1
           fi
+
+  # Front: mesma sequência do checklist do AGENTS.md. Node em versão fixa;
+  # as dependências vêm do package-lock.json (npm ci).
+  front:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.12.0
+          cache: npm
+
+      - run: npm ci
+
+      - run: npm run lint
+
+      - run: npm test
+
+      - run: npm run build
