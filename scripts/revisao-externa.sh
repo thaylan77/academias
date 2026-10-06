@@ -37,11 +37,15 @@ ambiente_minimo() {
   env -i "${args[@]}" "$@"
 }
 
-plugin() { # plugin <marketplace> <nome> -> pasta da versão instalada
-  local d
-  d=$(ls -d "$HOME/.claude/plugins/cache/$1/$2"/*/ 2>/dev/null | sort | tail -1)
-  [ -n "$d" ] || { echo "plugin $2 não encontrado" >&2; exit 1; }
-  printf '%s' "${d%/}"
+# Versões fixas dos plugins. A do Antigravity é a auditada: não troque sem
+# nova auditoria. Se a versão instalada for outra, o script para.
+VERSAO_CODEX=1.0.6
+VERSAO_ANTIGRAVITY=0.3.0
+
+plugin() { # plugin <marketplace> <nome> <versão> -> pasta dessa versão
+  local d="$HOME/.claude/plugins/cache/$1/$2/$3"
+  [ -d "$d" ] || { echo "plugin $2 $3 não está instalado em $d" >&2; exit 1; }
+  printf '%s' "$d"
 }
 
 raiz=$(git rev-parse --show-toplevel)
@@ -61,7 +65,7 @@ limpa() {
   # isso impede a remoção. Pede o encerramento pelo próprio plugin primeiro.
   if [ "$revisor" = codex ]; then
     ( cd "$rev" 2>/dev/null && printf '{"cwd":"%s"}' "$(pwd -W 2>/dev/null || pwd)" |
-        ambiente_minimo node "$(plugin openai-codex codex)/scripts/session-lifecycle-hook.mjs" SessionEnd ) \
+        ambiente_minimo node "$(plugin openai-codex codex "$VERSAO_CODEX")/scripts/session-lifecycle-hook.mjs" SessionEnd ) \
       >/dev/null 2>&1 || true
   fi
   local i
@@ -107,12 +111,12 @@ fi
 case "$revisor" in
   codex)
     ( cd "$rev" && ambiente_minimo node \
-        "$(plugin openai-codex codex)/scripts/codex-companion.mjs" adversarial-review \
+        "$(plugin openai-codex codex "$VERSAO_CODEX")/scripts/codex-companion.mjs" adversarial-review \
         --wait --base "$base" --scope branch "$foco" ) > "$saida"
     ;;
   gemini)
     ( cd "$rev" && ambiente_minimo node \
-        "$(plugin dpa-antigravity antigravity)/scripts/antigravity.mjs" adversarial-review \
+        "$(plugin dpa-antigravity antigravity "$VERSAO_ANTIGRAVITY")/scripts/antigravity.mjs" adversarial-review \
         --wait --base "$base" "$foco" ) > "$saida"
     ;;
   *)
