@@ -119,21 +119,16 @@ export async function submeterMatriculaOnline(
 // Helper para buscar turmas com check-in aberto neste momento para o Totem
 export async function obterTurmasAbertasTotem(academiaId: string): Promise<TurmaAbertaTotem[]> {
   if (supabase) {
-    try {
-      const { data, error } = await (supabase.rpc as any)("totem_turmas_agora", {
-        p_academia_id: academiaId,
-      });
-      if (error) {
-        console.warn("Falha ao consultar totem_turmas_agora:", error);
-        throw error;
-      }
-      return (data as TurmaAbertaTotem[]) || [];
-    } catch (e) {
-      console.warn("Caindo no mock de turmas abertas se DEV:", e);
+    const { data, error } = await (supabase.rpc as any)("totem_turmas_agora", {
+      p_academia_id: academiaId,
+    });
+    if (error) {
+      throw error;
     }
+    return (data as TurmaAbertaTotem[]) || [];
   }
 
-  // Fallback para simulação local / dev
+  // Fallback para simulação local / dev apenas sem cliente supabase configurado
   if (import.meta.env.DEV) {
     return [
       {
@@ -159,21 +154,16 @@ export async function obterTurmasAbertasTotem(academiaId: string): Promise<Turma
 // Helper para emitir token HMAC rotativo de check-in para uma turma
 export async function emitirTokenCheckin(turmaId: string): Promise<TokenCheckinInfo | null> {
   if (supabase) {
-    try {
-      const { data, error } = await (supabase.rpc as any)("emitir_token_checkin", {
-        p_turma_id: turmaId,
-      });
-      if (error) {
-        console.warn("Falha ao emitir token de checkin:", error);
-        throw error;
-      }
-      return data as TokenCheckinInfo;
-    } catch (e) {
-      console.warn("Caindo no mock de token se DEV:", e);
+    const { data, error } = await (supabase.rpc as any)("emitir_token_checkin", {
+      p_turma_id: turmaId,
+    });
+    if (error) {
+      throw error;
     }
+    return data as TokenCheckinInfo;
   }
 
-  // Mock em ambiente DEV
+  // Mock em ambiente DEV apenas sem cliente supabase configurado
   if (import.meta.env.DEV) {
     const randomHex = Math.random().toString(36).substring(2, 10) + Math.random().toString(36).substring(2, 10);
     return {
@@ -317,6 +307,30 @@ export async function realizarCheckin(
   };
 }
 
+// Helper para ler papel da equipe em membros_academia (imune a edições manuais em user_metadata)
+export async function resolverPapelEquipe(
+  client: any,
+  userId: string,
+  papelFallback: UsuarioEquipe["papel"] = "professor"
+): Promise<UsuarioEquipe["papel"]> {
+  if (!client) return papelFallback;
+  try {
+    const { data: membro } = await client
+      .from("membros_academia")
+      .select("papel")
+      .eq("user_id", userId)
+      .eq("ativo", true)
+      .maybeSingle();
+
+    if (membro?.papel) {
+      return membro.papel as UsuarioEquipe["papel"];
+    }
+  } catch (e) {
+    console.warn("Falha ao consultar papel em membros_academia:", e);
+  }
+  return papelFallback;
+}
+
 // Controle de sessão da equipe para o Totem
 let sessaoEquipeMock: UsuarioEquipe | null = null;
 
@@ -324,11 +338,15 @@ export async function obterSessaoEquipe(): Promise<UsuarioEquipe | null> {
   if (supabase) {
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) return null;
+
+    const papelFallback = (user.user_metadata?.papel as any) || "professor";
+    const papel = await resolverPapelEquipe(supabase, user.id, papelFallback);
+
     return {
       id: user.id,
       nome: user.user_metadata?.nome || user.email?.split("@")[0] || "Membro da Equipe",
       email: user.email || "",
-      papel: (user.user_metadata?.papel as any) || "professor",
+      papel,
     };
   }
   // Em desenvolvimento local, permite resgatar sessão do mock se estiver ativo
@@ -349,13 +367,16 @@ export async function loginEquipe(
       return { sucesso: false, mensagem: error.message };
     }
     const user = data.user;
+    const papelFallback = (user.user_metadata?.papel as any) || papel;
+    const papelFinal = await resolverPapelEquipe(supabase, user.id, papelFallback);
+
     return {
       sucesso: true,
       usuario: {
         id: user.id,
         nome: user.user_metadata?.nome || email.split("@")[0],
         email: user.email || email,
-        papel,
+        papel: papelFinal,
       },
     };
   }

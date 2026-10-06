@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useRef } from "react";
 import {
   obterAcademiaPublica,
   obterSessaoEquipe,
@@ -7,6 +7,7 @@ import {
   obterTurmasAbertasTotem,
   emitirTokenCheckin,
 } from "../../lib/supabase";
+import { mapearErroRpc, ErroRpcMapeado } from "../../lib/rpc-errors";
 import { AcademiaPublica, TurmaAbertaTotem, TokenCheckinInfo, UsuarioEquipe } from "../../types/app";
 import { QRGenerator } from "../../components/qr/qr-generator";
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "../../components/ui/card";
@@ -20,12 +21,12 @@ import {
   Minimize,
   Clock,
   Sparkles,
-  QrCode,
-  Users,
   Lock,
   LogOut,
   ShieldCheck,
   UserCheck,
+  AlertTriangle,
+  RefreshCw,
 } from "lucide-react";
 
 interface TotemPageProps {
@@ -41,6 +42,12 @@ export const TotemPage: React.FC<TotemPageProps> = ({ slug, onSessionChange }) =
   const [currentTime, setCurrentTime] = useState<string>("");
   const [isFullScreen, setIsFullScreen] = useState<boolean>(false);
   const [segundosRestantes, setSegundosRestantes] = useState<number>(30);
+
+  // Estados de erro das RPCs do totem
+  const [erroTotem, setErroTotem] = useState<ErroRpcMapeado | null>(null);
+  const [errosTokens, setErrosTokens] = useState<Record<string, ErroRpcMapeado>>({});
+  const erroTotemRef = useRef<ErroRpcMapeado | null>(null);
+  erroTotemRef.current = erroTotem;
 
   // Estado de autenticação da equipe (sem credenciais hardcoded)
   const [usuarioEquipe, setUsuarioEquipe] = useState<UsuarioEquipe | null>(null);
@@ -63,24 +70,24 @@ export const TotemPage: React.FC<TotemPageProps> = ({ slug, onSessionChange }) =
     return () => clearInterval(clockTimer);
   }, [slug]);
 
-  // Efeito para ciclo de rotação do token e atualização de turmas abertas
-  useEffect(() => {
-    if (!usuarioEquipe || !academia) return;
+  // Função centralizada para atualizar turmas abertas e tokens
+  const atualizarCiclo = async () => {
+    if (!academia) return;
+    try {
+      setErroTotem(null);
+      const abertas = await obterTurmasAbertasTotem(academia.id);
+      setTurmasAbertas(abertas);
 
-    let cicloTimer: NodeJS.Timeout | null = null;
-    const atualizarCiclo = async () => {
-      try {
-        const abertas = await obterTurmasAbertasTotem(academia.id);
-        setTurmasAbertas(abertas);
+      if (abertas.length > 0) {
+        const novoMapaTokens: Record<string, TokenCheckinInfo> = {};
+        const novoMapaErros: Record<string, ErroRpcMapeado> = {};
+        let menorTempoRestante = 30;
 
-        if (abertas.length > 0) {
-          const novoMapa: Record<string, TokenCheckinInfo> = {};
-          let menorTempoRestante = 30;
-
-          for (const turma of abertas) {
+        for (const turma of abertas) {
+          try {
             const info = await emitirTokenCheckin(turma.id);
-            if (info) {
-              novoMapa[turma.id] = info;
+            if (info && info.token) {
+              novoMapaTokens[turma.id] = info;
               if (info.expira_em) {
                 const ms = new Date(info.expira_em).getTime() - Date.now();
                 const segs = Math.max(1, Math.floor(ms / 1000));
@@ -88,21 +95,50 @@ export const TotemPage: React.FC<TotemPageProps> = ({ slug, onSessionChange }) =
               } else if (info.periodo_segundos) {
                 menorTempoRestante = Math.min(menorTempoRestante, info.periodo_segundos);
               }
+            } else {
+              novoMapaErros[turma.id] = {
+                codigo: "GENERICO",
+                titulo: "Token Indisponível",
+                mensagem: "Não foi possível emitir o token de check-in para esta turma.",
+                acaoSugerida: "Aguarde a próxima renovação.",
+              };
             }
+          } catch (errTurma: any) {
+            novoMapaErros[turma.id] = mapearErroRpc(errTurma);
           }
-          setTokens(novoMapa);
-          setSegundosRestantes(menorTempoRestante);
         }
-      } catch (err) {
-        console.warn("Erro ao sincronizar turmas e tokens do totem:", err);
+
+        setTokens(novoMapaTokens);
+        setErrosTokens(novoMapaErros);
+        setSegundosRestantes(menorTempoRestante);
+      } else {
+        setTokens({});
+        setErrosTokens({});
       }
-    };
+    } catch (err: any) {
+      const erroMapeado = mapearErroRpc(err);
+      setErroTotem(erroMapeado);
+      setTurmasAbertas([]);
+      setTokens({});
+      setErrosTokens({});
+    }
+  };
+
+  // Efeito para ciclo de rotação do token e atualização de turmas abertas
+  useEffect(() => {
+    if (!usuarioEquipe || !academia) return;
 
     // Executa imediatamente
     atualizarCiclo();
 
     // Cronômetro regressivo segundo a segundo
     const intervalTimer = setInterval(() => {
+      // Se houver erro de conexão/autorização no totem (ex: suspensa, sem permissão),
+      // pausamos o cronômetro e a sincronização automática enquanto o erro persistir.
+      if (erroTotemRef.current) {
+        return;
+      }
+
       setSegundosRestantes((prev) => {
         if (prev <= 1) {
           atualizarCiclo();
@@ -114,7 +150,6 @@ export const TotemPage: React.FC<TotemPageProps> = ({ slug, onSessionChange }) =
 
     return () => {
       clearInterval(intervalTimer);
-      if (cicloTimer) clearTimeout(cicloTimer);
     };
   }, [usuarioEquipe, academia?.id]);
 
@@ -128,24 +163,6 @@ export const TotemPage: React.FC<TotemPageProps> = ({ slug, onSessionChange }) =
 
     const data = await obterAcademiaPublica(slug);
     setAcademia(data);
-
-    if (user && data) {
-      try {
-        const abertas = await obterTurmasAbertasTotem(data.id);
-        setTurmasAbertas(abertas);
-        if (abertas.length > 0) {
-          const novoMapa: Record<string, TokenCheckinInfo> = {};
-          for (const turma of abertas) {
-            const info = await emitirTokenCheckin(turma.id);
-            if (info) novoMapa[turma.id] = info;
-          }
-          setTokens(novoMapa);
-        }
-      } catch (e) {
-        console.warn("Falha ao inicializar turmas do totem:", e);
-      }
-    }
-
     setLoading(false);
   };
 
@@ -375,7 +392,35 @@ export const TotemPage: React.FC<TotemPageProps> = ({ slug, onSessionChange }) =
       </div>
 
       {/* Conteúdo do Totem: Turmas Abertas com QR Codes */}
-      {turmasAbertas.length === 0 ? (
+      {erroTotem ? (
+        <div className="py-16">
+          <Card className="border-red-900/50 bg-red-950/20 p-12 text-center max-w-lg mx-auto shadow-2xl">
+            <div className="w-16 h-16 rounded-2xl bg-red-900/30 border border-red-800 flex items-center justify-center mx-auto mb-4 text-red-400">
+              <AlertTriangle className="w-8 h-8" />
+            </div>
+            <h3 className="text-xl font-bold text-white mb-2">
+              {erroTotem.titulo}
+            </h3>
+            <p className="text-sm text-zinc-300 max-w-sm mx-auto leading-relaxed mb-3">
+              {erroTotem.mensagem}
+            </p>
+            {erroTotem.acaoSugerida && (
+              <p className="text-xs text-zinc-400 max-w-sm mx-auto mb-6">
+                {erroTotem.acaoSugerida}
+              </p>
+            )}
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => atualizarCiclo()}
+              className="gap-2 border-red-800 bg-red-950/40 text-red-200 hover:bg-red-900/50"
+            >
+              <RefreshCw className="w-4 h-4" />
+              Tentar Reconectar
+            </Button>
+          </Card>
+        </div>
+      ) : turmasAbertas.length === 0 ? (
         <div className="py-16">
           <Card className="border-zinc-800 bg-zinc-950/70 p-12 text-center max-w-lg mx-auto shadow-2xl">
             <div className="w-16 h-16 rounded-2xl bg-zinc-900 border border-zinc-800 flex items-center justify-center mx-auto mb-4 text-zinc-500">
@@ -398,8 +443,9 @@ export const TotemPage: React.FC<TotemPageProps> = ({ slug, onSessionChange }) =
           <div className={`grid gap-6 ${turmasAbertas.length === 1 ? "max-w-md mx-auto" : "grid-cols-1 md:grid-cols-2"}`}>
             {turmasAbertas.map((turma) => {
               const tokenInfo = tokens[turma.id];
-              const token = tokenInfo?.token || "";
-              const checkinUrl = `${currentOrigin}/?slug=${slug}&turma=${turma.id}&t=${token}&tab=checkin`;
+              const token = tokenInfo?.token;
+              const erroToken = errosTokens[turma.id];
+              const checkinUrl = `${currentOrigin}/?slug=${slug}&turma=${turma.id}&t=${token || ""}&tab=checkin`;
 
               return (
                 <Card
@@ -418,21 +464,40 @@ export const TotemPage: React.FC<TotemPageProps> = ({ slug, onSessionChange }) =
                   <h3 className="text-xl font-black text-white mb-1">
                     {turma.nome}
                   </h3>
-                  <p className="text-xs text-zinc-400 mb-4">
-                    Aponte a câmera do seu celular para registrar sua presença no tatame
-                  </p>
 
-                  <div className="bg-white p-4 rounded-2xl shadow-xl">
-                    <QRGenerator
-                      value={checkinUrl}
-                      size={turmasAbertas.length === 1 ? 260 : 200}
-                    />
-                  </div>
+                  {token ? (
+                    <>
+                      <p className="text-xs text-zinc-400 mb-4">
+                        Aponte a câmera do seu celular para registrar sua presença no tatame
+                      </p>
 
-                  <div className="mt-4 flex items-center gap-2 text-[11px] text-zinc-500 font-mono">
-                    <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-                    Token rotativo ativo • Renovando em {segundosRestantes}s
-                  </div>
+                      <div className="bg-white p-4 rounded-2xl shadow-xl">
+                        <QRGenerator
+                          value={checkinUrl}
+                          size={turmasAbertas.length === 1 ? 260 : 200}
+                        />
+                      </div>
+
+                      <div className="mt-4 flex items-center gap-2 text-[11px] text-zinc-500 font-mono">
+                        <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                        Token rotativo ativo • Renovando em {segundosRestantes}s
+                      </div>
+                    </>
+                  ) : (
+                    <div className="my-6 p-6 border border-amber-800/40 bg-amber-950/20 rounded-2xl max-w-xs flex flex-col items-center">
+                      <AlertTriangle className="w-10 h-10 text-amber-500 mb-2" />
+                      <h4 className="text-sm font-bold text-amber-300 mb-1">
+                        {erroToken?.titulo || "QR Code Indisponível"}
+                      </h4>
+                      <p className="text-xs text-zinc-300 mb-3">
+                        {erroToken?.mensagem || "Não foi possível gerar o código temporário desta turma."}
+                      </p>
+                      <p className="text-[11px] text-amber-400/80 font-mono flex items-center gap-1.5">
+                        <span className="w-2 h-2 rounded-full bg-amber-400 animate-pulse" />
+                        Tentando novo token no próximo ciclo ({segundosRestantes}s)...
+                      </p>
+                    </div>
+                  )}
                 </Card>
               );
             })}

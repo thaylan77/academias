@@ -77,4 +77,111 @@ describe("Tela de Totem (Proteção de Equipe e Token Rotativo)", () => {
       expect(screen.getByText("Acesso ao Totem de Presença")).toBeInTheDocument();
     });
   });
+
+  it("deve exibir erro mapeado e pausar sincronização quando totem_turmas_agora falhar com academia_suspensa", async () => {
+    vi.spyOn(supabaseModule, "obterTurmasAbertasTotem").mockRejectedValue({
+      code: "P0001",
+      hint: "academia_suspensa",
+      message: "Acesso suspenso por mensalidade",
+    });
+
+    render(<TotemPage slug="honor-demo-a" />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Professor (Seed)")).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByText("Professor (Seed)"));
+
+    await waitFor(() => {
+      expect(screen.getByText("Acesso da academia suspenso")).toBeInTheDocument();
+      expect(screen.getByText("A academia está com acesso suspenso temporariamente.")).toBeInTheDocument();
+    });
+
+    // Não deve exibir mensagem neutra nem o indicador de sincronização automática
+    expect(screen.queryByText(/Nenhuma turma com check-in aberto no momento/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Sincronizando com o tatame automaticamente/i)).not.toBeInTheDocument();
+    expect(screen.getByText("Tentar Reconectar")).toBeInTheDocument();
+  });
+
+  it("deve exibir erro mapeado quando totem_turmas_agora falhar com sem_permissao", async () => {
+    vi.spyOn(supabaseModule, "obterTurmasAbertasTotem").mockRejectedValue({
+      code: "P0001",
+      hint: "sem_permissao",
+      message: "Usuário não autorizado",
+    });
+
+    render(<TotemPage slug="honor-demo-a" />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Professor (Seed)")).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByText("Professor (Seed)"));
+
+    await waitFor(() => {
+      expect(screen.getByText("Este login não pode operar o totem.")).toBeInTheDocument();
+    });
+
+    expect(screen.queryByText(/Nenhuma turma com check-in aberto no momento/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Sincronizando com o tatame automaticamente/i)).not.toBeInTheDocument();
+  });
+
+  it("não deve exibir QR Code com token vazio quando emitirTokenCheckin falhar para uma turma", async () => {
+    vi.spyOn(supabaseModule, "obterTurmasAbertasTotem").mockResolvedValue([
+      {
+        id: "turma-1",
+        nome: "Jiu-Jitsu No-Gi",
+        hora_inicio: "19:00",
+        hora_fim: "20:00",
+      },
+    ]);
+
+    vi.spyOn(supabaseModule, "emitirTokenCheckin").mockRejectedValue({
+      code: "P0001",
+      hint: "checkin_fora_do_horario",
+      message: "Fora da janela da aula",
+    });
+
+    render(<TotemPage slug="honor-demo-a" />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Professor (Seed)")).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByText("Professor (Seed)"));
+
+    await waitFor(() => {
+      expect(screen.getByText("Jiu-Jitsu No-Gi")).toBeInTheDocument();
+      expect(screen.getByText("Fora da Janela da Aula")).toBeInTheDocument();
+    });
+
+    // Não deve renderizar o QR code nem as instruções de escanear QR Code
+    expect(screen.queryByText(/Aponte a câmera do seu celular para registrar sua presença no tatame/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Token rotativo ativo/i)).not.toBeInTheDocument();
+    expect(screen.getByText(/Tentando novo token no próximo ciclo/i)).toBeInTheDocument();
+  });
+
+  it("deve priorizar o papel cadastrado em membros_academia em vez de metadata do usuário", async () => {
+    const fakeClient = {
+      from: vi.fn().mockReturnValue({
+        select: vi.fn().mockReturnValue({
+          eq: vi.fn().mockReturnValue({
+            eq: vi.fn().mockReturnValue({
+              maybeSingle: vi.fn().mockResolvedValue({
+                data: { papel: "admin" },
+                error: null,
+              }),
+            }),
+          }),
+        }),
+      }),
+    };
+
+    const papelResolvido = await supabaseModule.resolverPapelEquipe(
+      fakeClient,
+      "user-123",
+      "professor"
+    );
+
+    expect(papelResolvido).toBe("admin");
+    expect(fakeClient.from).toHaveBeenCalledWith("membros_academia");
+  });
 });

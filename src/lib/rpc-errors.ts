@@ -133,9 +133,9 @@ export function mapearErroRpc(error: any): ErroRpcMapeado {
     if (rawHint === "academia_suspensa") {
       return {
         codigo: "academia_suspensa",
-        titulo: "Acesso Suspenso",
+        titulo: "Acesso da academia suspenso",
         mensagem: "A academia está com acesso suspenso temporariamente.",
-        acaoSugerida: "Procure a administração da unidade.",
+        acaoSugerida: "Procure a administração da unidade para regularização.",
         detalhesOriginais: error,
       };
     }
@@ -184,8 +184,8 @@ export function mapearErroRpc(error: any): ErroRpcMapeado {
       return {
         codigo: "sem_permissao",
         titulo: "Acesso Não Permitido",
-        mensagem: "Você não possui permissão para executar esta operação.",
-        acaoSugerida: "Verifique suas credenciais ou o papel da sua conta.",
+        mensagem: "Este login não pode operar o totem.",
+        acaoSugerida: "Verifique suas credenciais ou solicite acesso à administração da academia.",
         detalhesOriginais: error,
       };
     }
@@ -266,6 +266,31 @@ export function mapearErroRpc(error: any): ErroRpcMapeado {
       titulo: "Matrículas Online Suspensas",
       mensagem: "Matrícula online indisponível para esta unidade no momento.",
       acaoSugerida: "Entre em contato diretamente pelos canais oficiais da academia.",
+      detalhesOriginais: error,
+    };
+  }
+
+  if (rawMessage.includes("suspensa") || rawMessage.includes("trial vencido")) {
+    return {
+      codigo: "academia_suspensa",
+      titulo: "Acesso da academia suspenso",
+      mensagem: "A academia está com acesso suspenso temporariamente.",
+      acaoSugerida: "Procure a administração da unidade para regularização.",
+      detalhesOriginais: error,
+    };
+  }
+
+  if (
+    rawMessage.includes("sem permissão") ||
+    rawMessage.includes("sem permissao") ||
+    rawMessage.includes("não tem permissão") ||
+    rawMessage.includes("não pode operar")
+  ) {
+    return {
+      codigo: "sem_permissao",
+      titulo: "Acesso Não Permitido",
+      mensagem: "Este login não pode operar o totem.",
+      acaoSugerida: "Verifique suas credenciais ou solicite acesso à administração da academia.",
       detalhesOriginais: error,
     };
   }
