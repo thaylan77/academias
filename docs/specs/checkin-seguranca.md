@@ -84,7 +84,7 @@ O código vai no `hint` do erro (`raise exception '<mensagem em português>' usi
 | `matricula_fechada` | `matricula_online` | slug inexistente, matrícula online fechada **ou academia suspensa**: o visitante anônimo não fica sabendo da situação da assinatura |
 | `cpf_duplicado` | `matricula_online` | CPF já cadastrado na academia |
 | `menor_sem_responsavel` | `matricula_online` | menor de 18 anos sem nome e CPF do responsável |
-| `dados_invalidos` | `matricula_online` | nome vazio, termo não aceito, plano inválido, CPF malformado (D7) |
+| `dados_invalidos` | `matricula_online` | nome vazio, termo não aceito, plano inválido, CPF malformado (D7); e qualquer entrada malformada: `p_dados` que não é objeto, `plano_id` que não é uuid, `data_nascimento` fora de `AAAA-MM-DD`, inexistente ou no futuro, `aceite_termo` que não é o booleano `true`, `turma_ids` que não é lista de uuids |
 | `sem_permissao` | `emitir_token_checkin`, `totem_turmas_agora`, `rotacionar_segredo_checkin` | quem chama não tem o papel na academia (D7) |
 
 
@@ -118,12 +118,12 @@ O front monta o seletor de dependentes com essa lista e chama `fazer_checkin` de
 
 Dependência: `pgcrypto` no schema `extensions`, sempre com chamada qualificada (`extensions.hmac`, `extensions.gen_random_bytes`).
 
-## 9. Testes pgTAP (`supabase/tests/checkin/`, 82 asserções)
+## 9. Testes pgTAP (`supabase/tests/checkin/`, 97 asserções)
 
 | Arquivo | Asserções | Cobre |
 |---------|-----------|-------|
 | `checkin.test.sql` | 69 | um teste por código de `fazer_checkin` e das RPCs do totem; token atual e anterior aceitos, de duas janelas atrás recusado; token de outra turma e de outra academia recusados; check-in repetido devolve a mesma presença; `detail` de `checkin_multiplos_alunos` com os candidatos (só do próprio login, só `id` e `nome`); aluno com duas matrículas na mesma turma não vira "múltiplos"; totem emite token, vê só a turma aberta e não lê `academias`, catálogo, `alunos`, matrículas, presenças, graduações, cobranças nem as três views; aluno e anônimo não emitem; rotação do segredo; a função antiga não existe mais |
-| `matricula_online.test.sql` | 13 | cada código de `matricula_online`; slug inexistente, matrícula fechada e academia suspensa com o mesmo código |
+| `matricula_online.test.sql` | 28 | cada código de `matricula_online`; slug inexistente, matrícula fechada e academia suspensa com o mesmo código; entradas malformadas saem como `dados_invalidos` com SQLSTATE `P0001`, sem vazar erro de conversão |
 
 A janela "aberta" usa um horário que cobre o dia inteiro de hoje e a "fechada" um dia da semana que não é hoje nem amanhã, para o teste não depender da hora em que roda.
 

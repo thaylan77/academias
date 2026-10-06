@@ -378,7 +378,9 @@ begin
 end
 $$;
 
--- Matrícula online: mesma lógica da versão anterior, com o código no hint.
+-- Matrícula online: mesma lógica da versão anterior, com o código no hint e
+-- com validação de formato antes de qualquer conversão (data, uuid, booleano
+-- e lista de turmas), para entrada malformada sair como dados_invalidos.
 -- Slug inexistente, matrícula fechada e academia suspensa respondem o MESMO
 -- código público (matricula_fechada): o visitante anônimo não fica sabendo
 -- da situação da assinatura.
@@ -389,10 +391,15 @@ security definer
 set search_path = ''
 as $$
 declare
+  c_uuid constant text :=
+    '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$';
   v_acad         public.academias;
   v_hoje         date;
-  v_nasc         date := nullif(p_dados ->> 'data_nascimento', '')::date;
-  v_plano_id     uuid := nullif(p_dados ->> 'plano_id', '')::uuid;
+  v_nasc_txt     text;
+  v_nasc         date;
+  v_plano_txt    text;
+  v_plano_id     uuid;
+  v_turmas       jsonb;
   v_aluno_id     uuid;
   v_matricula_id uuid;
 begin
@@ -403,14 +410,43 @@ begin
   end if;
   v_hoje := public.hoje_academia(v_acad.id);
 
+  -- Formato dos dados. Nenhuma conversão acontece fora daqui: entrada
+  -- malformada sai como dados_invalidos, não como erro técnico do Postgres.
+  if p_dados is null or jsonb_typeof(p_dados) <> 'object' then
+    raise exception 'Dados da matrícula inválidos'
+      using hint = 'dados_invalidos';
+  end if;
+
   if coalesce(trim(p_dados ->> 'nome'), '') = '' then
     raise exception 'Informe o nome completo'
       using hint = 'dados_invalidos';
   end if;
 
-  if coalesce((p_dados ->> 'aceite_termo')::boolean, false) is not true then
+  -- só o booleano true vale como aceite
+  if (p_dados -> 'aceite_termo') is distinct from 'true'::jsonb then
     raise exception 'É preciso aceitar o termo de responsabilidade'
       using hint = 'dados_invalidos';
+  end if;
+
+  v_nasc_txt := nullif(trim(p_dados ->> 'data_nascimento'), '');
+  if v_nasc_txt is not null then
+    if v_nasc_txt !~ '^\d{4}-\d{2}-\d{2}$' then
+      raise exception 'Data de nascimento inválida: use o formato AAAA-MM-DD'
+        using hint = 'dados_invalidos';
+    end if;
+
+    begin
+      v_nasc := v_nasc_txt::date;
+    exception
+      when datetime_field_overflow or invalid_datetime_format then
+        raise exception 'Data de nascimento inválida'
+          using hint = 'dados_invalidos';
+    end;
+
+    if v_nasc > v_hoje then
+      raise exception 'Data de nascimento inválida'
+        using hint = 'dados_invalidos';
+    end if;
   end if;
 
   if v_nasc is not null
@@ -421,11 +457,35 @@ begin
       using hint = 'menor_sem_responsavel';
   end if;
 
-  if v_plano_id is not null and not exists (
-    select 1 from public.planos
-    where id = v_plano_id and academia_id = v_acad.id and ativo
+  v_plano_txt := nullif(trim(p_dados ->> 'plano_id'), '');
+  if v_plano_txt is not null then
+    if v_plano_txt !~ c_uuid then
+      raise exception 'Plano inválido'
+        using hint = 'dados_invalidos';
+    end if;
+    v_plano_id := v_plano_txt::uuid;
+
+    if not exists (
+      select 1 from public.planos
+      where id = v_plano_id and academia_id = v_acad.id and ativo
+    ) then
+      raise exception 'Plano inválido'
+        using hint = 'dados_invalidos';
+    end if;
+  end if;
+
+  -- turma_ids: ausente, null ou lista de uuids em texto
+  v_turmas := p_dados -> 'turma_ids';
+  if v_turmas is null or jsonb_typeof(v_turmas) = 'null' then
+    v_turmas := '[]'::jsonb;
+  elsif jsonb_typeof(v_turmas) <> 'array' then
+    raise exception 'Turmas inválidas'
+      using hint = 'dados_invalidos';
+  elsif exists (
+    select 1 from jsonb_array_elements(v_turmas) e
+    where jsonb_typeof(e) <> 'string' or (e #>> '{}') !~ c_uuid
   ) then
-    raise exception 'Plano inválido'
+    raise exception 'Turmas inválidas'
       using hint = 'dados_invalidos';
   end if;
 
@@ -458,8 +518,8 @@ begin
   from public.turmas t
   where t.academia_id = v_acad.id
     and t.ativa
-    and t.id::text in (
-      select jsonb_array_elements_text(coalesce(p_dados -> 'turma_ids', '[]'::jsonb))
+    and t.id in (
+      select (e #>> '{}')::uuid from jsonb_array_elements(v_turmas) e
     );
 
   return v_matricula_id;
