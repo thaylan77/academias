@@ -1,6 +1,7 @@
 # Honor Team SaaS — instruções para agentes
 
 Este arquivo vale para todos os agentes (Claude Code, Codex, Antigravity).
+Só o Claude escreve no repositório; veja "Divisão entre agentes".
 Responda, comente código e escreva mensagens de commit em **português**.
 
 ## Produto
@@ -161,39 +162,42 @@ Plano, status e slug da academia só mudam via `service_role` (billing do SaaS).
   `docs/specs/checkin-seguranca.md`.
 - Commits no padrão Conventional Commits: `feat(checkin): ...`, `fix(rls): ...`.
 
-## Trabalho em paralelo entre agentes
+## Divisão entre agentes
 
-- Uma branch por tarefa, prefixada pelo agente: `claude/rls-cobrancas`,
-  `codex/crud-turmas`, `antigravity/tela-checkin`. Prefira `git worktree`.
-- Cada agente trabalha **só no próprio worktree**, pastas irmãs do repositório:
-  `../honorteam-claude`, `../honorteam-codex`, `../honorteam-antigravity`.
-  A pasta original (`academias`) fica parada em `main`: ninguém edita,
-  commita nem troca de branch nela.
-- Só **um** agente mexe em `supabase/migrations/` por vez.
-- Só para quem tiver Docker: existe **um só** Supabase local, compartilhado
-  por todos os worktrees. Nunca suba um segundo (`supabase start` em outro
-  worktree disputa as mesmas portas). Só **um** agente roda
-  `supabase db reset` por vez: confirme com quem coordena antes de rodar,
-  porque o reset apaga os dados que os outros agentes estão usando.
-- Divisão padrão:
-  - **Claude**: schema, RLS, specs de módulo, revisão de PR.
-  - **Codex**: CRUDs, Edge Functions, testes.
-  - **Antigravity**: telas e validação no navegador.
-- Quem escreveu o PR não é quem revisa.
+- **Claude**: único agente que escreve no repositório. Schema, RLS, specs,
+  Edge Functions, front, testes, PRs e merge.
+- **Codex**: revisa os PRs, via plugin do Codex no Claude Code
+  (`adversarial-review` com foco). Não commita nem abre PR.
+- **Antigravity**: testes visuais manuais no navegador. Não commita nem abre
+  PR; o que encontrar vira issue.
+- Quem escreveu o PR não é quem revisa: o Claude escreve, o Codex decide a
+  aprovação.
+- Uma branch por issue: `claude/<número-da-issue>`. O Claude trabalha só no
+  worktree `../honorteam-claude`. A pasta original (`academias`) fica parada
+  em `main`: ninguém edita, commita nem troca de branch nela.
+- O fluxo completo de uma issue está no comando `/entregar <número>`
+  (`.claude/commands/entregar.md`).
+- Só para quem tiver Docker: existe **um só** Supabase local. Nunca suba um
+  segundo, e confirme com quem coordena antes de `supabase db reset`.
 
 ## Revisão e merge
 
 - **Nada entra em `main` por commit direto**, nem mudança de regra neste
   arquivo, nem workflow, nem tipos: tudo por PR, com a branch atualizada.
-- **Só o Claude mescla PRs em `main`.** Nenhum outro agente mescla, nem o
-  próprio PR, nem com o CI verde. PR do próprio Claude é revisado pelo Codex
-  e mesclado pelo Claude depois da aprovação.
-- **Aprovação = última linha do comentário de revisão**, com o sha completo
-  do head revisado:
+- **Só o Claude mescla PRs em `main`**, com squash, depois da aprovação do
+  Codex.
+- O Claude roda a revisão do Codex pelo plugin, com a branch já atualizada
+  com `main`, e publica a saída de cada rodada no PR **sem editar**. A linha
+  de decisão é escrita pelo Codex, nunca pelo Claude.
+- **Aprovação = última linha do comentário de revisão**, sozinha (fora de
+  lista), com o sha completo do head revisado:
   - `APROVADO: <sha>` aprova aquele commit, e só ele;
   - `MUDANÇAS: <sha>` pede correção; não é aprovação, mesmo "sem bloqueadores".
 - Push depois da aprovação invalida a aprovação: o head novo precisa de
   nova revisão. Rebase também troca o sha.
+- Se `main` andar depois da aprovação: merge de `main` na branch (não
+  rebase) e nova rodada do Codex só para confirmar que o delta é esse merge,
+  com `APROVADO: <sha novo>`.
 - Antes de mesclar, o Claude confere pela API, nesta ordem:
   1. o PR está **aberto** (não fechado nem já mesclado);
   2. o head do PR é exatamente o sha da linha `APROVADO:`;
@@ -201,8 +205,6 @@ Plano, status e slug da academia só mudam via `service_role` (billing do SaaS).
      altere o que foi aprovado;
   4. o CI `Banco` está verde nesse head, no push e no pull request.
   Se qualquer item falhar, não mescla e avisa.
-- PR empilhado (base em outra branch de feature): o merge na branch base
-  segue as mesmas regras, e a branch base só vai para `main` depois.
 
 ## Checklist antes de abrir PR
 
