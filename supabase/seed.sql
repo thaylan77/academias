@@ -7,7 +7,7 @@ insert into public.academias (id, nome, slug, status)
 values
   ('de000000-0000-4000-8000-000000000001', 'Honor Team — demonstração A', 'honor-demo-a', 'ativa'),
   ('de000000-0000-4000-8000-000000000002', 'Honor Team — demonstração B', 'honor-demo-b', 'ativa')
-on conflict (id) do nothing;
+on conflict do nothing;
 
 insert into public.modalidades (id, academia_id, nome)
 select
@@ -15,6 +15,9 @@ select
   ('de000000-0000-4000-8000-' || lpad(a.numero::text, 12, '0'))::uuid,
   m.nome
 from (values (1), (2)) as a(numero)
+-- Se o slug já pertence a outro ID, pula essa demonstração inteira.
+join public.academias existente
+  on existente.id = ('de000000-0000-4000-8000-' || lpad(a.numero::text, 12, '0'))::uuid
 cross join (values (1, 'Jiu-Jitsu'), (2, 'Muay Thai')) as m(numero, nome)
 on conflict (academia_id, nome) do nothing;
 

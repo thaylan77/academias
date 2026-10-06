@@ -179,6 +179,7 @@ Plano, status e slug da academia só mudam via `service_role` (billing do SaaS).
   - **Codex**: CRUDs, Edge Functions, testes.
   - **Antigravity**: telas e validação no navegador.
 - Quem escreveu o PR não é quem revisa.
+- Somente Claude mescla PRs em `main`.
 
 ## Checklist antes de abrir PR
 
