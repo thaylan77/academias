@@ -180,6 +180,27 @@ Plano, status e slug da academia só mudam via `service_role` (billing do SaaS).
   - **Antigravity**: telas e validação no navegador.
 - Quem escreveu o PR não é quem revisa.
 
+## Revisão e merge
+
+- **Só o Claude mescla PRs em `main`.** Nenhum outro agente mescla, nem o
+  próprio PR, nem com o CI verde. PR do próprio Claude é revisado pelo Codex
+  e mesclado pelo Claude depois da aprovação.
+- **Aprovação = última linha do comentário de revisão**, com o sha completo
+  do head revisado:
+  - `APROVADO: <sha>` aprova aquele commit, e só ele;
+  - `MUDANÇAS: <sha>` pede correção; não é aprovação, mesmo "sem bloqueadores".
+- Push depois da aprovação invalida a aprovação: o head novo precisa de
+  nova revisão. Rebase também troca o sha.
+- Antes de mesclar, o Claude confere pela API, nesta ordem:
+  1. o PR está **aberto** (não fechado nem já mesclado);
+  2. o head do PR é exatamente o sha da linha `APROVADO:`;
+  3. a base do PR é a esperada e não mudou desde a revisão de um jeito que
+     altere o que foi aprovado;
+  4. o CI `Banco` está verde nesse head, no push e no pull request.
+  Se qualquer item falhar, não mescla e avisa.
+- PR empilhado (base em outra branch de feature): o merge na branch base
+  segue as mesmas regras, e a branch base só vai para `main` depois.
+
 ## Checklist antes de abrir PR
 
 - [ ] CI `Banco` verde no último commit (migrations do zero + pgTAP)
