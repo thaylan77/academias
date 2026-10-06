@@ -285,12 +285,31 @@ describe("Tela de Totem (Proteção de Equipe e Token Rotativo)", () => {
     expect(screen.getByText("Tentar Reconectar")).toBeInTheDocument();
   });
 
-  it("deve encerrar sessão e retornar para tela de login em caso de erro de autenticação (401/JWT expirado) sem retry infinito", async () => {
-    vi.spyOn(supabaseModule, "obterTurmasAbertasTotem").mockRejectedValue({
-      status: 401,
-      message: "JWT expired",
+  it("deve renovar a sessão e continuar sem logout quando o JWT expirar e refreshSession tiver sucesso", async () => {
+    // 1ª chamada falha por JWT expirado (401), 2ª chamada pós-refresh tem sucesso
+    const turmasMock = vi.spyOn(supabaseModule, "obterTurmasAbertasTotem")
+      .mockRejectedValueOnce({
+        status: 401,
+        message: "JWT expired",
+      })
+      .mockResolvedValueOnce([
+        {
+          id: "turma-renovada-1",
+          nome: "Muay Thai Noite",
+          hora_inicio: "19:00",
+          hora_fim: "20:00",
+        },
+      ]);
+
+    vi.spyOn(supabaseModule, "emitirTokenCheckin").mockResolvedValue({
+      token: "tok-renovado-123",
+      expira_em: new Date(Date.now() + 30000).toISOString(),
+      periodo_segundos: 30,
     });
 
+    const renovarSpy = vi.spyOn(supabaseModule, "renovarSessao").mockResolvedValue({
+      sucesso: true,
+    });
     const logoutSpy = vi.spyOn(supabaseModule, "logoutEquipe");
 
     render(<TotemPage slug="honor-demo-a" />);
@@ -300,16 +319,46 @@ describe("Tela de Totem (Proteção de Equipe e Token Rotativo)", () => {
     });
     fireEvent.click(screen.getByText("Professor (Seed)"));
 
-    // O totem detecta a expiração de autenticação, encerra a sessão e volta para a tela de login
+    // O totem renova o JWT, repete a chamada e continua operando sem logout
+    await waitFor(() => {
+      expect(screen.getByText("Muay Thai Noite")).toBeInTheDocument();
+      expect(screen.getByText(/CHECK-IN ABERTO/i)).toBeInTheDocument();
+    });
+
+    expect(renovarSpy).toHaveBeenCalled();
+    expect(turmasMock).toHaveBeenCalledTimes(2);
+    expect(logoutSpy).not.toHaveBeenCalled();
+    expect(screen.queryByText("Sessão encerrada, faça login novamente.")).not.toBeInTheDocument();
+    expect(screen.queryByText("Acesso ao Totem de Presença")).not.toBeInTheDocument();
+  });
+
+  it("deve encerrar a sessão e ir para a tela de login quando o JWT expirar e a renovação de sessão falhar", async () => {
+    vi.spyOn(supabaseModule, "obterTurmasAbertasTotem").mockRejectedValue({
+      status: 401,
+      message: "JWT expired",
+    });
+
+    const renovarSpy = vi.spyOn(supabaseModule, "renovarSessao").mockResolvedValue({
+      sucesso: false,
+      erro: new Error("invalid_grant: refresh token expired"),
+    });
+    const logoutSpy = vi.spyOn(supabaseModule, "logoutEquipe");
+
+    render(<TotemPage slug="honor-demo-a" />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Professor (Seed)")).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByText("Professor (Seed)"));
+
+    // Como a renovação falhou, faz logout e volta para o login com a mensagem
     await waitFor(() => {
       expect(screen.getByText("Acesso ao Totem de Presença")).toBeInTheDocument();
       expect(screen.getByText("Sessão encerrada, faça login novamente.")).toBeInTheDocument();
     });
 
-    // Deve ter chamado logoutEquipe
+    expect(renovarSpy).toHaveBeenCalled();
     expect(logoutSpy).toHaveBeenCalled();
-
-    // Não deve tentar reconectar indefinidamente nem ficar em looping
     expect(screen.queryByText(/Reconectando ao tatame/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/Reconectando em/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/Verificando novamente em 60s/i)).not.toBeInTheDocument();

@@ -406,3 +406,29 @@ export async function logoutEquipe(): Promise<void> {
   }
   sessaoEquipeMock = null;
 }
+
+/**
+ * Tenta renovar a sessão atual via refresh token (supabase.auth.refreshSession).
+ * Evita deslogar o quiosque/totem quando o dispositivo acorda do modo de repouso (suspensão noturna).
+ */
+export async function renovarSessao(): Promise<{ sucesso: boolean; erro?: any }> {
+  if (supabase?.auth?.refreshSession) {
+    try {
+      const { data, error } = await supabase.auth.refreshSession();
+      if (error || !data?.session) {
+        return { sucesso: false, erro: error || new Error("Sessão não retornada após renovação") };
+      }
+      return { sucesso: true };
+    } catch (e) {
+      return { sucesso: false, erro: e };
+    }
+  }
+
+  // Em modo de desenvolvimento / testes com sessão simulada
+  if (import.meta.env.DEV && sessaoEquipeMock) {
+    return { sucesso: true };
+  }
+
+  return { sucesso: false, erro: new Error("Supabase não inicializado ou sem sessão ativa") };
+}
+

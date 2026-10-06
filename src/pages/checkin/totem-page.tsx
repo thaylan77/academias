@@ -4,6 +4,7 @@ import {
   obterSessaoEquipe,
   loginEquipe,
   logoutEquipe,
+  renovarSessao,
   obterTurmasAbertasTotem,
   emitirTokenCheckin,
 } from "../../lib/supabase";
@@ -80,8 +81,8 @@ export const TotemPage: React.FC<TotemPageProps> = ({ slug, onSessionChange }) =
     return () => clearInterval(clockTimer);
   }, [slug]);
 
-  // Função centralizada para atualizar turmas abertas e tokens com controle de resiliência
-  const atualizarCiclo = async () => {
+  // Função centralizada para atualizar turmas abertas e tokens com controle de resiliência e renovação de sessão
+  const atualizarCiclo = async (tentouRenovar = false) => {
     if (!academia || carregandoCicloRef.current) return;
     setCarregandoCiclo(true);
     try {
@@ -117,6 +118,9 @@ export const TotemPage: React.FC<TotemPageProps> = ({ slug, onSessionChange }) =
               };
             }
           } catch (errTurma: any) {
+            if (isErroAutenticacao(errTurma)) {
+              throw errTurma;
+            }
             novoMapaErros[turma.id] = mapearErroRpc(errTurma);
           }
         }
@@ -133,8 +137,18 @@ export const TotemPage: React.FC<TotemPageProps> = ({ slug, onSessionChange }) =
       const erroMapeado = mapearErroRpc(err);
 
       // Categoria 3: Erro de autenticação (sessão expirada/revogada, 401/JWT)
-      // SEM retry infinito: encerra a sessão e retorna para a tela de login da equipe
+      // Dispositivo que acorda de repouso: tenta renovar via refresh token antes de deslogar.
+      // Se a renovação tiver sucesso, repete a chamada que falhou.
+      // Só realiza logoutEquipe() e exibe erro se a renovação falhar.
       if (isErroAutenticacao(err) || erroMapeado.codigo === "sessao_expirada") {
+        if (!tentouRenovar) {
+          const resRenovacao = await renovarSessao();
+          if (resRenovacao.sucesso) {
+            setCarregandoCiclo(false);
+            return atualizarCiclo(true);
+          }
+        }
+
         await logoutEquipe();
         setUsuarioEquipe(null);
         if (onSessionChange) {
