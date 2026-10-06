@@ -170,6 +170,12 @@ Plano, status e slug da academia só mudam via `service_role` (billing do SaaS).
   (`adversarial-review` com foco). Não commita nem abre PR.
 - **Antigravity**: testes visuais manuais no navegador. Não commita nem abre
   PR; o que encontrar vira issue.
+- **Gemini** (plugin do Antigravity no Claude Code): segunda revisão, só
+  leitura, apenas em PR de front e em PR de risco (financeiro,
+  segurança/RLS). A saída vai para o PR sem editar; cada bloqueador é
+  corrigido ou respondido no PR. Não decide o merge: a decisão é a linha do
+  Codex. O plugin fica fixo na versão auditada (`v0.3.0`); não atualizar sem
+  nova auditoria, e nunca usar `delegate` nem o stop-review-gate.
 - Quem escreveu o PR não é quem revisa: o Claude escreve, o Codex decide a
   aprovação.
 - Uma branch por issue: `claude/<número-da-issue>`. O Claude trabalha só no

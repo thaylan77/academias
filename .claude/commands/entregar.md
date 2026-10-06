@@ -61,6 +61,27 @@ avise.
 - `MUDANÇAS`: corrija os bloqueadores, commit, push e repita a revisão no head
   novo.
 
+### Segunda revisão (Gemini, pelo plugin do Antigravity)
+
+Só em PR de **front** e em PR de **risco** (financeiro, segurança/RLS). Nos
+demais, pule.
+
+- Rode depois que o Codex não tiver mais bloqueadores, no mesmo head, sempre
+  em modo só leitura (`review` ou `adversarial-review`; nunca `delegate`):
+
+  ```bash
+  node "<raiz do plugin antigravity>/scripts/antigravity.mjs" adversarial-review \
+    --wait --base origin/main "<foco>"
+  ```
+
+- Publique a saída do Gemini no PR **sem editar**.
+- Para **cada bloqueador** dele: corrija, ou explique no PR por que não
+  procede. Correção troca o head e pede nova rodada do Codex.
+- A decisão continua sendo **só a linha do Codex**. O veredito do Gemini não
+  aprova nem barra o merge sozinho.
+- Se a revisão voltar vazia ou com erro (cota, login, tempo esgotado), diga
+  isso no PR; não trate como revisão limpa.
+
 ## 6. Push, PR e CI verde
 
 - Espere o CI `Banco` (banco e front) ficar verde no head, no push e no pull
