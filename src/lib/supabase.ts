@@ -410,17 +410,44 @@ export async function logoutEquipe(): Promise<void> {
 /**
  * Tenta renovar a sessão atual via refresh token (supabase.auth.refreshSession).
  * Evita deslogar o quiosque/totem quando o dispositivo acorda do modo de repouso (suspensão noturna).
+ * Retorna ehTransitorio: true caso a falha seja de rede ou erro 5xx, evitando logout indevido.
  */
-export async function renovarSessao(): Promise<{ sucesso: boolean; erro?: any }> {
+export async function renovarSessao(): Promise<{
+  sucesso: boolean;
+  ehTransitorio?: boolean;
+  erro?: any;
+}> {
   if (supabase?.auth?.refreshSession) {
     try {
       const { data, error } = await supabase.auth.refreshSession();
-      if (error || !data?.session) {
-        return { sucesso: false, erro: error || new Error("Sessão não retornada após renovação") };
+      if (error) {
+        const status = (error as any).status || (error as any).statusCode;
+        const msg = (error.message || "").toLowerCase();
+        const ehTransitorio =
+          status === 500 ||
+          status === 502 ||
+          status === 503 ||
+          status === 504 ||
+          msg.includes("fetch") ||
+          msg.includes("network") ||
+          msg.includes("timeout") ||
+          (error as any).name === "AuthRetryableFetchError";
+
+        return { sucesso: false, ehTransitorio, erro: error };
+      }
+      if (!data?.session) {
+        return { sucesso: false, ehTransitorio: false, erro: new Error("Sessão não retornada após renovação") };
       }
       return { sucesso: true };
-    } catch (e) {
-      return { sucesso: false, erro: e };
+    } catch (e: any) {
+      const msg = (e?.message || "").toLowerCase();
+      const ehTransitorio =
+        msg.includes("network") ||
+        msg.includes("fetch") ||
+        msg.includes("timeout") ||
+        e?.name === "AuthRetryableFetchError";
+
+      return { sucesso: false, ehTransitorio, erro: e };
     }
   }
 
@@ -429,6 +456,6 @@ export async function renovarSessao(): Promise<{ sucesso: boolean; erro?: any }>
     return { sucesso: true };
   }
 
-  return { sucesso: false, erro: new Error("Supabase não inicializado ou sem sessão ativa") };
+  return { sucesso: false, ehTransitorio: false, erro: new Error("Supabase não inicializado ou sem sessão ativa") };
 }
 

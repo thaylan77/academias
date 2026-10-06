@@ -363,5 +363,72 @@ describe("Tela de Totem (Proteção de Equipe e Token Rotativo)", () => {
     expect(screen.queryByText(/Reconectando em/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/Verificando novamente em 60s/i)).not.toBeInTheDocument();
   });
+
+  it("deve preservar a sessão e acionar reconexão transitória quando o refresh falhar por erro de rede/503", async () => {
+    vi.spyOn(supabaseModule, "obterTurmasAbertasTotem").mockRejectedValue({
+      status: 401,
+      message: "JWT expired",
+    });
+
+    const renovarSpy = vi.spyOn(supabaseModule, "renovarSessao").mockResolvedValue({
+      sucesso: false,
+      ehTransitorio: true,
+      erro: { status: 503, message: "Service Unavailable" },
+    });
+    const logoutSpy = vi.spyOn(supabaseModule, "logoutEquipe");
+
+    render(<TotemPage slug="honor-demo-a" />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Professor (Seed)")).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByText("Professor (Seed)"));
+
+    // O totem não desloga: detecta que a falha do refresh é transitória e entra em reconexão
+    await waitFor(() => {
+      expect(screen.getByText("Conexão Instável")).toBeInTheDocument();
+      expect(screen.getByText(/Reconectando ao tatame/i)).toBeInTheDocument();
+    });
+
+    expect(renovarSpy).toHaveBeenCalled();
+    expect(logoutSpy).not.toHaveBeenCalled();
+    expect(screen.queryByText("Sessão encerrada, faça login novamente.")).not.toBeInTheDocument();
+    expect(screen.queryByText("Acesso ao Totem de Presença")).not.toBeInTheDocument();
+  });
+
+  it("deve ocultar o QR code e exibir aviso quando o token expirar durante desconexão prolongada", async () => {
+    vi.spyOn(supabaseModule, "obterTurmasAbertasTotem").mockResolvedValue([
+      {
+        id: "turma-expirada-1",
+        nome: "Judo Infantil",
+        hora_inicio: "18:00",
+        hora_fim: "19:00",
+      },
+    ]);
+
+    // Token com expira_em já vencido no passado
+    vi.spyOn(supabaseModule, "emitirTokenCheckin").mockResolvedValue({
+      token: "tok-vencido-123",
+      expira_em: new Date(Date.now() - 5000).toISOString(),
+      periodo_segundos: 30,
+    });
+
+    render(<TotemPage slug="honor-demo-a" />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Professor (Seed)")).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByText("Professor (Seed)"));
+
+    // Exibe o nome da turma, mas o QR code é ocultado com o aviso de expirado
+    await waitFor(() => {
+      expect(screen.getByText("Judo Infantil")).toBeInTheDocument();
+      expect(screen.getByText("QR Code Expirado")).toBeInTheDocument();
+      expect(screen.getByText(/Aguardando renovação do sinal para emitir novo código rotativo/i)).toBeInTheDocument();
+    });
+
+    expect(screen.queryByText(/Aponte a câmera do seu celular para registrar sua presença no tatame/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Token rotativo ativo/i)).not.toBeInTheDocument();
+  });
 });
 

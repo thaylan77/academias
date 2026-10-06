@@ -82,105 +82,143 @@ export const TotemPage: React.FC<TotemPageProps> = ({ slug, onSessionChange }) =
   }, [slug]);
 
   // Função centralizada para atualizar turmas abertas e tokens com controle de resiliência e renovação de sessão
-  const atualizarCiclo = async (tentouRenovar = false) => {
+  const atualizarCiclo = async () => {
     if (!academia || carregandoCicloRef.current) return;
     setCarregandoCiclo(true);
     try {
-      const abertas = await obterTurmasAbertasTotem(academia.id);
-      setTurmasAbertas(abertas);
-      setErroTotem(null);
-      setStatusConexao("conectado");
-      setTentativasFalhas(0);
+      let executou = false;
+      let tentativa = 0;
 
-      if (abertas.length > 0) {
-        const novoMapaTokens: Record<string, TokenCheckinInfo> = {};
-        const novoMapaErros: Record<string, ErroRpcMapeado> = {};
-        let menorTempoRestante = 30;
+      while (!executou && tentativa < 2) {
+        tentativa++;
+        try {
+          const abertas = await obterTurmasAbertasTotem(academia.id);
+          setTurmasAbertas(abertas);
+          setErroTotem(null);
+          setStatusConexao("conectado");
+          setTentativasFalhas(0);
 
-        for (const turma of abertas) {
-          try {
-            const info = await emitirTokenCheckin(turma.id);
-            if (info && info.token) {
-              novoMapaTokens[turma.id] = info;
-              if (info.expira_em) {
-                const ms = new Date(info.expira_em).getTime() - Date.now();
-                const segs = Math.max(1, Math.floor(ms / 1000));
-                menorTempoRestante = Math.min(menorTempoRestante, segs);
-              } else if (info.periodo_segundos) {
-                menorTempoRestante = Math.min(menorTempoRestante, info.periodo_segundos);
+          if (abertas.length > 0) {
+            const novoMapaTokens: Record<string, TokenCheckinInfo> = {};
+            const novoMapaErros: Record<string, ErroRpcMapeado> = {};
+            let menorTempoRestante = 30;
+
+            for (const turma of abertas) {
+              try {
+                const info = await emitirTokenCheckin(turma.id);
+                if (info && info.token) {
+                  novoMapaTokens[turma.id] = info;
+                  if (info.expira_em) {
+                    const ms = new Date(info.expira_em).getTime() - Date.now();
+                    const segs = Math.max(1, Math.floor(ms / 1000));
+                    menorTempoRestante = Math.min(menorTempoRestante, segs);
+                  } else if (info.periodo_segundos) {
+                    menorTempoRestante = Math.min(menorTempoRestante, info.periodo_segundos);
+                  }
+                } else {
+                  novoMapaErros[turma.id] = {
+                    codigo: "GENERICO",
+                    titulo: "Token Indisponível",
+                    mensagem: "Não foi possível emitir o token de check-in para esta turma.",
+                    acaoSugerida: "Aguarde a próxima renovação.",
+                  };
+                }
+              } catch (errTurma: any) {
+                if (isErroAutenticacao(errTurma)) {
+                  throw errTurma;
+                }
+                novoMapaErros[turma.id] = mapearErroRpc(errTurma);
               }
-            } else {
-              novoMapaErros[turma.id] = {
-                codigo: "GENERICO",
-                titulo: "Token Indisponível",
-                mensagem: "Não foi possível emitir o token de check-in para esta turma.",
-                acaoSugerida: "Aguarde a próxima renovação.",
-              };
             }
-          } catch (errTurma: any) {
-            if (isErroAutenticacao(errTurma)) {
-              throw errTurma;
+
+            setTokens(novoMapaTokens);
+            setErrosTokens(novoMapaErros);
+            setSegundosRestantes(menorTempoRestante);
+          } else {
+            setTokens({});
+            setErrosTokens({});
+            setSegundosRestantes(30);
+          }
+          executou = true;
+        } catch (err: any) {
+          const erroMapeado = mapearErroRpc(err);
+          const ehAuth = isErroAutenticacao(err) || erroMapeado.codigo === "sessao_expirada";
+
+          // Categoria 3: Erro de autenticação (sessão expirada/revogada, 401/JWT)
+          // Dispositivo que acorda de repouso: tenta renovar via refresh token antes de deslogar.
+          if (ehAuth && tentativa === 1) {
+            const resRenovacao = await renovarSessao();
+            if (resRenovacao.sucesso) {
+              // Repete imediatamente dentro do mesmo ciclo, sem soltar o lock carregandoCiclo
+              continue;
             }
-            novoMapaErros[turma.id] = mapearErroRpc(errTurma);
+
+            // Finding 2 do Codex: falha transitória de refresh (rede, 5xx) preserva a sessão com backoff
+            if (resRenovacao.ehTransitorio) {
+              setErroTotem(mapearErroRpc(resRenovacao.erro || err));
+              const tentAtual = tentativasFalhasRef.current;
+              const indexIntervalo = Math.min(tentAtual, INTERVALOS_BACKOFF.length - 1);
+              const espera = INTERVALOS_BACKOFF[indexIntervalo];
+              setStatusConexao("reconectando");
+              setTentativasFalhas((prev) => prev + 1);
+              setSegundosRestantes(espera);
+              executou = true;
+              return;
+            }
+
+            // Falha definitiva de credenciais: encerra a sessão
+            await logoutEquipe();
+            setUsuarioEquipe(null);
+            if (onSessionChange) {
+              onSessionChange(false);
+            }
+            setErroLogin("Sessão encerrada, faça login novamente.");
+            setErroTotem(null);
+            setStatusConexao("conectado");
+            setTurmasAbertas([]);
+            setTokens({});
+            setErrosTokens({});
+            executou = true;
+            return;
           }
-        }
 
-        setTokens(novoMapaTokens);
-        setErrosTokens(novoMapaErros);
-        setSegundosRestantes(menorTempoRestante);
-      } else {
-        setTokens({});
-        setErrosTokens({});
-        setSegundosRestantes(30);
-      }
-    } catch (err: any) {
-      const erroMapeado = mapearErroRpc(err);
-
-      // Categoria 3: Erro de autenticação (sessão expirada/revogada, 401/JWT)
-      // Dispositivo que acorda de repouso: tenta renovar via refresh token antes de deslogar.
-      // Se a renovação tiver sucesso, repete a chamada que falhou.
-      // Só realiza logoutEquipe() e exibe erro se a renovação falhar.
-      if (isErroAutenticacao(err) || erroMapeado.codigo === "sessao_expirada") {
-        if (!tentouRenovar) {
-          const resRenovacao = await renovarSessao();
-          if (resRenovacao.sucesso) {
-            setCarregandoCiclo(false);
-            return atualizarCiclo(true);
+          if (ehAuth) {
+            await logoutEquipe();
+            setUsuarioEquipe(null);
+            if (onSessionChange) {
+              onSessionChange(false);
+            }
+            setErroLogin("Sessão encerrada, faça login novamente.");
+            setErroTotem(null);
+            setStatusConexao("conectado");
+            setTurmasAbertas([]);
+            setTokens({});
+            setErrosTokens({});
+            executou = true;
+            return;
           }
+
+          setErroTotem(erroMapeado);
+
+          if (isErroTransitorioTotem(erroMapeado)) {
+            // Categoria 1: Erro transitório (rede, timeout, 5xx): espera crescente 5 s, 15 s, 30 s, até 60 s
+            const tentAtual = tentativasFalhasRef.current;
+            const indexIntervalo = Math.min(tentAtual, INTERVALOS_BACKOFF.length - 1);
+            const espera = INTERVALOS_BACKOFF[indexIntervalo];
+            setStatusConexao("reconectando");
+            setTentativasFalhas((prev) => prev + 1);
+            setSegundosRestantes(espera);
+          } else {
+            // Categoria 2: Erro permanente (sem_permissao, academia_suspensa):
+            // Checa novamente a cada 60 s para retornar sozinho quando a situação mudar
+            setStatusConexao("bloqueado");
+            setTurmasAbertas([]);
+            setTokens({});
+            setErrosTokens({});
+            setSegundosRestantes(INTERVALO_ERRO_PERMANENTE);
+          }
+          executou = true;
         }
-
-        await logoutEquipe();
-        setUsuarioEquipe(null);
-        if (onSessionChange) {
-          onSessionChange(false);
-        }
-        setErroLogin("Sessão encerrada, faça login novamente.");
-        setErroTotem(null);
-        setStatusConexao("conectado");
-        setTurmasAbertas([]);
-        setTokens({});
-        setErrosTokens({});
-        return;
-      }
-
-      setErroTotem(erroMapeado);
-
-      if (isErroTransitorioTotem(erroMapeado)) {
-        // Categoria 1: Erro transitório (rede, timeout, 5xx): espera crescente 5 s, 15 s, 30 s, até 60 s
-        const tentAtual = tentativasFalhasRef.current;
-        const indexIntervalo = Math.min(tentAtual, INTERVALOS_BACKOFF.length - 1);
-        const espera = INTERVALOS_BACKOFF[indexIntervalo];
-        setStatusConexao("reconectando");
-        setTentativasFalhas((prev) => prev + 1);
-        setSegundosRestantes(espera);
-      } else {
-        // Categoria 2: Erro permanente (sem_permissao, academia_suspensa):
-        // Checa novamente a cada 60 s para retornar sozinho quando a situação mudar
-        setStatusConexao("bloqueado");
-        setTurmasAbertas([]);
-        setTokens({});
-        setErrosTokens({});
-        setSegundosRestantes(INTERVALO_ERRO_PERMANENTE);
       }
     } finally {
       setCarregandoCiclo(false);
@@ -558,7 +596,11 @@ export const TotemPage: React.FC<TotemPageProps> = ({ slug, onSessionChange }) =
           <div className={`grid gap-6 ${turmasAbertas.length === 1 ? "max-w-md mx-auto" : "grid-cols-1 md:grid-cols-2"}`}>
             {turmasAbertas.map((turma) => {
               const tokenInfo = tokens[turma.id];
-              const token = tokenInfo?.token;
+              const tokenExpirado = tokenInfo?.expira_em
+                ? new Date(tokenInfo.expira_em).getTime() <= Date.now()
+                : false;
+              const tokenValido = !!tokenInfo?.token && !tokenExpirado;
+              const token = tokenValido ? tokenInfo.token : "";
               const erroToken = errosTokens[turma.id];
               const checkinUrl = `${currentOrigin}/?slug=${slug}&turma=${turma.id}&t=${token || ""}&tab=checkin`;
 
@@ -580,7 +622,7 @@ export const TotemPage: React.FC<TotemPageProps> = ({ slug, onSessionChange }) =
                     {turma.nome}
                   </h3>
 
-                  {token ? (
+                  {tokenValido ? (
                     <>
                       <p className="text-xs text-zinc-400 mb-4">
                         Aponte a câmera do seu celular para registrar sua presença no tatame
@@ -598,6 +640,20 @@ export const TotemPage: React.FC<TotemPageProps> = ({ slug, onSessionChange }) =
                         Token rotativo ativo • Renovando em {segundosRestantes}s
                       </div>
                     </>
+                  ) : tokenExpirado ? (
+                    <div className="my-6 p-6 border border-amber-800/40 bg-amber-950/20 rounded-2xl max-w-xs flex flex-col items-center">
+                      <Clock className="w-10 h-10 text-amber-500 mb-2" />
+                      <h4 className="text-sm font-bold text-amber-300 mb-1">
+                        QR Code Expirado
+                      </h4>
+                      <p className="text-xs text-zinc-300 mb-3">
+                        Aguardando renovação do sinal para emitir novo código rotativo.
+                      </p>
+                      <p className="text-[11px] text-amber-400/80 font-mono flex items-center gap-1.5">
+                        <span className="w-2 h-2 rounded-full bg-amber-400 animate-pulse" />
+                        Reconectando em {segundosRestantes}s...
+                      </p>
+                    </div>
                   ) : (
                     <div className="my-6 p-6 border border-amber-800/40 bg-amber-950/20 rounded-2xl max-w-xs flex flex-col items-center">
                       <AlertTriangle className="w-10 h-10 text-amber-500 mb-2" />
