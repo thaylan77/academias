@@ -52,12 +52,42 @@ avise.
 - Os scripts dos plugins ficam em
   `~/.claude/plugins/cache/<marketplace>/<plugin>/<versão>/scripts/`
   (`openai-codex/codex` e `dpa-antigravity/antigravity`).
-- Rode a revisão pelo plugin do Codex, no worktree da branch:
+- **Toda revisão externa (Codex e Gemini) roda com duas proteções**, sem
+  exceção:
+  1. **Worktree descartável**, criado no head já publicado e removido no
+     fim. O revisor vê só o que está commitado: nada de `.env`, arquivo
+     ignorado ou alteração solta, e nada do worktree de trabalho.
+  2. **Ambiente sem segredos**: o processo é chamado sem
+     `SUPABASE_DB_PASSWORD`, `SUPABASE_ACCESS_TOKEN` nem qualquer outra
+     variável cujo nome indique senha, token ou chave.
 
   ```bash
-  node "<raiz do plugin codex>/scripts/codex-companion.mjs" adversarial-review \
-    --wait --base origin/main --scope branch "<foco>"
+  git fetch origin
+  SHA=$(git rev-parse HEAD)                     # tem de ser o head do PR
+  [ "$SHA" = "$(git rev-parse "origin/$(git branch --show-current)")" ] || exit 1
+  REV="../honorteam-revisao-${SHA:0:12}"
+  git worktree add --detach "$REV" "$SHA"
+
+  # tira do ambiente tudo que tenha cara de segredo (só para o comando chamado)
+  sem_segredos() {
+    local args=() v
+    for v in $(compgen -e | grep -iE \
+      'PASSWORD|PASSWD|SENHA|TOKEN|SECRET|CREDENTIAL|KEY|SUPABASE|DATABASE_URL|PGPASS'); do
+      args+=(-u "$v")
+    done
+    env "${args[@]}" "$@"
+  }
+
+  ( cd "$REV" && sem_segredos node \
+      "<raiz do plugin codex>/scripts/codex-companion.mjs" adversarial-review \
+      --wait --base origin/main --scope branch "<foco>" ) > "<saída>"
+
+  git worktree remove --force "$REV"            # sempre, mesmo se a revisão falhar
   ```
+
+  Confira antes de publicar que `git worktree list` não mostra mais a pasta.
+  O worktree descartável não tem `node_modules`: a revisão é estática, e
+  quem roda lint, testes e build é você (passo 4) e o CI.
 
   O foco diz o que a issue pede, manda seguir o `AGENTS.md`, responder em
   português e terminar com uma única linha final, fora de lista e sem
@@ -77,9 +107,14 @@ demais, pule.
   em modo só leitura (`review` ou `adversarial-review`; nunca `delegate`):
 
   ```bash
-  node "<raiz do plugin antigravity>/scripts/antigravity.mjs" adversarial-review \
-    --wait --base origin/main "<foco>"
+  ( cd "$REV" && sem_segredos node \
+      "<raiz do plugin antigravity>/scripts/antigravity.mjs" adversarial-review \
+      --wait --base origin/main "<foco>" ) > "<saída>"
   ```
+
+  Mesmas duas proteções do Codex: worktree descartável no head publicado
+  (pode ser o mesmo, se as duas revisões rodarem em seguida; remova no fim)
+  e `sem_segredos`.
 
   O foco manda responder em português e **só com base no diff do prompt, sem
   usar ferramentas nem executar comandos**: no modo só leitura o comando é
