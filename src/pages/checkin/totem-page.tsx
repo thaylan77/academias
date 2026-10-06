@@ -7,7 +7,7 @@ import {
   obterTurmasAbertasTotem,
   emitirTokenCheckin,
 } from "../../lib/supabase";
-import { mapearErroRpc, ErroRpcMapeado, isErroTransitorioTotem } from "../../lib/rpc-errors";
+import { mapearErroRpc, ErroRpcMapeado, isErroTransitorioTotem, isErroAutenticacao } from "../../lib/rpc-errors";
 import { AcademiaPublica, TurmaAbertaTotem, TokenCheckinInfo, UsuarioEquipe } from "../../types/app";
 import { QRGenerator } from "../../components/qr/qr-generator";
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "../../components/ui/card";
@@ -131,10 +131,28 @@ export const TotemPage: React.FC<TotemPageProps> = ({ slug, onSessionChange }) =
       }
     } catch (err: any) {
       const erroMapeado = mapearErroRpc(err);
+
+      // Categoria 3: Erro de autenticação (sessão expirada/revogada, 401/JWT)
+      // SEM retry infinito: encerra a sessão e retorna para a tela de login da equipe
+      if (isErroAutenticacao(err) || erroMapeado.codigo === "sessao_expirada") {
+        await logoutEquipe();
+        setUsuarioEquipe(null);
+        if (onSessionChange) {
+          onSessionChange(false);
+        }
+        setErroLogin("Sessão encerrada, faça login novamente.");
+        setErroTotem(null);
+        setStatusConexao("conectado");
+        setTurmasAbertas([]);
+        setTokens({});
+        setErrosTokens({});
+        return;
+      }
+
       setErroTotem(erroMapeado);
 
       if (isErroTransitorioTotem(erroMapeado)) {
-        // Erro transitório (rede, timeout, 5xx): espera crescente 5 s, 15 s, 30 s, até 60 s
+        // Categoria 1: Erro transitório (rede, timeout, 5xx): espera crescente 5 s, 15 s, 30 s, até 60 s
         const tentAtual = tentativasFalhasRef.current;
         const indexIntervalo = Math.min(tentAtual, INTERVALOS_BACKOFF.length - 1);
         const espera = INTERVALOS_BACKOFF[indexIntervalo];
@@ -142,7 +160,7 @@ export const TotemPage: React.FC<TotemPageProps> = ({ slug, onSessionChange }) =
         setTentativasFalhas((prev) => prev + 1);
         setSegundosRestantes(espera);
       } else {
-        // Erro permanente (sem_permissao, academia_suspensa):
+        // Categoria 2: Erro permanente (sem_permissao, academia_suspensa):
         // Checa novamente a cada 60 s para retornar sozinho quando a situação mudar
         setStatusConexao("bloqueado");
         setTurmasAbertas([]);
@@ -186,8 +204,8 @@ export const TotemPage: React.FC<TotemPageProps> = ({ slug, onSessionChange }) =
     const data = await obterAcademiaPublica(slug);
     setAcademia(data);
 
-    // Consulta de papel da equipe com filtro por academia_id (regra multi-tenant)
-    const user = await obterSessaoEquipe(data?.id);
+    // Consulta de papel da equipe com filtro obrigatório por academia_id (regra multi-tenant)
+    const user = data?.id ? await obterSessaoEquipe(data.id) : null;
     setUsuarioEquipe(user);
     if (onSessionChange) {
       onSessionChange(!!user);

@@ -284,4 +284,35 @@ describe("Tela de Totem (Proteção de Equipe e Token Rotativo)", () => {
 
     expect(screen.getByText("Tentar Reconectar")).toBeInTheDocument();
   });
+
+  it("deve encerrar sessão e retornar para tela de login em caso de erro de autenticação (401/JWT expirado) sem retry infinito", async () => {
+    vi.spyOn(supabaseModule, "obterTurmasAbertasTotem").mockRejectedValue({
+      status: 401,
+      message: "JWT expired",
+    });
+
+    const logoutSpy = vi.spyOn(supabaseModule, "logoutEquipe");
+
+    render(<TotemPage slug="honor-demo-a" />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Professor (Seed)")).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByText("Professor (Seed)"));
+
+    // O totem detecta a expiração de autenticação, encerra a sessão e volta para a tela de login
+    await waitFor(() => {
+      expect(screen.getByText("Acesso ao Totem de Presença")).toBeInTheDocument();
+      expect(screen.getByText("Sessão encerrada, faça login novamente.")).toBeInTheDocument();
+    });
+
+    // Deve ter chamado logoutEquipe
+    expect(logoutSpy).toHaveBeenCalled();
+
+    // Não deve tentar reconectar indefinidamente nem ficar em looping
+    expect(screen.queryByText(/Reconectando ao tatame/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Reconectando em/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Verificando novamente em 60s/i)).not.toBeInTheDocument();
+  });
 });
+

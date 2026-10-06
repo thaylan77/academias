@@ -307,26 +307,22 @@ export async function realizarCheckin(
   };
 }
 
-// Helper para ler papel da equipe em membros_academia (com isolamento multi-tenant por academia_id)
+// Helper para ler papel da equipe em membros_academia (com isolamento multi-tenant obrigatório por academia_id)
 export async function resolverPapelEquipe(
   client: any,
   userId: string,
-  academiaId?: string,
+  academiaId: string,
   papelFallback: UsuarioEquipe["papel"] = "professor"
 ): Promise<UsuarioEquipe["papel"]> {
-  if (!client) return papelFallback;
+  if (!client || !academiaId) return papelFallback;
   try {
-    let query = client
+    const { data: membro } = await client
       .from("membros_academia")
       .select("papel")
       .eq("user_id", userId)
-      .eq("ativo", true);
-
-    if (academiaId) {
-      query = query.eq("academia_id", academiaId);
-    }
-
-    const { data: membro } = await query.maybeSingle();
+      .eq("ativo", true)
+      .eq("academia_id", academiaId)
+      .maybeSingle();
 
     if (membro?.papel) {
       return membro.papel as UsuarioEquipe["papel"];
@@ -340,7 +336,7 @@ export async function resolverPapelEquipe(
 // Controle de sessão da equipe para o Totem
 let sessaoEquipeMock: UsuarioEquipe | null = null;
 
-export async function obterSessaoEquipe(academiaId?: string): Promise<UsuarioEquipe | null> {
+export async function obterSessaoEquipe(academiaId: string): Promise<UsuarioEquipe | null> {
   if (supabase) {
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) return null;
@@ -375,7 +371,9 @@ export async function loginEquipe(
     }
     const user = data.user;
     const papelFallback = (user.user_metadata?.papel as any) || papel;
-    const papelFinal = await resolverPapelEquipe(supabase, user.id, academiaId, papelFallback);
+    const papelFinal = academiaId
+      ? await resolverPapelEquipe(supabase, user.id, academiaId, papelFallback)
+      : papelFallback;
 
     return {
       sucesso: true,

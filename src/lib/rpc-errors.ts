@@ -10,6 +10,7 @@ export type CodigoErroRpc =
   | "menor_sem_responsavel"
   | "dados_invalidos"
   | "sem_permissao"
+  | "sessao_expirada"
   | "GENERICO";
 
 export interface CandidatoDependente {
@@ -27,11 +28,39 @@ export interface ErroRpcMapeado {
 }
 
 /**
+ * Detecta se o erro decorre de sessão expirada, revogada ou token JWT inválido (401/Unauthorized).
+ * Categoria especial que exige novo login da equipe sem retry infinito.
+ */
+export function isErroAutenticacao(error: any): boolean {
+  if (!error) return false;
+  const status = error?.status || error?.statusCode || error?.code;
+  if (status === 401 || status === "401") return true;
+
+  const msg = (typeof error === "string" ? error : error?.message || "").toLowerCase();
+  return (
+    msg.includes("jwt expired") ||
+    msg.includes("token is expired") ||
+    msg.includes("invalid jwt") ||
+    msg.includes("session expired") ||
+    msg.includes("sessão expirada") ||
+    msg.includes("sessao expirada") ||
+    msg.includes("unauthorized") ||
+    msg.includes("session from session_id claim") ||
+    msg.includes("auth session missing") ||
+    msg.includes("invalid refresh token")
+  );
+}
+
+/**
  * Retorna true se o erro do totem é transitório (rede, timeout, 5xx, erro não identificado),
  * permitindo retentativa automática com espera crescente.
  */
 export function isErroTransitorioTotem(erro: ErroRpcMapeado): boolean {
-  return erro.codigo !== "academia_suspensa" && erro.codigo !== "sem_permissao";
+  return (
+    erro.codigo !== "academia_suspensa" &&
+    erro.codigo !== "sem_permissao" &&
+    erro.codigo !== "sessao_expirada"
+  );
 }
 
 /**
@@ -42,9 +71,10 @@ export function isErroTransitorioTotem(erro: ErroRpcMapeado): boolean {
  * O código canônico da regra de negócio é emitido pelo banco exclusivamente em `error.hint`.
  *
  * Ordem de prioridade:
- * 1. error.hint (código canônico emitido pela RPC via using hint = '<codigo>')
- * 2. error.code para constraints do PostgreSQL (ex. 23505 = unique_violation)
- * 3. Fallback genérico para erros de rede, timeout ou não mapeados.
+ * 1. Erro de autenticação (401/JWT expirado) -> sessão encerrada
+ * 2. error.hint (código canônico emitido pela RPC via using hint = '<codigo>')
+ * 3. error.code para constraints do PostgreSQL (ex. 23505 = unique_violation)
+ * 4. Fallback genérico para erros de rede, timeout ou não mapeados.
  */
 export function mapearErroRpc(error: any): ErroRpcMapeado {
   if (!error) {
@@ -52,6 +82,17 @@ export function mapearErroRpc(error: any): ErroRpcMapeado {
       codigo: "GENERICO",
       titulo: "Erro Inesperado",
       mensagem: "Ocorreu uma falha na comunicação com o servidor.",
+    };
+  }
+
+  // 1. Verificação de sessão/JWT expirado ou revogado
+  if (isErroAutenticacao(error)) {
+    return {
+      codigo: "sessao_expirada",
+      titulo: "Sessão Encerrada",
+      mensagem: "Sessão encerrada, faça login novamente.",
+      acaoSugerida: "Informe suas credenciais para continuar operando o totem.",
+      detalhesOriginais: error,
     };
   }
 
