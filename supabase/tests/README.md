@@ -24,9 +24,15 @@ para subir/resetar o Supabase. Testes nunca usam `--linked` nem uma URL do
 Em um ambiente descartável com Docker, já configurado para este projeto:
 
 ```sh
-supabase db start
-supabase test db
+npx supabase@2.119.0 db start
+npx supabase@2.119.0 test db
 ```
+
+A CLI está fixada em `2.119.0`. O mesmo workflow gera os tipos do banco
+local, publica o artifact `database-types` e confere a igualdade com
+`src/types/database.ts`. Se houver diferença, copie o arquivo do artifact
+daquela execução e commite na branch; não gere tipos com `--linked` nem
+edite o arquivo manualmente.
 
 ## Suítes
 
@@ -70,7 +76,7 @@ check-in com a data da academia e testar trial válido/vencido.
 
 ## Validação local desta entrega
 
-Após o rebase em `main` (`6d05fe7`), os quatro arquivos passaram no PGlite
+Após o rebase em `main` (`71570d5`), os quatro arquivos passaram no PGlite
 com pgTAP 1.3.4: **379 testes, sem falhas**. O seed foi aplicado duas vezes
 e o conteúdo completo permaneceu igual: 2 academias, 4 modalidades e
 24 faixas. Foram usados auth e Vault simulados; o pgTAP oficial foi carregado
@@ -78,6 +84,5 @@ em `extensions`, omitindo `CREATE EXTENSION` somente na cópia temporária
 de execução. Essa validação auxilia a iteração e não substitui o CI.
 
 A branch contém apenas seed, testes e esta documentação. Migrations e
-`src/types/database.ts` permanecem iguais aos de `main`. Não há
-`package.json` nesta branch; lint/build/test de front-end não se aplicam.
+`src/types/database.ts` permanecem iguais aos de `main`. O front-end é validado com `npm run lint`, `npm run build` e `npm test`.
 O PR registra o SHA e o resultado do workflow Banco antes da revisão do Claude.
