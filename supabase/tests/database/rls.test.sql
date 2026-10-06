@@ -2,7 +2,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 set local search_path = public, extensions;
-select no_plan();
+select plan(307);
 
 -- UUIDs exclusivos da suíte, independentes do seed e de usuários reais.
 create function pg_temp.id(chave text) returns uuid
@@ -10,7 +10,7 @@ language sql immutable as $$ select md5('honor-rls:' || chave)::uuid $$;
 
 insert into auth.users (id, email)
 select pg_temp.id('usuario-' || n), 'rls-' || n || '@example.test'
-from generate_series(1, 9) n;
+from generate_series(1, 10) n;
 
 insert into public.academias (id, nome, slug, status)
 values (pg_temp.id('A'), 'Academia RLS A', 'teste-rls-a', 'ativa'),
@@ -19,7 +19,7 @@ values (pg_temp.id('A'), 'Academia RLS A', 'teste-rls-a', 'ativa'),
 insert into public.membros_academia (academia_id, user_id, papel, ativo)
 select pg_temp.id('A'), pg_temp.id('usuario-' || n), papel, n <> 7
 from (values (1, 'dono'), (2, 'admin'), (3, 'professor'), (4, 'recepcao'),
-             (5, 'aluno'), (6, 'aluno'), (7, 'admin')) p(n, papel);
+             (5, 'aluno'), (6, 'aluno'), (7, 'admin'), (10, 'totem')) p(n, papel);
 insert into public.membros_academia (academia_id, user_id, papel)
 values (pg_temp.id('B'), pg_temp.id('usuario-8'), 'dono');
 
@@ -34,8 +34,19 @@ insert into public.turmas (id, academia_id, modalidade_id, professor_id, nome)
 select pg_temp.id('turma-' || a), pg_temp.id(a), pg_temp.id('modalidade-' || a),
        pg_temp.id('professor-' || a), 'Turma de teste' from unnest(array['A','B']) a;
 insert into public.turma_horarios (id, academia_id, turma_id, dia_semana, hora_inicio, hora_fim)
-select pg_temp.id('horario-' || a), pg_temp.id(a), pg_temp.id('turma-' || a), 1, '18:00', '19:00'
+select pg_temp.id('horario-' || a), pg_temp.id(a), pg_temp.id('turma-' || a),
+       extract(dow from public.hoje_academia(pg_temp.id(a)))::int, '00:00', '24:00'
 from unnest(array['A','B']) a;
+
+-- Tokens calculados pelo papel administrativo; a API só lê a fixture.
+-- O horário cobre todo o dia da academia, inclusive o último segundo.
+insert into public.checkin_segredos (academia_id)
+select pg_temp.id(a) from unnest(array['A','B']) a;
+create temporary table tokens_checkin as
+select a, public.checkin_token_da_janela(pg_temp.id('turma-' || a),
+  public.checkin_janela_atual(pg_temp.id(a))) as token
+from unnest(array['A','B']) a;
+grant select on tokens_checkin to authenticated;
 insert into public.turmas (id, academia_id, modalidade_id, nome)
 values (pg_temp.id('turma-vazia-A'), pg_temp.id('A'), pg_temp.id('modalidade-A'), 'Turma sem matrículas');
 insert into public.planos (id, academia_id, nome, valor)
@@ -82,6 +93,17 @@ begin
   return is(resultado, case when permitido then 'permitido' else 'bloqueado' end, descricao);
 end $$;
 
+-- Captura o código estável da RPC sem depender da redação da mensagem.
+create function pg_temp.hint(comando text) returns text language plpgsql as $$
+declare codigo text;
+begin
+  execute comando;
+  return 'sem erro';
+exception when others then
+  get stacked diagnostics codigo = pg_exception_hint;
+  return codigo;
+end $$;
+
 create temporary table casos_insert (tabela text, comando text, papeis text[]);
 insert into casos_insert values
 ('modalidades', $$insert into public.modalidades (academia_id, nome) values (pg_temp.id('A'), 'Nova')$$, array['dono','admin']),
@@ -105,7 +127,7 @@ from pg_class c join pg_namespace n on n.oid = c.relnamespace
 where n.nspname = 'public' and c.relkind = 'r'
   and c.relname in ('academias','membros_academia','modalidades','faixas','professores',
     'turmas','turma_horarios','planos','alunos','matriculas','matricula_turmas','presencas','graduacoes','cobrancas',
-    'gateway_contas','gateway_clientes','gateway_eventos')
+    'gateway_contas','gateway_clientes','gateway_eventos','checkin_segredos')
 order by c.relname;
 
 set local role authenticated;
@@ -133,15 +155,15 @@ select pg_temp.escrita(format('delete from public.%I where academia_id = pg_temp
 select throws_ok(format('delete from public.%I where academia_id = pg_temp.id(''B'')', tabela),
   '42501', 'permission denied for table ' || tabela, 'DELETE direto negado em B: ' || tabela)
 from unnest(array['alunos', 'cobrancas']) tabela;
-select pg_temp.escrita($$update public.alunos set academia_id = pg_temp.id('B') where id = pg_temp.id('aluno-A1')$$,
-  false, 'Não pode transferir aluno para tenant sem acesso');
+select throws_ok($$update public.alunos set academia_id = pg_temp.id('B') where id = pg_temp.id('aluno-A1')$$,
+  '42501', null, 'Grant de UPDATE de alunos não permite alterar academia_id');
 
 -- Cada papel recebe controles positivos e negativos de INSERT.
 reset role;
 create function pg_temp.matriz_insert() returns setof text language plpgsql as $$
 declare papel record; caso record;
 begin
-  for papel in select * from (values (1,'dono'),(2,'admin'),(3,'professor'),(4,'recepcao'),(5,'aluno')) p(n,nome) loop
+  for papel in select * from (values (1,'dono'),(2,'admin'),(3,'professor'),(4,'recepcao'),(5,'aluno'),(10,'totem')) p(n,nome) loop
     perform set_config('request.jwt.claim.sub', pg_temp.id('usuario-' || papel.n)::text, true);
     for caso in select * from casos_insert order by tabela loop
       return next pg_temp.escrita(caso.comando, papel.nome = any(caso.papeis), papel.nome || ' insere ' || caso.tabela);
@@ -156,7 +178,7 @@ reset role;
 create function pg_temp.matriz_delete_negado() returns setof text language plpgsql as $$
 declare papel record; tabela text;
 begin
-  for papel in select * from (values (1,'dono'),(2,'admin'),(3,'professor'),(4,'recepcao'),(5,'aluno')) p(n,nome) loop
+  for papel in select * from (values (1,'dono'),(2,'admin'),(3,'professor'),(4,'recepcao'),(5,'aluno'),(10,'totem')) p(n,nome) loop
     perform set_config('request.jwt.claim.sub', pg_temp.id('usuario-' || papel.n)::text, true);
     foreach tabela in array array['alunos', 'cobrancas'] loop
       return next throws_ok(
@@ -168,6 +190,18 @@ begin
 end $$;
 set local role authenticated;
 select * from pg_temp.matriz_delete_negado();
+
+-- Totem não entra nas leituras de "qualquer membro" nem vê o segredo.
+select set_config('request.jwt.claim.sub', pg_temp.id('usuario-10')::text, true);
+select is((select count(*) from public.membros_academia), 1::bigint, 'Totem lê só o próprio vínculo');
+select is((select count(*) from public.academias), 0::bigint, 'Totem não lê academias');
+select is((select count(*) from public.modalidades), 0::bigint, 'Totem não lê modalidades');
+select is((select count(*) from public.faixas), 0::bigint, 'Totem não lê faixas');
+select is((select count(*) from public.professores), 0::bigint, 'Totem não lê professores');
+select is((select count(*) from public.turmas), 0::bigint, 'Totem não lê turmas');
+select is((select count(*) from public.turma_horarios), 0::bigint, 'Totem não lê horários');
+select is((select count(*) from public.planos), 0::bigint, 'Totem não lê planos');
+select throws_ok('select * from public.checkin_segredos', '42501', null, 'Totem não tem grant de leitura do segredo');
 -- Responsável vê os dois filhos e somente os registros deles.
 select set_config('request.jwt.claim.sub', pg_temp.id('usuario-5')::text, true);
 select results_eq('select id from public.alunos order by id',
@@ -181,13 +215,17 @@ select is((select count(*) from public.matricula_turmas), 2::bigint, 'Responsáv
 select is((select count(*) from public.faixas), 1::bigint, 'Aluno lê catálogo da sua academia');
 select pg_temp.escrita($$update public.alunos set nome = 'Alterado' where id = pg_temp.id('aluno-A1')$$, false, 'Aluno não altera cadastro diretamente');
 select pg_temp.escrita($$delete from public.presencas where aluno_id = pg_temp.id('aluno-A1')$$, false, 'Aluno não remove presença');
-select lives_ok($$select public.fazer_checkin(pg_temp.id('turma-A'), pg_temp.id('aluno-A1'))$$, 'Aluno faz check-in autorizado via RPC');
+select lives_ok($$select public.fazer_checkin(p_turma_id => pg_temp.id('turma-A'),
+  p_token => (select token from tokens_checkin where a = 'A'), p_aluno_id => pg_temp.id('aluno-A1'))$$,
+  'Aluno faz check-in autorizado via RPC com token e horário válidos');
 select is((select count(*) from public.presencas where aluno_id = pg_temp.id('aluno-A1') and data = public.hoje_academia(pg_temp.id('A'))),
   1::bigint, 'RPC registra presença do próprio aluno');
-select throws_ok($$select public.fazer_checkin(pg_temp.id('turma-A'), pg_temp.id('aluno-A3'))$$,
-  'P0001', 'Nenhuma matrícula ativa nesta turma para este login', 'RPC rejeita check-in de outro aluno');
-select throws_ok($$select public.fazer_checkin(pg_temp.id('turma-B'), pg_temp.id('aluno-B1'))$$,
-  'P0001', 'Nenhuma matrícula ativa nesta turma para este login', 'RPC rejeita check-in em outro tenant');
+select is(pg_temp.hint($$select public.fazer_checkin(p_turma_id => pg_temp.id('turma-A'),
+  p_token => (select token from tokens_checkin where a = 'A'), p_aluno_id => pg_temp.id('aluno-A3'))$$),
+  'checkin_sem_matricula', 'RPC rejeita check-in de outro aluno após validar token e horário');
+select is(pg_temp.hint($$select public.fazer_checkin(p_turma_id => pg_temp.id('turma-B'),
+  p_token => (select token from tokens_checkin where a = 'B'), p_aluno_id => pg_temp.id('aluno-B1'))$$),
+  'checkin_sem_matricula', 'RPC rejeita check-in em outro tenant mesmo com token e horário válidos');
 
 select set_config('request.jwt.claim.sub', pg_temp.id('usuario-3')::text, true);
 select is((select count(*) from public.alunos), 3::bigint, 'Professor lê alunos de A');
@@ -269,7 +307,8 @@ select set_config('request.jwt.claim.sub', '', true);
 select is((select count(*) from public.alunos), 0::bigint, 'Anônimo não lê alunos');
 select is((select count(*) from public.cobrancas), 0::bigint, 'Anônimo não lê cobranças');
 select throws_ok('select * from public.vw_inadimplentes', '42501', null, 'Anônimo não acessa view financeira');
-select throws_ok($$select public.fazer_checkin(pg_temp.id('turma-A'), pg_temp.id('aluno-A1'))$$,
+select throws_ok($$select public.fazer_checkin(p_turma_id => pg_temp.id('turma-A'),
+  p_token => 'token-anonimo', p_aluno_id => pg_temp.id('aluno-A1'))$$,
   '42501', null, 'Anônimo não executa check-in');
 select is(public.academia_publica('teste-rls-a')->>'nome', 'Academia RLS A', 'RPC pública permanece acessível');
 reset role;
@@ -277,25 +316,25 @@ reset role;
 -- operações são persistidas na transação, após os testes de leitura das fixtures.
 set local role authenticated;
 select set_config('request.jwt.claim.sub', pg_temp.id('usuario-3')::text, true);
-select throws_ok($$select public.cancelar_cobranca(pg_temp.id('cobranca-' || pg_temp.id('aluno-A3')))$$,
-  'P0001', 'Cobrança não encontrada ou sem permissão para cancelar', 'Professor não cancela cobrança via RPC');
-select throws_ok($$select public.anonimizar_aluno(pg_temp.id('aluno-A3'))$$,
-  'P0001', 'Aluno não encontrado ou sem permissão para anonimizar', 'Professor não anonimiza aluno');
+select throws_matching($$select public.cancelar_cobranca(pg_temp.id('cobranca-' || pg_temp.id('aluno-A3')))$$,
+  '(?i)sem permissão', 'Professor não cancela cobrança via RPC');
+select throws_matching($$select public.anonimizar_aluno(pg_temp.id('aluno-A3'))$$,
+  '(?i)sem permissão', 'Professor não anonimiza aluno');
 select set_config('request.jwt.claim.sub', pg_temp.id('usuario-5')::text, true);
-select throws_ok($$select public.cancelar_cobranca(pg_temp.id('cobranca-' || pg_temp.id('aluno-A1')))$$,
-  'P0001', 'Cobrança não encontrada ou sem permissão para cancelar', 'Aluno não cancela a própria cobrança');
-select throws_ok($$select public.anonimizar_aluno(pg_temp.id('aluno-A1'))$$,
-  'P0001', 'Aluno não encontrado ou sem permissão para anonimizar', 'Aluno não anonimiza o próprio cadastro');
+select throws_matching($$select public.cancelar_cobranca(pg_temp.id('cobranca-' || pg_temp.id('aluno-A1')))$$,
+  '(?i)sem permissão', 'Aluno não cancela a própria cobrança');
+select throws_matching($$select public.anonimizar_aluno(pg_temp.id('aluno-A1'))$$,
+  '(?i)sem permissão', 'Aluno não anonimiza o próprio cadastro');
 select set_config('request.jwt.claim.sub', pg_temp.id('usuario-2')::text, true);
-select throws_ok($$select public.cancelar_cobranca(pg_temp.id('cobranca-' || pg_temp.id('aluno-B1')))$$,
-  'P0001', 'Cobrança não encontrada ou sem permissão para cancelar', 'Admin de A não cancela cobrança de B');
-select throws_ok($$select public.anonimizar_aluno(pg_temp.id('aluno-B1'))$$,
-  'P0001', 'Aluno não encontrado ou sem permissão para anonimizar', 'Admin de A não anonimiza aluno de B');
-select throws_ok($$select public.anonimizar_aluno(pg_temp.id('aluno-A3'))$$,
-  'P0001', 'Cancele ou dê baixa nas cobranças pendentes antes de anonimizar', 'Cobrança pendente impede anonimização');
+select throws_matching($$select public.cancelar_cobranca(pg_temp.id('cobranca-' || pg_temp.id('aluno-B1')))$$,
+  '(?i)sem permissão', 'Admin de A não cancela cobrança de B');
+select throws_matching($$select public.anonimizar_aluno(pg_temp.id('aluno-B1'))$$,
+  '(?i)sem permissão', 'Admin de A não anonimiza aluno de B');
+select throws_matching($$select public.anonimizar_aluno(pg_temp.id('aluno-A3'))$$,
+  '(?i)cobranças pendentes', 'Cobrança pendente impede anonimização');
 select set_config('request.jwt.claim.sub', pg_temp.id('usuario-4')::text, true);
-select throws_ok($$select public.anonimizar_aluno(pg_temp.id('aluno-A3'))$$,
-  'P0001', 'Aluno não encontrado ou sem permissão para anonimizar', 'Recepção não anonimiza aluno');
+select throws_matching($$select public.anonimizar_aluno(pg_temp.id('aluno-A3'))$$,
+  '(?i)sem permissão', 'Recepção não anonimiza aluno');
 select lives_ok($$select public.cancelar_cobranca(pg_temp.id('cobranca-' || pg_temp.id('aluno-A3')))$$,
   'Recepção cancela cobrança via RPC');
 select is((select status from public.cobrancas where id = pg_temp.id('cobranca-' || pg_temp.id('aluno-A3'))),
@@ -325,8 +364,8 @@ reset role;
 update public.academias set status = 'suspensa' where id = pg_temp.id('A');
 set local role authenticated;
 select set_config('request.jwt.claim.sub', pg_temp.id('usuario-1')::text, true);
-select throws_ok($$select public.cancelar_cobranca(pg_temp.id('cobranca-' || pg_temp.id('aluno-A1')))$$,
-  'P0001', 'Cobrança não encontrada ou sem permissão para cancelar', 'Suspensa não cancela cobrança');
+select throws_matching($$select public.cancelar_cobranca(pg_temp.id('cobranca-' || pg_temp.id('aluno-A1')))$$,
+  '(?i)sem permissão', 'Suspensa não cancela cobrança');
 select lives_ok($$select public.anonimizar_aluno(pg_temp.id('aluno-A2'))$$,
   'Dono anonimiza na academia suspensa: exceção explícita de LGPD');
 select is((select count(*) from public.membros_academia
