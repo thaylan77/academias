@@ -14,9 +14,40 @@ import { mapearErroRpc } from "./rpc-errors";
 const supabaseUrl = import.meta.env?.VITE_SUPABASE_URL || "";
 const supabaseAnonKey = import.meta.env?.VITE_SUPABASE_ANON_KEY || "";
 
+
+type CustomFunctions = Omit<Database['public']['Functions'], 'academia_publica' | 'matricula_online' | 'totem_turmas_agora' | 'emitir_token_checkin' | 'fazer_checkin'> & {
+  academia_publica: {
+    Args: { p_slug: string };
+    Returns: AcademiaPublica;
+  };
+  matricula_online: {
+    Args: { p_dados: MatriculaOnlinePayload; p_slug: string };
+    Returns: string;
+  };
+  totem_turmas_agora: {
+    Args: { p_academia_id: string };
+    Returns: TurmaAbertaTotem[];
+  };
+  emitir_token_checkin: {
+    Args: { p_turma_id: string };
+    Returns: TokenCheckinInfo;
+  };
+  fazer_checkin: {
+    Args: { p_aluno_id?: string; p_token: string; p_turma_id: string };
+    Returns: string;
+  };
+};
+
+type CustomDatabase = Omit<Database, 'public'> & {
+  public: Omit<Database['public'], 'Functions'> & {
+    Functions: CustomFunctions;
+  };
+};
+
 export const supabase = (supabaseUrl && supabaseAnonKey)
-  ? createClient<Database>(supabaseUrl, supabaseAnonKey)
+  ? createClient<CustomDatabase>(supabaseUrl, supabaseAnonKey)
   : null;
+
 
 // Helper unificado para buscar dados públicos da academia
 export async function obterAcademiaPublica(slug: string): Promise<AcademiaPublica | null> {
@@ -24,13 +55,13 @@ export async function obterAcademiaPublica(slug: string): Promise<AcademiaPublic
 
   if (supabase) {
     try {
-      const { data, error } = await (supabase.rpc as any)("academia_publica", {
+      const { data, error } = await supabase.rpc("academia_publica", {
         p_slug: slugNormalizado,
       });
       if (error) {
         throw error;
       }
-      return data as unknown as AcademiaPublica;
+      return data;
     } catch (e) {
       console.warn("Falha ao consultar Supabase, caindo no mock se disponível:", e);
     }
@@ -60,7 +91,7 @@ export async function submeterMatriculaOnline(
 ): Promise<{ sucesso: boolean; matricula_id?: string; mensagem?: string; titulo?: string; acao?: string }> {
   if (supabase) {
     try {
-      const { data, error } = await (supabase.rpc as any)("matricula_online", {
+      const { data, error } = await supabase.rpc("matricula_online", {
         p_slug: slug.toLowerCase().trim(),
         p_dados: dados,
       });
@@ -119,13 +150,13 @@ export async function submeterMatriculaOnline(
 // Helper para buscar turmas com check-in aberto neste momento para o Totem
 export async function obterTurmasAbertasTotem(academiaId: string): Promise<TurmaAbertaTotem[]> {
   if (supabase) {
-    const { data, error } = await (supabase.rpc as any)("totem_turmas_agora", {
+    const { data, error } = await supabase.rpc("totem_turmas_agora", {
       p_academia_id: academiaId,
     });
     if (error) {
       throw error;
     }
-    return (data as TurmaAbertaTotem[]) || [];
+    return data || [];
   }
 
   // Fallback para simulação local / dev apenas sem cliente supabase configurado
@@ -154,13 +185,13 @@ export async function obterTurmasAbertasTotem(academiaId: string): Promise<Turma
 // Helper para emitir token HMAC rotativo de check-in para uma turma
 export async function emitirTokenCheckin(turmaId: string): Promise<TokenCheckinInfo | null> {
   if (supabase) {
-    const { data, error } = await (supabase.rpc as any)("emitir_token_checkin", {
+    const { data, error } = await supabase.rpc("emitir_token_checkin", {
       p_turma_id: turmaId,
     });
     if (error) {
       throw error;
     }
-    return data as TokenCheckinInfo;
+    return data;
   }
 
   // Mock em ambiente DEV apenas sem cliente supabase configurado
@@ -187,10 +218,10 @@ export async function realizarCheckin(
 
   if (supabase && (!import.meta.env.DEV || !simulacaoCenario)) {
     try {
-      const { data, error } = await (supabase.rpc as any)("fazer_checkin", {
+      const { data, error } = await supabase.rpc("fazer_checkin", {
         p_turma_id: turmaId,
         p_token: tokenEfetivo,
-        p_aluno_id: alunoId || null,
+        p_aluno_id: alunoId || undefined,
       });
 
       if (error) {
