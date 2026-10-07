@@ -72,6 +72,11 @@ function simularRede(respostas: Array<() => Response>) {
 
 async function carregarLib() {
   vi.resetModules();
+  // O auth-js avisa outras abas por BroadcastChannel quando a sessão muda. No
+  // ambiente de teste (jsdom sobre Node 22) a entrega dessa mensagem estoura
+  // como exceção não tratada entre os clientes criados por cada teste. Sem
+  // BroadcastChannel a biblioteca simplesmente não avisa outras abas.
+  vi.stubGlobal("BroadcastChannel", undefined);
   vi.stubEnv("VITE_SUPABASE_URL", URL_PROJETO);
   vi.stubEnv("VITE_SUPABASE_ANON_KEY", "chave-anon-de-teste");
   return import("../lib/supabase");
