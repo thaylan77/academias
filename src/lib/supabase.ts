@@ -14,9 +14,40 @@ import { mapearErroRpc } from "./rpc-errors";
 const supabaseUrl = import.meta.env?.VITE_SUPABASE_URL || "";
 const supabaseAnonKey = import.meta.env?.VITE_SUPABASE_ANON_KEY || "";
 
+
+type CustomFunctions = Omit<Database['public']['Functions'], 'academia_publica' | 'matricula_online' | 'totem_turmas_agora' | 'emitir_token_checkin' | 'fazer_checkin'> & {
+  academia_publica: {
+    Args: { p_slug: string };
+    Returns: AcademiaPublica;
+  };
+  matricula_online: {
+    Args: { p_dados: MatriculaOnlinePayload; p_slug: string };
+    Returns: string;
+  };
+  totem_turmas_agora: {
+    Args: { p_academia_id: string };
+    Returns: TurmaAbertaTotem[];
+  };
+  emitir_token_checkin: {
+    Args: { p_turma_id: string };
+    Returns: TokenCheckinInfo;
+  };
+  fazer_checkin: {
+    Args: { p_aluno_id?: string; p_token: string; p_turma_id: string };
+    Returns: string;
+  };
+};
+
+type CustomDatabase = Omit<Database, 'public'> & {
+  public: Omit<Database['public'], 'Functions'> & {
+    Functions: CustomFunctions;
+  };
+};
+
 export const supabase = (supabaseUrl && supabaseAnonKey)
-  ? createClient<Database>(supabaseUrl, supabaseAnonKey)
+  ? createClient<CustomDatabase>(supabaseUrl, supabaseAnonKey)
   : null;
+
 
 // Helper unificado para buscar dados públicos da academia
 export async function obterAcademiaPublica(slug: string): Promise<AcademiaPublica | null> {
