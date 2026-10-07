@@ -15,8 +15,45 @@ import { mapearErroRpc } from "./rpc-errors";
 const supabaseUrl = import.meta.env?.VITE_SUPABASE_URL || "";
 const supabaseAnonKey = import.meta.env?.VITE_SUPABASE_ANON_KEY || "";
 
+// Status com que o Auth recusa a renovação por um motivo passageiro (tempo
+// esgotado, limite de requisições).
+const STATUS_PASSAGEIROS_NA_RENOVACAO = new Set([408, 429]);
+
+function ehPedidoDeRenovacao(input: RequestInfo | URL): boolean {
+  const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+  return url.includes("/auth/v1/token") && url.includes("grant_type=refresh_token");
+}
+
+/**
+ * fetch usado pelo cliente Supabase.
+ *
+ * O auth-js só preserva a sessão quando a renovação falha por queda de rede
+ * ou 5xx. Para qualquer outra resposta (inclusive 408 e 429), com o token de
+ * acesso já vencido, ele apaga a sessão do aparelho antes de devolver o erro,
+ * e o totem ficaria sem credencial para se recuperar sozinho. Aqui essas
+ * respostas da renovação viram 503, que a biblioteca trata como passageiro:
+ * mantém a sessão e tenta de novo. Vale para a renovação pedida pelo app e
+ * para a automática da biblioteca. Nenhum outro pedido é alterado.
+ */
+export async function fetchQuePreservaSessao(
+  input: RequestInfo | URL,
+  init?: RequestInit
+): Promise<Response> {
+  const resposta = await fetch(input, init);
+  if (STATUS_PASSAGEIROS_NA_RENOVACAO.has(resposta.status) && ehPedidoDeRenovacao(input)) {
+    return new Response(await resposta.text(), {
+      status: 503,
+      statusText: "Service Unavailable",
+      headers: resposta.headers,
+    });
+  }
+  return resposta;
+}
+
 export const supabase = (supabaseUrl && supabaseAnonKey)
-  ? createClient<Database>(supabaseUrl, supabaseAnonKey)
+  ? createClient<Database>(supabaseUrl, supabaseAnonKey, {
+      global: { fetch: fetchQuePreservaSessao },
+    })
   : null;
 
 // Helper unificado para buscar dados públicos da academia
