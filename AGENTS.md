@@ -155,6 +155,10 @@ Plano, status e slug da academia só mudam via `service_role` (billing do SaaS).
 - Dinheiro em `numeric(10,2)`. Data de negócio é `date` no fuso da academia
   (`academias.fuso`), não em UTC.
 - CPF e telefone só com dígitos; telefone no formato E.164 (55 + DDD + número).
+- Um aluno não tem duas matrículas não canceladas com períodos sobrepostos
+  na mesma turma: o banco recusa com `hint = matricula_duplicada`. Troca de
+  plano = encerrar a antiga na véspera e abrir a nova
+  (`docs/specs/matricula-duplicada.md`).
 - Mensagens de erro exibidas ao usuário em português. Erro de RPC que o
   front precisa tratar leva um **código estável no `hint`**
   (`raise exception '...' using hint = 'checkin_token_invalido'`); o front

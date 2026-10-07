@@ -104,9 +104,14 @@ insert into public.matriculas (id, academia_id, aluno_id) values
   ('f4000000-0000-4000-8000-0000000004a1', 'f4000000-0000-4000-8000-00000000000a', 'f4000000-0000-4000-8000-0000000001a1'),
   ('f4000000-0000-4000-8000-0000000004a2', 'f4000000-0000-4000-8000-00000000000a', 'f4000000-0000-4000-8000-0000000001a2'),
   ('f4000000-0000-4000-8000-0000000004a3', 'f4000000-0000-4000-8000-00000000000a', 'f4000000-0000-4000-8000-0000000001a3'),
-  ('f4000000-0000-4000-8000-0000000004a4', 'f4000000-0000-4000-8000-00000000000a', 'f4000000-0000-4000-8000-0000000001a4'),
-  -- segunda matrícula ativa do aluno 1 na mesma turma
-  ('f4000000-0000-4000-8000-0000000004a5', 'f4000000-0000-4000-8000-00000000000a', 'f4000000-0000-4000-8000-0000000001a1');
+  ('f4000000-0000-4000-8000-0000000004a4', 'f4000000-0000-4000-8000-00000000000a', 'f4000000-0000-4000-8000-0000000001a4');
+
+-- Segunda matrícula do aluno 1 na mesma turma: a antiga de uma troca de plano,
+-- encerrada na véspera e ainda com situação 'ativa'. (Duas matrículas com
+-- períodos sobrepostos na mesma turma não existem mais: issue #13.)
+insert into public.matriculas (id, academia_id, aluno_id, data_inicio, data_fim) values
+  ('f4000000-0000-4000-8000-0000000004a5', 'f4000000-0000-4000-8000-00000000000a', 'f4000000-0000-4000-8000-0000000001a1',
+   current_date - 60, current_date - 1);
 
 insert into public.matricula_turmas (academia_id, matricula_id, turma_id) values
   ('f4000000-0000-4000-8000-00000000000a', 'f4000000-0000-4000-8000-0000000004a1', 'f4000000-0000-4000-8000-0000000003a1'),
@@ -202,7 +207,7 @@ select is(public.__hint_de(format($$select public.fazer_checkin('f4000000-0000-4
 -- 4. fazer_checkin: caminho feliz
 -- ---------------------------------------------------------------------
 select isnt(public.fazer_checkin('f4000000-0000-4000-8000-0000000003a1', (select tok from t_tok where nome = 't1-anterior')),
-  null, 'Token da janela anterior é aceito (aluno com duas matrículas na turma não vira "múltiplos")');
+  null, 'Token da janela anterior é aceito (aluno com a matrícula antiga e a nova na mesma turma não vira "múltiplos")');
 select is(public.fazer_checkin('f4000000-0000-4000-8000-0000000003a1', (select tok from t_tok where nome = 't1')),
   (select id from public.presencas where aluno_id = 'f4000000-0000-4000-8000-0000000001a1'),
   'Token da janela atual é aceito e o check-in repetido devolve a mesma presença');

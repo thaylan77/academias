@@ -46,6 +46,7 @@ edite o arquivo manualmente.
 | `financeiro/emissao_webhook.test.sql` | 46 | Emissão, tentativa da reserva, adoção pelo webhook e divergências |
 | `financeiro/permissoes.test.sql` | 30 | Grants financeiros, colunas de sistema, anonimização e academia imutável |
 | `financeiro/recorrencia.test.sql` | 21 | Competência, recorrência e mês inicial da cobrança |
+| `matricula/duplicada.test.sql` | 32 | Matrícula duplicada na mesma turma: situações, períodos, troca de plano, duas academias e erro `matricula_duplicada` |
 
 Todos os arquivos usam fixtures próprias e `ROLLBACK`; não dependem do seed.
 Na suíte RLS, `SET LOCAL ROLE authenticated`/`anon` e

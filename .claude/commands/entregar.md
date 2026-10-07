@@ -28,8 +28,11 @@ avise.
   códigos estáveis no `hint`.
 - Toda mudança vem com teste: pgTAP para banco e RLS (com 2 academias),
   Vitest para o front.
-- Mudança de schema ou de política RLS: apresente o plano e espere aprovação
-  antes de escrever a migration (`CLAUDE.md`).
+- Mudança de schema: o plano vai na descrição do PR. Apresente o plano e
+  **espere aprovação antes de escrever a migration** só nos três casos do
+  `CLAUDE.md`: perda ou alteração irreversível de dados existentes; mudança
+  em RLS, papéis ou vínculo de login; fluxo de dinheiro (cobrança, baixa,
+  gateway).
 - Migration nova com `npx supabase@2.119.0 migration new <nome>`. Nunca edite
   migration já aplicada.
 
@@ -213,7 +216,7 @@ Se depois do `APROVADO` a branch precisar receber `main`:
 Siga sem perguntar, exceto:
 
 - decisão de produto (regra de negócio que a issue ou a spec não define);
-- plano de schema ou RLS aguardando aprovação (passo 3);
+- plano de schema que cai num dos três casos de aprovação prévia (passo 3);
 - você e o Codex discordarem **duas vezes no mesmo ponto**: pare, mostre as
   duas posições e espere a decisão;
 - dependência fora de `main` (passo 1).
