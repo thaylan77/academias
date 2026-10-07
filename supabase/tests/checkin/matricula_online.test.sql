@@ -50,7 +50,7 @@ end
 $$;
 grant execute on function public.__sqlstate_de(text) to anon, authenticated;
 
-set local role anon;
+set local role authenticated;
 
 select is(public.__hint_de($$select public.matricula_online('mat-teste-nao-existe', '{"nome":"Fulano de Tal","aceite_termo":true}')$$),
   'matricula_fechada', 'Slug inexistente: matricula_fechada');
