@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { mapearErroRpc } from "../lib/rpc-errors";
+import { mapearErroRpc, isErroAutenticacao } from "../lib/rpc-errors";
 
 describe("Centralizador de Tratamento de Erros de RPC (mapearErroRpc)", () => {
   it("deve priorizar error.hint sobre o SQLSTATE genérico P0001 de raise exception", () => {
@@ -120,5 +120,42 @@ describe("Centralizador de Tratamento de Erros de RPC (mapearErroRpc)", () => {
     };
     expect(mapearErroRpc(erro).codigo).toBe("GENERICO");
   });
-});
 
+  it("deve mapear JWT expirado do PostgREST pelo código PGRST301", () => {
+    const resultado = mapearErroRpc({ code: "PGRST301", message: "JWT expired" });
+    expect(resultado.codigo).toBe("sessao_expirada");
+    expect(isErroAutenticacao({ code: "PGRST301", message: "JWT expired" })).toBe(true);
+  });
+
+  it("deve mapear sessão ausente do Supabase Auth pelo tipo do erro", () => {
+    expect(isErroAutenticacao({ name: "AuthSessionMissingError", message: "Auth session missing!" })).toBe(true);
+    expect(isErroAutenticacao({ status: 400, code: "refresh_token_not_found" })).toBe(true);
+  });
+
+  it("o hint da RPC prevalece sobre qualquer sinal de autenticação", () => {
+    const erro = {
+      code: "P0001",
+      status: 401,
+      hint: "sem_permissao",
+      message: "Unauthorized: sessão expirada, JWT expired",
+    };
+    expect(isErroAutenticacao(erro)).toBe(false);
+    expect(mapearErroRpc(erro).codigo).toBe("sem_permissao");
+  });
+
+  it("não decide autenticação pelo texto da mensagem", () => {
+    for (const message of ["JWT expired", "Unauthorized", "Sessão expirada", "invalid refresh token"]) {
+      expect(isErroAutenticacao({ message })).toBe(false);
+      expect(isErroAutenticacao(new Error(message))).toBe(false);
+    }
+    expect(isErroAutenticacao("JWT expired")).toBe(false);
+    expect(mapearErroRpc({ message: "Unauthorized" }).codigo).toBe("GENERICO");
+  });
+
+  it("erro de rede, 429 e 5xx não são erro de autenticação", () => {
+    expect(isErroAutenticacao(new TypeError("Failed to fetch"))).toBe(false);
+    expect(isErroAutenticacao({ status: 429 })).toBe(false);
+    expect(isErroAutenticacao({ status: 503 })).toBe(false);
+    expect(isErroAutenticacao(null)).toBe(false);
+  });
+});

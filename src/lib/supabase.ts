@@ -307,16 +307,28 @@ export async function realizarCheckin(
   };
 }
 
-// Helper para ler papel da equipe em membros_academia (com isolamento multi-tenant obrigatório por academia_id)
+export type VinculoEquipe =
+  | { tipo: "membro"; papel: UsuarioEquipe["papel"] }
+  | { tipo: "sem_vinculo" }
+  | { tipo: "erro"; erro: unknown };
+
+/**
+ * Lê o papel da equipe em membros_academia, sempre filtrando por academia_id.
+ * Não há papel por omissão: quem não tem vínculo ativo naquela academia não
+ * recebe papel nenhum, e falha de consulta não é tratada como vínculo.
+ * (O banco recusa de qualquer jeito com `sem_permissao`; isto evita que o
+ * front trate como equipe quem não é.)
+ */
 export async function resolverPapelEquipe(
   client: any,
   userId: string,
-  academiaId: string,
-  papelFallback: UsuarioEquipe["papel"] = "professor"
-): Promise<UsuarioEquipe["papel"]> {
-  if (!client || !academiaId) return papelFallback;
+  academiaId: string
+): Promise<VinculoEquipe> {
+  if (!client || !academiaId) {
+    return { tipo: "erro", erro: new Error("Cliente ou academia ausente") };
+  }
   try {
-    const { data: membro } = await client
+    const { data: membro, error } = await client
       .from("membros_academia")
       .select("papel")
       .eq("user_id", userId)
@@ -324,13 +336,16 @@ export async function resolverPapelEquipe(
       .eq("academia_id", academiaId)
       .maybeSingle();
 
-    if (membro?.papel) {
-      return membro.papel as UsuarioEquipe["papel"];
+    if (error) {
+      return { tipo: "erro", erro: error };
     }
+    if (membro?.papel) {
+      return { tipo: "membro", papel: membro.papel as UsuarioEquipe["papel"] };
+    }
+    return { tipo: "sem_vinculo" };
   } catch (e) {
-    console.warn("Falha ao consultar papel em membros_academia:", e);
+    return { tipo: "erro", erro: e };
   }
-  return papelFallback;
 }
 
 // Controle de sessão da equipe para o Totem
@@ -341,14 +356,20 @@ export async function obterSessaoEquipe(academiaId: string): Promise<UsuarioEqui
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) return null;
 
-    const papelFallback = (user.user_metadata?.papel as any) || "professor";
-    const papel = await resolverPapelEquipe(supabase, user.id, academiaId, papelFallback);
+    // Sem vínculo confirmado nesta academia, o totem pede login.
+    const vinculo = await resolverPapelEquipe(supabase, user.id, academiaId);
+    if (vinculo.tipo !== "membro") {
+      if (vinculo.tipo === "erro") {
+        console.warn("Falha ao consultar papel em membros_academia:", vinculo.erro);
+      }
+      return null;
+    }
 
     return {
       id: user.id,
       nome: user.user_metadata?.nome || user.email?.split("@")[0] || "Membro da Equipe",
       email: user.email || "",
-      papel,
+      papel: vinculo.papel,
     };
   }
   // Em desenvolvimento local, permite resgatar sessão do mock se estiver ativo
@@ -365,15 +386,29 @@ export async function loginEquipe(
   academiaId?: string
 ): Promise<{ sucesso: boolean; usuario?: UsuarioEquipe; mensagem?: string }> {
   if (supabase && senha) {
+    if (!academiaId) {
+      return { sucesso: false, mensagem: "A academia ainda não foi carregada. Recarregue a página e tente de novo." };
+    }
+
     const { data, error } = await supabase.auth.signInWithPassword({ email, password: senha });
     if (error) {
       return { sucesso: false, mensagem: error.message };
     }
     const user = data.user;
-    const papelFallback = (user.user_metadata?.papel as any) || papel;
-    const papelFinal = academiaId
-      ? await resolverPapelEquipe(supabase, user.id, academiaId, papelFallback)
-      : papelFallback;
+    const vinculo = await resolverPapelEquipe(supabase, user.id, academiaId);
+
+    if (vinculo.tipo !== "membro") {
+      // A senha confere, mas o login não é da equipe desta academia (ou não deu
+      // para confirmar): desfaz a sessão só neste aparelho e recusa.
+      await supabase.auth.signOut({ scope: "local" });
+      return {
+        sucesso: false,
+        mensagem:
+          vinculo.tipo === "sem_vinculo"
+            ? "Este login não faz parte da equipe desta academia."
+            : "Não foi possível confirmar seu vínculo com a academia. Verifique a conexão e tente de novo.",
+      };
+    }
 
     return {
       sucesso: true,
@@ -381,7 +416,7 @@ export async function loginEquipe(
         id: user.id,
         nome: user.user_metadata?.nome || email.split("@")[0],
         email: user.email || email,
-        papel: papelFinal,
+        papel: vinculo.papel,
       },
     };
   }
@@ -407,10 +442,40 @@ export async function logoutEquipe(): Promise<void> {
   sessaoEquipeMock = null;
 }
 
+// Códigos com que o Supabase Auth diz que o refresh token ou a sessão não
+// valem mais. Só eles (e os status abaixo) justificam deslogar o totem.
+const CODIGOS_REFRESH_DEFINITIVOS = new Set([
+  "refresh_token_not_found",
+  "refresh_token_already_used",
+  "session_not_found",
+  "session_expired",
+  "user_not_found",
+  "user_banned",
+  "bad_jwt",
+  "invalid_grant",
+]);
+
+/**
+ * A falha ao renovar a sessão é definitiva (credencial recusada) ou pode
+ * passar sozinha? Na dúvida é transitória: limite de requisições (429),
+ * tempo esgotado (408), 5xx, queda de rede e erro desconhecido mantêm a
+ * sessão e o totem tenta de novo com espera crescente.
+ */
+export function falhaDeRenovacaoEhDefinitiva(error: any): boolean {
+  if (!error || typeof error !== "object") return false;
+  if (error.name === "AuthSessionMissingError") return true;
+
+  const code = typeof error.code === "string" ? error.code.trim().toLowerCase() : "";
+  if (CODIGOS_REFRESH_DEFINITIVOS.has(code)) return true;
+
+  const status = error.status ?? error.statusCode;
+  return status === 400 || status === 401 || status === 403;
+}
+
 /**
  * Tenta renovar a sessão atual via refresh token (supabase.auth.refreshSession).
  * Evita deslogar o quiosque/totem quando o dispositivo acorda do modo de repouso (suspensão noturna).
- * Retorna ehTransitorio: true caso a falha seja de rede ou erro 5xx, evitando logout indevido.
+ * Retorna ehTransitorio: true para toda falha que não seja recusa de credencial.
  */
 export async function renovarSessao(): Promise<{
   sucesso: boolean;
@@ -421,33 +486,14 @@ export async function renovarSessao(): Promise<{
     try {
       const { data, error } = await supabase.auth.refreshSession();
       if (error) {
-        const status = (error as any).status || (error as any).statusCode;
-        const msg = (error.message || "").toLowerCase();
-        const ehTransitorio =
-          status === 500 ||
-          status === 502 ||
-          status === 503 ||
-          status === 504 ||
-          msg.includes("fetch") ||
-          msg.includes("network") ||
-          msg.includes("timeout") ||
-          (error as any).name === "AuthRetryableFetchError";
-
-        return { sucesso: false, ehTransitorio, erro: error };
+        return { sucesso: false, ehTransitorio: !falhaDeRenovacaoEhDefinitiva(error), erro: error };
       }
       if (!data?.session) {
         return { sucesso: false, ehTransitorio: false, erro: new Error("Sessão não retornada após renovação") };
       }
       return { sucesso: true };
     } catch (e: any) {
-      const msg = (e?.message || "").toLowerCase();
-      const ehTransitorio =
-        msg.includes("network") ||
-        msg.includes("fetch") ||
-        msg.includes("timeout") ||
-        e?.name === "AuthRetryableFetchError";
-
-      return { sucesso: false, ehTransitorio, erro: e };
+      return { sucesso: false, ehTransitorio: !falhaDeRenovacaoEhDefinitiva(e), erro: e };
     }
   }
 
@@ -458,4 +504,3 @@ export async function renovarSessao(): Promise<{
 
   return { sucesso: false, ehTransitorio: false, erro: new Error("Supabase não inicializado ou sem sessão ativa") };
 }
-

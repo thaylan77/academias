@@ -27,28 +27,35 @@ export interface ErroRpcMapeado {
   detalhesOriginais?: any;
 }
 
+// Códigos com que o PostgREST e o Supabase Auth recusam um JWT ou uma sessão.
+const CODIGOS_ERRO_AUTENTICACAO = new Set([
+  "pgrst301", // PostgREST: JWT expirado ou inválido
+  "pgrst303", // PostgREST: claims do JWT recusadas
+  "bad_jwt",
+  "no_authorization",
+  "session_not_found",
+  "session_expired",
+  "refresh_token_not_found",
+  "refresh_token_already_used",
+]);
+
 /**
- * Detecta se o erro decorre de sessão expirada, revogada ou token JWT inválido (401/Unauthorized).
- * Categoria especial que exige novo login da equipe sem retry infinito.
+ * Detecta sessão expirada, revogada ou JWT inválido, por status, código ou
+ * tipo do erro, nunca pelo texto da mensagem.
+ *
+ * Erro com `hint` é erro de negócio de uma RPC e é decidido pelo hint: nunca
+ * conta como falha de autenticação, mesmo que o texto fale em "unauthorized".
  */
 export function isErroAutenticacao(error: any): boolean {
-  if (!error) return false;
-  const status = error?.status || error?.statusCode || error?.code;
-  if (status === 401 || status === "401") return true;
+  if (!error || typeof error !== "object") return false;
+  if (typeof error.hint === "string" && error.hint.trim()) return false;
 
-  const msg = (typeof error === "string" ? error : error?.message || "").toLowerCase();
-  return (
-    msg.includes("jwt expired") ||
-    msg.includes("token is expired") ||
-    msg.includes("invalid jwt") ||
-    msg.includes("session expired") ||
-    msg.includes("sessão expirada") ||
-    msg.includes("sessao expirada") ||
-    msg.includes("unauthorized") ||
-    msg.includes("session from session_id claim") ||
-    msg.includes("auth session missing") ||
-    msg.includes("invalid refresh token")
-  );
+  const status = error.status ?? error.statusCode;
+  if (status === 401 || status === "401") return true;
+  if (error.name === "AuthSessionMissingError") return true;
+
+  const code = typeof error.code === "string" ? error.code.trim().toLowerCase() : error.code;
+  return code === 401 || code === "401" || CODIGOS_ERRO_AUTENTICACAO.has(code);
 }
 
 /**
@@ -71,8 +78,9 @@ export function isErroTransitorioTotem(erro: ErroRpcMapeado): boolean {
  * O código canônico da regra de negócio é emitido pelo banco exclusivamente em `error.hint`.
  *
  * Ordem de prioridade:
- * 1. Erro de autenticação (401/JWT expirado) -> sessão encerrada
- * 2. error.hint (código canônico emitido pela RPC via using hint = '<codigo>')
+ * 1. error.hint (código canônico emitido pela RPC via using hint = '<codigo>')
+ * 2. Erro de autenticação (401, PGRST301, sessão ausente) -> sessão encerrada.
+ *    Só vale para erro sem hint (ver isErroAutenticacao).
  * 3. error.code para constraints do PostgreSQL (ex. 23505 = unique_violation)
  * 4. Fallback genérico para erros de rede, timeout ou não mapeados.
  */
@@ -85,7 +93,8 @@ export function mapearErroRpc(error: any): ErroRpcMapeado {
     };
   }
 
-  // 1. Verificação de sessão/JWT expirado ou revogado
+  // Sessão/JWT expirado ou revogado. isErroAutenticacao devolve false para
+  // erro com hint, então o código de negócio da RPC sempre prevalece.
   if (isErroAutenticacao(error)) {
     return {
       codigo: "sessao_expirada",
