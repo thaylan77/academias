@@ -56,24 +56,30 @@ export async function obterAcademiaPublica(slug: string): Promise<AcademiaPublic
 // Helper unificado para realizar matrícula online
 export async function submeterMatriculaOnline(
   slug: string,
-  dados: MatriculaOnlinePayload
+  dados: MatriculaOnlinePayload,
+  captchaToken: string
 ): Promise<{ sucesso: boolean; matricula_id?: string; mensagem?: string; titulo?: string; acao?: string }> {
   if (supabase) {
     try {
-      const { data, error } = await (supabase.rpc as any)("matricula_online", {
-        p_slug: slug.toLowerCase().trim(),
-        p_dados: dados,
+      const { data, error } = await supabase.functions.invoke("matricula-online", {
+        body: { slug: slug.toLowerCase().trim(), dados, captchaToken },
       });
+
       if (error) {
-        const erroMapeado = mapearErroRpc(error);
-        return {
-          sucesso: false,
-          titulo: erroMapeado.titulo,
-          mensagem: erroMapeado.mensagem,
-          acao: erroMapeado.acaoSugerida,
-        };
+        throw error;
       }
-      return { sucesso: true, matricula_id: data as string };
+
+      if (data?.error) {
+         const erroMapeado = mapearErroRpc(data.error);
+         return {
+           sucesso: false,
+           titulo: erroMapeado.titulo,
+           mensagem: erroMapeado.mensagem,
+           acao: erroMapeado.acaoSugerida,
+         };
+      }
+
+      return { sucesso: true, matricula_id: data?.data as string };
     } catch (err: any) {
       const erroMapeado = mapearErroRpc(err);
       return {

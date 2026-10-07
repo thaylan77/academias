@@ -1,7 +1,6 @@
 import React, { useEffect, useState } from "react";
 import {
-  AcademiaPublica,
-  MatriculaOnlinePayload,
+  MatriculaOnlinePayload, AcademiaPublica, TurmaPublica, HorarioTurma, PlanoPublico
 } from "../../types/app";
 import { obterAcademiaPublica, submeterMatriculaOnline } from "../../lib/supabase";
 import {
@@ -13,6 +12,7 @@ import {
 } from "../../lib/utils";
 import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter } from "../../components/ui/card";
 import { Button } from "../../components/ui/button";
+import { Turnstile } from "@marsidev/react-turnstile";
 import { Input } from "../../components/ui/input";
 import { Label } from "../../components/ui/label";
 import { Badge } from "../../components/ui/badge";
@@ -40,6 +40,7 @@ export const MatriculaPage: React.FC<MatriculaPageProps> = ({ slug }) => {
   const [academia, setAcademia] = useState<AcademiaPublica | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
   const [submitting, setSubmitting] = useState<boolean>(false);
+  const [captchaToken, setCaptchaToken] = useState<string>("");
   const [erroMsg, setErroMsg] = useState<string | null>(null);
   const [sucessoProtocolo, setSucessoProtocolo] = useState<string | null>(null);
 
@@ -136,7 +137,7 @@ export const MatriculaPage: React.FC<MatriculaPageProps> = ({ slug }) => {
       turma_ids: turmasSelecionadas.length > 0 ? turmasSelecionadas : undefined,
     };
 
-    const res = await submeterMatriculaOnline(slug, payload);
+    const res = await submeterMatriculaOnline(slug, payload, captchaToken);
     setSubmitting(false);
 
     if (res.sucesso) {
@@ -331,7 +332,7 @@ export const MatriculaPage: React.FC<MatriculaPageProps> = ({ slug }) => {
                       </div>
 
                       <div className="space-y-1 mt-2 pt-2 border-t border-zinc-800/80">
-                        {turma.horarios.map((h, idx) => (
+                        {turma.horarios.map((h: HorarioTurma, idx: number) => (
                           <div key={idx} className="flex items-center gap-1.5 text-xs text-zinc-400">
                             <Clock className="w-3 h-3 text-red-400" />
                             <span>
@@ -590,6 +591,12 @@ export const MatriculaPage: React.FC<MatriculaPageProps> = ({ slug }) => {
                 Li e concordo expressamente com o <strong>Termo de Adesão</strong> e autorizo o envio dos meus dados para pré-matrícula na academia.
               </span>
             </label>
+            <div className="mt-4 flex justify-center">
+              <Turnstile
+                siteKey={import.meta.env.VITE_TURNSTILE_SITE_KEY || "1x00000000000000000000AA"}
+                onSuccess={(token) => setCaptchaToken(token)}
+              />
+            </div>
           </CardContent>
 
           <CardFooter className="pt-2">
