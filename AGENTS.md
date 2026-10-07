@@ -166,15 +166,16 @@ Plano, status e slug da academia só mudam via `service_role` (billing do SaaS).
 
 - **Claude**: único agente que escreve no repositório. Schema, RLS, specs,
   Edge Functions, front, testes, PRs e merge.
-- **Codex**: revisa os PRs, via plugin do Codex no Claude Code
-  (`adversarial-review` com foco). Não commita nem abre PR.
+- **Codex**: revisão final de todo PR, via plugin do Codex no Claude Code
+  (`adversarial-review` com foco), no head final. É dele a linha de
+  decisão. Não commita nem abre PR. Sem cota do Codex, o PR espera.
 - **Antigravity**: testes visuais manuais no navegador. Não commita nem abre
   PR; o que encontrar vira issue.
-- **Gemini** (plugin do Antigravity no Claude Code): segunda revisão, só
+- **Gemini** (plugin do Antigravity no Claude Code): primeira revisão, só
   leitura, apenas em PR de front e em PR de risco (financeiro,
-  segurança/RLS). A saída vai para o PR sem editar; cada bloqueador é
-  corrigido ou respondido no PR. Não decide o merge: a decisão é a linha do
-  Codex. O plugin fica fixo na versão auditada (`v0.3.0`); não atualizar sem
+  segurança/RLS). Aponta "possíveis problemas"; o Claude faz a triagem e
+  responde no PR. **Nunca decide o merge**, nem quando o Codex está sem
+  cota. O plugin fica fixo na versão auditada (`v0.3.0`); não atualizar sem
   nova auditoria, e nunca usar `delegate` nem o stop-review-gate.
 - Quem escreveu o PR não é quem revisa: o Claude escreve, o Codex decide a
   aprovação.
@@ -204,13 +205,16 @@ Plano, status e slug da academia só mudam via `service_role` (billing do SaaS).
   - `APROVADO: <sha>` aprova aquele commit, e só ele;
   - `MUDANÇAS: <sha>` pede correção; não é aprovação, mesmo "sem bloqueadores".
 - Push depois da aprovação invalida a aprovação: o head novo precisa de
-  nova revisão. Rebase também troca o sha.
+  nova revisão. Rebase também troca o sha. A única exceção é o merge de
+  `main` descrito abaixo.
 - Se `main` andar depois da aprovação: merge de `main` na branch (não
-  rebase) e nova rodada do Codex só para confirmar que o delta é esse merge,
-  com `APROVADO: <sha novo>`.
+  rebase). Sem conflito e com `git diff main...head` idêntico ao diff
+  aprovado, o Claude registra a verificação no PR e mescla sem nova rodada
+  do Codex. Com conflito resolvido ou diff diferente, Codex de novo.
 - Antes de mesclar, o Claude confere pela API, nesta ordem:
   1. o PR está **aberto** (não fechado nem já mesclado);
-  2. o head do PR é exatamente o sha da linha `APROVADO:`;
+  2. o head do PR é exatamente o sha da linha `APROVADO:` (ou um merge de
+     `main` sobre ele, verificado como acima);
   3. a base do PR é a esperada e não mudou desde a revisão de um jeito que
      altere o que foi aprovado;
   4. o CI `Banco` está verde nesse head, no push e no pull request.
