@@ -170,7 +170,8 @@ Plano, status e slug da academia só mudam via `service_role` (billing do SaaS).
 
 - **Claude**: único agente que escreve no repositório. Schema, RLS, specs,
   Edge Functions, front, testes, PRs e merge.
-- **Codex**: revisão final de todo PR, via plugin do Codex no Claude Code
+- **Codex**: revisão final de todo PR que muda código que roda (ver
+  "Revisão proporcional ao risco"), via plugin do Codex no Claude Code
   (`adversarial-review` com foco), no head final. É dele a linha de
   decisão. Não commita nem abre PR. Sem cota do Codex, o PR espera.
 - **Antigravity**: testes visuais manuais no navegador. Não commita nem abre
@@ -191,19 +192,35 @@ Plano, status e slug da academia só mudam via `service_role` (billing do SaaS).
 - Só para quem tiver Docker: existe **um só** Supabase local. Nunca suba um
   segundo, e confirme com quem coordena antes de `supabase db reset`.
 
+## Revisão proporcional ao risco
+
+| O PR muda | Revisão exigida | Quem libera o merge |
+|---|---|---|
+| **Código que roda**: `src/` fora de testes, `supabase/`, `.github/` | Codex, sempre. Antes dele, Gemini se for front ou risco (financeiro, segurança/RLS) | linha `APROVADO: <sha>` do Codex |
+| **Só testes** (`src/test/`, `supabase/tests/`) **ou só documentação** | Gemini e revisão do Claude, registradas no PR | o Claude, com CI verde |
+
+- Basta um arquivo de código que roda para o PR inteiro cair na primeira
+  linha. PR misto não é dividido para escapar do Codex.
+- Na dúvida sobre em qual linha um arquivo cai, vale a primeira.
+- No PR só de testes ou só de documentação, o Gemini é obrigatório (não
+  depende de ser front ou risco). Se ele estiver fora do ar ou sem cota, o
+  PR espera ou vai para o Codex; o Claude não aprova sozinho.
+- Nos dois casos o CI `Banco` (`testes` e `front`) precisa estar verde no
+  head, e a trava do `main` exige PR e branch atualizada.
+
 ## Revisão e merge
 
 - **Nada entra em `main` por commit direto**, nem mudança de regra neste
   arquivo, nem workflow, nem tipos: tudo por PR, com a branch atualizada.
-- **Só o Claude mescla PRs em `main`**, com squash, depois da aprovação do
-  Codex.
+- **Só o Claude mescla PRs em `main`**, com squash, depois da revisão
+  exigida para aquele PR ("Revisão proporcional ao risco").
 - O Claude roda a revisão do Codex pelo plugin, com a branch já atualizada
   com `main`, e publica a saída de cada rodada no PR **sem editar**. A linha
   de decisão é escrita pelo Codex, nunca pelo Claude.
 - Toda revisão externa roda por `scripts/revisao-externa.sh`: worktree
   descartável no head publicado e ambiente por lista de permissão (o revisor
   não herda variável de senha, token ou chave).
-- **Aprovação = última linha do comentário de revisão**, com o sha completo
+- No PR que exige Codex, **aprovação = última linha do comentário de revisão**, com o sha completo
   do head revisado (o plugin a devolve como item de lista, `- APROVADO:
   <sha>`; vale assim):
   - `APROVADO: <sha>` aprova aquele commit, e só ele;
@@ -218,7 +235,9 @@ Plano, status e slug da academia só mudam via `service_role` (billing do SaaS).
 - Antes de mesclar, o Claude confere pela API, nesta ordem:
   1. o PR está **aberto** (não fechado nem já mesclado);
   2. o head do PR é exatamente o sha da linha `APROVADO:` (ou um merge de
-     `main` sobre ele, verificado como acima);
+     `main` sobre ele, verificado como acima); no PR só de testes ou só de
+     documentação, no lugar disso: saída do Gemini e triagem publicadas, e
+     revisão do Claude registrada no head atual;
   3. a base do PR é a esperada e não mudou desde a revisão de um jeito que
      altere o que foi aprovado;
   4. o CI `Banco` está verde nesse head, no push e no pull request.
