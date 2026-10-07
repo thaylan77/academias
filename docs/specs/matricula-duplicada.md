@@ -54,7 +54,9 @@ raise exception 'O aluno já tem matrícula na turma "<nome>" neste período'
 
 ## 6. Dados existentes
 
-Antes de criar os gatilhos, a migration trava as duas tabelas e procura pares já duplicados. Se achar, **falha** com `hint = matricula_duplicada` e lista até 50 pares (academia, aluno, turma e as duas matrículas). Nada é corrigido sozinho: quem aplica decide qual matrícula de cada par cancelar ou encerrar e roda de novo.
+A migration cria os gatilhos e, **em seguida**, procura pares já duplicados. Se achar, **falha** com `hint = matricula_duplicada` e lista até 50 pares (academia, aluno, turma e as duas matrículas). Nada é corrigido sozinho: quem aplica decide qual matrícula de cada par cancelar ou encerrar e roda de novo.
+
+A conferência vem depois dos gatilhos de propósito: a partir da criação deles nenhuma duplicata nova entra, então o que a conferência não achar não existe. Não há `lock table` porque a CLI do Supabase não aplica a migration dentro de um bloco de transação explícito (o comando é recusado). A função e os gatilhos são recriados a cada execução (`create or replace`, `drop trigger if exists`), então rodar de novo depois de resolver os pares é seguro, mesmo que a primeira tentativa tenha deixado os gatilhos criados.
 
 ## 7. Testes
 
@@ -67,7 +69,7 @@ Antes de criar os gatilhos, a migration trava as duas tabelas e procura pares j�
 - a regra vale em cada academia e uma não interfere na outra;
 - pela API, como recepção, o erro é `matricula_duplicada`.
 
-A conferência dos dados existentes (seção 6) não cabe no pgTAP, que roda depois das migrations. Foi verificada à parte: com um par duplicado a migration falha listando o par e não cria os gatilhos; depois de cancelar uma das duas, aplica.
+A conferência dos dados existentes (seção 6) não cabe no pgTAP, que roda depois das migrations. Foi verificada à parte: com um par duplicado a migration falha listando o par; depois de cancelar uma das duas, aplica.
 
 A trava de concorrência é conferida só pela presença (`pg_locks`); duas sessões simultâneas não foram exercitadas.
 
