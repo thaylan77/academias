@@ -109,6 +109,22 @@ describe("Papel da equipe por academia (sem papel por omissão)", () => {
     expect(cliente.auth.signOut).not.toHaveBeenCalled();
   });
 
+  it("login: senha errada devolve a falha do Auth e não consulta o vínculo", async () => {
+    const cliente = clienteFalso({ data: { papel: "admin" }, error: null }, PROFESSOR_DA_A);
+    cliente.auth.signInWithPassword.mockResolvedValue({
+      data: { user: null },
+      error: { status: 400, code: "invalid_credentials", message: "Invalid login credentials" },
+    });
+    const lib = await carregarComCliente(cliente);
+
+    const res = await lib.loginEquipe("prof@a.test", "errada", "professor", "academia-a");
+
+    expect(res.sucesso).toBe(false);
+    expect(res.usuario).toBeUndefined();
+    expect(cliente.from).not.toHaveBeenCalled();
+    expect(cliente.auth.signOut).not.toHaveBeenCalled();
+  });
+
   it("login: sem academia carregada, nem tenta autenticar", async () => {
     const cliente = clienteFalso({ data: { papel: "admin" }, error: null }, PROFESSOR_DA_A);
     const lib = await carregarComCliente(cliente);
@@ -135,6 +151,17 @@ describe("Papel da equipe por academia (sem papel por omissão)", () => {
     const lib = await carregarComCliente(cliente);
 
     expect(await lib.obterSessaoEquipe("academia-b")).toBeNull();
+  });
+
+  it("sessão existente com falha na consulta do papel é mantida, sem papel presumido", async () => {
+    const cliente = clienteFalso(new Error("Failed to fetch"), PROFESSOR_DA_A);
+    const lib = await carregarComCliente(cliente);
+
+    const usuario = await lib.obterSessaoEquipe("academia-a");
+    expect(usuario).not.toBeNull();
+    expect(usuario?.id).toBe("user-a");
+    // O metadado diz "professor", mas sem confirmação no banco não há papel.
+    expect(usuario?.papel).toBeNull();
   });
 
   it("sessão existente de membro é aceita com o papel do banco", async () => {
@@ -172,12 +199,23 @@ describe("Falha ao renovar a sessão: só recusa de credencial desloga", () => {
   it.each([
     ["refresh token inexistente", { status: 400, code: "refresh_token_not_found", message: "Invalid Refresh Token" }],
     ["refresh token já usado", { status: 400, code: "refresh_token_already_used" }],
+    ["invalid_grant (OAuth)", { status: 400, code: "invalid_grant", message: "Invalid Refresh Token" }],
+    ["400 sem código", { status: 400, message: "Bad Request" }],
     ["sessão ausente", { name: "AuthSessionMissingError", message: "Auth session missing!" }],
     ["sessão encerrada no servidor", { status: 403, code: "session_not_found" }],
     ["usuário banido", { status: 403, code: "user_banned" }],
     ["401 sem código", { status: 401 }],
+    ["status como texto", { status: "403" }],
   ])("%s é definitivo", (_nome, erro) => {
     expect(lib.falhaDeRenovacaoEhDefinitiva(erro)).toBe(true);
+  });
+
+  it("renovarSessao: sessão nova devolvida é sucesso", async () => {
+    const cliente: any = clienteFalso({ data: null, error: null });
+    cliente.auth.refreshSession = vi.fn().mockResolvedValue({ data: { session: { access_token: "novo" } }, error: null });
+    const comCliente = await carregarComCliente(cliente);
+
+    expect(await comCliente.renovarSessao()).toEqual({ sucesso: true });
   });
 
   it("renovarSessao: 429 mantém a sessão (transitório)", async () => {

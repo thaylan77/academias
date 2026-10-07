@@ -16,7 +16,7 @@ import {
   segundosAteRenovar,
   tokenAindaExibivel,
 } from "../../lib/token-checkin";
-import { AcademiaPublica, TurmaAbertaTotem, UsuarioEquipe } from "../../types/app";
+import { AcademiaPublica, MembroEquipePapel, TurmaAbertaTotem, UsuarioEquipe } from "../../types/app";
 import { QRGenerator } from "../../components/qr/qr-generator";
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "../../components/ui/card";
 import { Badge } from "../../components/ui/badge";
@@ -67,6 +67,10 @@ export const TotemPage: React.FC<TotemPageProps> = ({ slug, onSessionChange }) =
 
   const tentativasFalhasRef = useRef<number>(0);
   tentativasFalhasRef.current = tentativasFalhas;
+  // Tokens em exibição, lidos pelo ciclo para preservar o que ainda vale.
+  const tokensRef = useRef<Record<string, TokenRecebido>>({});
+  tokensRef.current = tokens;
+
   // Trava do ciclo. É atribuída de forma síncrona dentro de atualizarCiclo:
   // se dependesse da renderização, duas chamadas no mesmo instante passariam.
   const carregandoCicloRef = useRef<boolean>(false);
@@ -117,12 +121,15 @@ export const TotemPage: React.FC<TotemPageProps> = ({ slug, onSessionChange }) =
             let erroDeSessao: unknown = null;
 
             // Os tokens de todas as turmas são pedidos ao mesmo tempo. O prazo de
-            // exibição conta do instante do pedido, no relógio monotônico.
+            // exibição conta do instante do pedido.
             const pedidoEm = relogio.agora();
             const resultados = await Promise.allSettled(
               abertas.map((turma) => emitirTokenCheckin(turma.id))
             );
-            const agoraRelogioParede = Date.now();
+
+            const agora = relogio.agora();
+            let falhasSemCodigo = 0;
+            let primeiraFalhaSemCodigo: unknown = null;
 
             abertas.forEach((turma, i) => {
               const resultado = resultados[i];
@@ -130,18 +137,36 @@ export const TotemPage: React.FC<TotemPageProps> = ({ slug, onSessionChange }) =
                 const erroTurma = mapearErroRpc(resultado.reason);
                 if (erroTurma.codigo === "sessao_expirada") {
                   erroDeSessao = erroDeSessao ?? resultado.reason;
-                } else {
-                  novoMapaErros[turma.id] = erroTurma;
+                  return;
                 }
+                if (erroTurma.codigo === "GENERICO") {
+                  // Falha sem código de negócio (rede, 5xx, limite de requisições).
+                  falhasSemCodigo++;
+                  primeiraFalhaSemCodigo = primeiraFalhaSemCodigo ?? resultado.reason;
+                  // O QR que está na tela continua valendo até o prazo dele: não
+                  // some por causa de uma renovação que falhou.
+                  const anterior = tokensRef.current[turma.id];
+                  if (tokenAindaExibivel(anterior, agora)) {
+                    novoMapaTokens[turma.id] = anterior;
+                    // Tenta de novo antes de ele sair da tela.
+                    menorTempoRestante = Math.min(
+                      menorTempoRestante,
+                      segundosAteRenovar(anterior, agora)
+                    );
+                    return;
+                  }
+                }
+                novoMapaErros[turma.id] = erroTurma;
                 return;
               }
 
               const info = resultado.value;
               if (info && info.token) {
-                novoMapaTokens[turma.id] = { info, exibirAte: prazoExibicaoToken(info, pedidoEm) };
+                const recebido = { info, exibirAte: prazoExibicaoToken(info, pedidoEm) };
+                novoMapaTokens[turma.id] = recebido;
                 menorTempoRestante = Math.min(
                   menorTempoRestante,
-                  segundosAteRenovar(info, agoraRelogioParede)
+                  segundosAteRenovar(recebido, agora)
                 );
               } else {
                 novoMapaErros[turma.id] = {
@@ -156,6 +181,13 @@ export const TotemPage: React.FC<TotemPageProps> = ({ slug, onSessionChange }) =
             // Sessão expirada em qualquer turma: trata no catch (renova ou desloga).
             if (erroDeSessao) {
               throw erroDeSessao;
+            }
+
+            // Nenhum token veio e todas as falhas são sem código de negócio: é
+            // queda de conexão, não problema de uma turma. Trata no catch, que
+            // mantém o que está na tela e reconecta com espera crescente.
+            if (falhasSemCodigo === abertas.length) {
+              throw primeiraFalhaSemCodigo;
             }
 
             setTokens(novoMapaTokens);
@@ -298,7 +330,7 @@ export const TotemPage: React.FC<TotemPageProps> = ({ slug, onSessionChange }) =
     e?: React.FormEvent,
     emailDemo?: string,
     senhaDemo?: string,
-    papelOverride?: UsuarioEquipe["papel"]
+    papelOverride?: MembroEquipePapel
   ) => {
     if (e) e.preventDefault();
     setErroLogin(null);
@@ -473,7 +505,7 @@ export const TotemPage: React.FC<TotemPageProps> = ({ slug, onSessionChange }) =
             </Badge>
             <span className="text-xs text-zinc-400 flex items-center gap-1 ml-2 font-mono">
               <UserCheck className="w-3.5 h-3.5 text-red-500" />
-              Operador: <strong className="text-white">{usuarioEquipe.nome}</strong> ({usuarioEquipe.papel})
+              Operador: <strong className="text-white">{usuarioEquipe.nome}</strong> ({usuarioEquipe.papel ?? "papel não confirmado"})
             </span>
           </div>
           <h2 className="text-2xl font-black text-white tracking-tight mt-1">
@@ -624,8 +656,8 @@ export const TotemPage: React.FC<TotemPageProps> = ({ slug, onSessionChange }) =
           )}
           <div className={`grid gap-6 ${turmasAbertas.length === 1 ? "max-w-md mx-auto" : "grid-cols-1 md:grid-cols-2"}`}>
             {turmasAbertas.map((turma) => {
-              // A validade na tela usa o prazo contado no relógio monotônico, não a
-              // hora do aparelho: totem com relógio errado continua mostrando o QR.
+              // A validade na tela usa o tempo decorrido desde o pedido, não a hora
+              // do aparelho: totem com relógio errado continua mostrando o QR.
               const tokenRecebido = tokens[turma.id];
               const tokenValido = tokenAindaExibivel(tokenRecebido, relogio.agora());
               const tokenExpirado = !!tokenRecebido && !tokenValido;

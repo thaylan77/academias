@@ -28,8 +28,10 @@ export interface ErroRpcMapeado {
 }
 
 // Códigos com que o PostgREST e o Supabase Auth recusam um JWT ou uma sessão.
+// O erro de RPC (PostgrestError) não traz o status HTTP: a decisão é pelo código.
 const CODIGOS_ERRO_AUTENTICACAO = new Set([
   "pgrst301", // PostgREST: JWT expirado ou inválido
+  "pgrst302", // PostgREST: requisição sem autenticação
   "pgrst303", // PostgREST: claims do JWT recusadas
   "bad_jwt",
   "no_authorization",
@@ -43,19 +45,22 @@ const CODIGOS_ERRO_AUTENTICACAO = new Set([
  * Detecta sessão expirada, revogada ou JWT inválido, por status, código ou
  * tipo do erro, nunca pelo texto da mensagem.
  *
- * Erro com `hint` é erro de negócio de uma RPC e é decidido pelo hint: nunca
- * conta como falha de autenticação, mesmo que o texto fale em "unauthorized".
+ * Os códigos da lista vêm do PostgREST e do Auth, nunca de um `raise
+ * exception` nosso, então valem mesmo que o erro traga `hint`. Fora deles,
+ * erro com `hint` é erro de negócio de uma RPC e é decidido pelo hint: não
+ * conta como falha de autenticação, mesmo com status 401 ou texto
+ * "unauthorized".
  */
 export function isErroAutenticacao(error: any): boolean {
   if (!error || typeof error !== "object") return false;
-  if (typeof error.hint === "string" && error.hint.trim()) return false;
-
-  const status = error.status ?? error.statusCode;
-  if (status === 401 || status === "401") return true;
-  if (error.name === "AuthSessionMissingError") return true;
 
   const code = typeof error.code === "string" ? error.code.trim().toLowerCase() : error.code;
-  return code === 401 || code === "401" || CODIGOS_ERRO_AUTENTICACAO.has(code);
+  if (CODIGOS_ERRO_AUTENTICACAO.has(code)) return true;
+  if (typeof error.hint === "string" && error.hint.trim()) return false;
+
+  if (error.name === "AuthSessionMissingError") return true;
+  const status = Number(error.status ?? error.statusCode);
+  return status === 401 || Number(code) === 401;
 }
 
 /**

@@ -5,6 +5,7 @@ import {
   MatriculaOnlinePayload,
   CheckinResultado,
   UsuarioEquipe,
+  MembroEquipePapel,
   TurmaAbertaTotem,
   TokenCheckinInfo,
 } from "../types/app";
@@ -308,7 +309,7 @@ export async function realizarCheckin(
 }
 
 export type VinculoEquipe =
-  | { tipo: "membro"; papel: UsuarioEquipe["papel"] }
+  | { tipo: "membro"; papel: MembroEquipePapel }
   | { tipo: "sem_vinculo" }
   | { tipo: "erro"; erro: unknown };
 
@@ -340,7 +341,7 @@ export async function resolverPapelEquipe(
       return { tipo: "erro", erro: error };
     }
     if (membro?.papel) {
-      return { tipo: "membro", papel: membro.papel as UsuarioEquipe["papel"] };
+      return { tipo: "membro", papel: membro.papel as MembroEquipePapel };
     }
     return { tipo: "sem_vinculo" };
   } catch (e) {
@@ -356,20 +357,23 @@ export async function obterSessaoEquipe(academiaId: string): Promise<UsuarioEqui
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) return null;
 
-    // Sem vínculo confirmado nesta academia, o totem pede login.
     const vinculo = await resolverPapelEquipe(supabase, user.id, academiaId);
-    if (vinculo.tipo !== "membro") {
-      if (vinculo.tipo === "erro") {
-        console.warn("Falha ao consultar papel em membros_academia:", vinculo.erro);
-      }
-      return null;
+
+    // Sem vínculo nesta academia, o totem pede login.
+    if (vinculo.tipo === "sem_vinculo") return null;
+
+    // Não deu para consultar (rede, 5xx): a sessão existente é mantida, mas sem
+    // papel. Nenhum papel é presumido; as RPCs do banco continuam decidindo o
+    // acesso, e um totem que religa durante uma oscilação não cai no login.
+    if (vinculo.tipo === "erro") {
+      console.warn("Falha ao consultar papel em membros_academia:", vinculo.erro);
     }
 
     return {
       id: user.id,
       nome: user.user_metadata?.nome || user.email?.split("@")[0] || "Membro da Equipe",
       email: user.email || "",
-      papel: vinculo.papel,
+      papel: vinculo.tipo === "membro" ? vinculo.papel : null,
     };
   }
   // Em desenvolvimento local, permite resgatar sessão do mock se estiver ativo
@@ -382,7 +386,7 @@ export async function obterSessaoEquipe(academiaId: string): Promise<UsuarioEqui
 export async function loginEquipe(
   email: string,
   senha?: string,
-  papel: UsuarioEquipe["papel"] = "professor",
+  papel: MembroEquipePapel = "professor",
   academiaId?: string
 ): Promise<{ sucesso: boolean; usuario?: UsuarioEquipe; mensagem?: string }> {
   if (supabase && senha) {
@@ -468,7 +472,7 @@ export function falhaDeRenovacaoEhDefinitiva(error: any): boolean {
   const code = typeof error.code === "string" ? error.code.trim().toLowerCase() : "";
   if (CODIGOS_REFRESH_DEFINITIVOS.has(code)) return true;
 
-  const status = error.status ?? error.statusCode;
+  const status = Number(error.status ?? error.statusCode);
   return status === 400 || status === 401 || status === 403;
 }
 

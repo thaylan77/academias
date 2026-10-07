@@ -158,4 +158,26 @@ describe("Centralizador de Tratamento de Erros de RPC (mapearErroRpc)", () => {
     expect(isErroAutenticacao({ status: 503 })).toBe(false);
     expect(isErroAutenticacao(null)).toBe(false);
   });
+
+  it("código de autenticação do PostgREST vale mesmo que o erro traga hint", () => {
+    // O PostgREST pode mandar hint próprio; esses códigos nunca vêm de raise exception nosso.
+    const erro = { code: "PGRST301", message: "JWT expired", hint: "Faça login de novo" };
+    expect(isErroAutenticacao(erro)).toBe(true);
+    expect(mapearErroRpc(erro).codigo).toBe("sessao_expirada");
+  });
+
+  it("requisição sem autenticação (PGRST302) é erro de autenticação; PGRST300 não", () => {
+    expect(isErroAutenticacao({ code: "PGRST302", message: "Anonymous access is disabled" })).toBe(true);
+    expect(isErroAutenticacao({ code: "PGRST300", message: "Server lacks JWT secret" })).toBe(false);
+  });
+
+  it("aceita status 401 como número ou texto", () => {
+    expect(isErroAutenticacao({ status: "401" })).toBe(true);
+    expect(isErroAutenticacao({ statusCode: 401 })).toBe(true);
+  });
+
+  it("hint que não é código conhecido cai no genérico, sem virar código", () => {
+    const resultado = mapearErroRpc({ code: "42883", message: "function does not exist", hint: "No function matches" });
+    expect(resultado.codigo).toBe("GENERICO");
+  });
 });
