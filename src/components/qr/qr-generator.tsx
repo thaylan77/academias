@@ -72,7 +72,7 @@ export const QRGenerator: React.FC<QRGeneratorProps> = ({
           <a
             href={value}
             target="_blank"
-            rel="noreferrer"
+            rel="noopener noreferrer"
             className="inline-flex"
           >
             <Button
