@@ -4,6 +4,7 @@ import {
   formatarTelefone,
   formatarMoeda,
   calcularIdade,
+  formatarDiaSemana,
 } from "../lib/utils";
 
 describe("Funções Utilitárias e Validações", () => {
@@ -36,5 +37,15 @@ describe("Funções Utilitárias e Validações", () => {
     const dataNascMenor = `${anoAtual - 10}-01-01`;
     const idadeMenor = calcularIdade(dataNascMenor);
     expect(idadeMenor).toBeLessThan(18);
+  });
+
+  it("deve retornar o dia da semana correto baseado no índice", () => {
+    expect(formatarDiaSemana(0)).toBe("Domingo");
+    expect(formatarDiaSemana(3)).toBe("Quarta-feira");
+    expect(formatarDiaSemana(6)).toBe("Sábado");
+
+    // Invalid days
+    expect(formatarDiaSemana(7)).toBe("");
+    expect(formatarDiaSemana(-1)).toBe("");
   });
 });
