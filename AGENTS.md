@@ -1,6 +1,7 @@
 # Honor Team SaaS — instruções para agentes
 
 Este arquivo vale para todos os agentes (Claude Code, Codex, Antigravity).
+Só o Claude escreve no repositório; veja "Divisão entre agentes".
 Responda, comente código e escreva mensagens de commit em **português**.
 
 ## Produto
@@ -161,48 +162,63 @@ Plano, status e slug da academia só mudam via `service_role` (billing do SaaS).
   `docs/specs/checkin-seguranca.md`.
 - Commits no padrão Conventional Commits: `feat(checkin): ...`, `fix(rls): ...`.
 
-## Trabalho em paralelo entre agentes
+## Divisão entre agentes
 
-- Uma branch por tarefa, prefixada pelo agente: `claude/rls-cobrancas`,
-  `codex/crud-turmas`, `antigravity/tela-checkin`. Prefira `git worktree`.
-- Cada agente trabalha **só no próprio worktree**, pastas irmãs do repositório:
-  `../honorteam-claude`, `../honorteam-codex`, `../honorteam-antigravity`.
-  A pasta original (`academias`) fica parada em `main`: ninguém edita,
-  commita nem troca de branch nela.
-- Só **um** agente mexe em `supabase/migrations/` por vez.
-- Só para quem tiver Docker: existe **um só** Supabase local, compartilhado
-  por todos os worktrees. Nunca suba um segundo (`supabase start` em outro
-  worktree disputa as mesmas portas). Só **um** agente roda
-  `supabase db reset` por vez: confirme com quem coordena antes de rodar,
-  porque o reset apaga os dados que os outros agentes estão usando.
-- Divisão padrão:
-  - **Claude**: schema, RLS, specs de módulo, revisão de PR.
-  - **Codex**: CRUDs, Edge Functions, testes.
-  - **Antigravity**: telas e validação no navegador.
-- Quem escreveu o PR não é quem revisa.
+- **Claude**: único agente que escreve no repositório. Schema, RLS, specs,
+  Edge Functions, front, testes, PRs e merge.
+- **Codex**: revisão final de todo PR, via plugin do Codex no Claude Code
+  (`adversarial-review` com foco), no head final. É dele a linha de
+  decisão. Não commita nem abre PR. Sem cota do Codex, o PR espera.
+- **Antigravity**: testes visuais manuais no navegador. Não commita nem abre
+  PR; o que encontrar vira issue.
+- **Gemini** (plugin do Antigravity no Claude Code): primeira revisão, só
+  leitura, apenas em PR de front e em PR de risco (financeiro,
+  segurança/RLS). Aponta "possíveis problemas"; o Claude faz a triagem e
+  responde no PR. **Nunca decide o merge**, nem quando o Codex está sem
+  cota. O plugin fica fixo na versão auditada (`v0.3.0`); não atualizar sem
+  nova auditoria, e nunca usar `delegate` nem o stop-review-gate.
+- Quem escreveu o PR não é quem revisa: o Claude escreve, o Codex decide a
+  aprovação.
+- Uma branch por issue: `claude/<número-da-issue>`. O Claude trabalha só no
+  worktree `../honorteam-claude`. A pasta original (`academias`) fica parada
+  em `main`: ninguém edita, commita nem troca de branch nela.
+- O fluxo completo de uma issue está no comando `/entregar <número>`
+  (`.claude/commands/entregar.md`).
+- Só para quem tiver Docker: existe **um só** Supabase local. Nunca suba um
+  segundo, e confirme com quem coordena antes de `supabase db reset`.
 
 ## Revisão e merge
 
 - **Nada entra em `main` por commit direto**, nem mudança de regra neste
   arquivo, nem workflow, nem tipos: tudo por PR, com a branch atualizada.
-- **Só o Claude mescla PRs em `main`.** Nenhum outro agente mescla, nem o
-  próprio PR, nem com o CI verde. PR do próprio Claude é revisado pelo Codex
-  e mesclado pelo Claude depois da aprovação.
+- **Só o Claude mescla PRs em `main`**, com squash, depois da aprovação do
+  Codex.
+- O Claude roda a revisão do Codex pelo plugin, com a branch já atualizada
+  com `main`, e publica a saída de cada rodada no PR **sem editar**. A linha
+  de decisão é escrita pelo Codex, nunca pelo Claude.
+- Toda revisão externa roda por `scripts/revisao-externa.sh`: worktree
+  descartável no head publicado e ambiente por lista de permissão (o revisor
+  não herda variável de senha, token ou chave).
 - **Aprovação = última linha do comentário de revisão**, com o sha completo
-  do head revisado:
+  do head revisado (o plugin a devolve como item de lista, `- APROVADO:
+  <sha>`; vale assim):
   - `APROVADO: <sha>` aprova aquele commit, e só ele;
   - `MUDANÇAS: <sha>` pede correção; não é aprovação, mesmo "sem bloqueadores".
 - Push depois da aprovação invalida a aprovação: o head novo precisa de
-  nova revisão. Rebase também troca o sha.
+  nova revisão. Rebase também troca o sha. A única exceção é o merge de
+  `main` descrito abaixo.
+- Se `main` andar depois da aprovação: merge de `main` na branch (não
+  rebase). Sem conflito e com `git diff main...head` idêntico ao diff
+  aprovado, o Claude registra a verificação no PR e mescla sem nova rodada
+  do Codex. Com conflito resolvido ou diff diferente, Codex de novo.
 - Antes de mesclar, o Claude confere pela API, nesta ordem:
   1. o PR está **aberto** (não fechado nem já mesclado);
-  2. o head do PR é exatamente o sha da linha `APROVADO:`;
+  2. o head do PR é exatamente o sha da linha `APROVADO:` (ou um merge de
+     `main` sobre ele, verificado como acima);
   3. a base do PR é a esperada e não mudou desde a revisão de um jeito que
      altere o que foi aprovado;
   4. o CI `Banco` está verde nesse head, no push e no pull request.
   Se qualquer item falhar, não mescla e avisa.
-- PR empilhado (base em outra branch de feature): o merge na branch base
-  segue as mesmas regras, e a branch base só vai para `main` depois.
 
 ## Checklist antes de abrir PR
 
