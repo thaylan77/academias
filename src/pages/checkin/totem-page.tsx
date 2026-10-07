@@ -8,8 +8,15 @@ import {
   obterTurmasAbertasTotem,
   emitirTokenCheckin,
 } from "../../lib/supabase";
-import { mapearErroRpc, ErroRpcMapeado, isErroTransitorioTotem, isErroAutenticacao } from "../../lib/rpc-errors";
-import { AcademiaPublica, TurmaAbertaTotem, TokenCheckinInfo, UsuarioEquipe } from "../../types/app";
+import { mapearErroRpc, ErroRpcMapeado, isErroTransitorioTotem } from "../../lib/rpc-errors";
+import {
+  TokenRecebido,
+  prazoExibicaoToken,
+  relogio,
+  segundosAteRenovar,
+  tokenAindaExibivel,
+} from "../../lib/token-checkin";
+import { AcademiaPublica, MembroEquipePapel, TurmaAbertaTotem, UsuarioEquipe } from "../../types/app";
 import { QRGenerator } from "../../components/qr/qr-generator";
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "../../components/ui/card";
 import { Badge } from "../../components/ui/badge";
@@ -43,9 +50,12 @@ export const TotemPage: React.FC<TotemPageProps> = ({ slug, onSessionChange }) =
   const [academia, setAcademia] = useState<AcademiaPublica | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
   const [turmasAbertas, setTurmasAbertas] = useState<TurmaAbertaTotem[]>([]);
-  const [tokens, setTokens] = useState<Record<string, TokenCheckinInfo>>({});
+  const [tokens, setTokens] = useState<Record<string, TokenRecebido>>({});
   const [currentTime, setCurrentTime] = useState<string>("");
   const [isFullScreen, setIsFullScreen] = useState<boolean>(false);
+  // Segundos até o próximo ciclo. O que ele significa depende de statusConexao:
+  // renovação do token (conectado), nova tentativa (reconectando) ou nova
+  // checagem (bloqueado). Os rótulos da tela escolhem o texto pelo status.
   const [segundosRestantes, setSegundosRestantes] = useState<number>(30);
 
   // Estados de erro e resiliência das RPCs do totem
@@ -57,8 +67,13 @@ export const TotemPage: React.FC<TotemPageProps> = ({ slug, onSessionChange }) =
 
   const tentativasFalhasRef = useRef<number>(0);
   tentativasFalhasRef.current = tentativasFalhas;
+  // Tokens em exibição, lidos pelo ciclo para preservar o que ainda vale.
+  const tokensRef = useRef<Record<string, TokenRecebido>>({});
+  tokensRef.current = tokens;
+
+  // Trava do ciclo. É atribuída de forma síncrona dentro de atualizarCiclo:
+  // se dependesse da renderização, duas chamadas no mesmo instante passariam.
   const carregandoCicloRef = useRef<boolean>(false);
-  carregandoCicloRef.current = carregandoCiclo;
 
   // Estado de autenticação da equipe (sem credenciais hardcoded)
   const [usuarioEquipe, setUsuarioEquipe] = useState<UsuarioEquipe | null>(null);
@@ -84,6 +99,7 @@ export const TotemPage: React.FC<TotemPageProps> = ({ slug, onSessionChange }) =
   // Função centralizada para atualizar turmas abertas e tokens com controle de resiliência e renovação de sessão
   const atualizarCiclo = async () => {
     if (!academia || carregandoCicloRef.current) return;
+    carregandoCicloRef.current = true;
     setCarregandoCiclo(true);
     try {
       let executou = false;
@@ -94,41 +110,81 @@ export const TotemPage: React.FC<TotemPageProps> = ({ slug, onSessionChange }) =
         try {
           const abertas = await obterTurmasAbertasTotem(academia.id);
           setTurmasAbertas(abertas);
-          setErroTotem(null);
-          setStatusConexao("conectado");
-          setTentativasFalhas(0);
 
           if (abertas.length > 0) {
-            const novoMapaTokens: Record<string, TokenCheckinInfo> = {};
+            const novoMapaTokens: Record<string, TokenRecebido> = {};
             const novoMapaErros: Record<string, ErroRpcMapeado> = {};
             let menorTempoRestante = 30;
+            let erroDeSessao: unknown = null;
 
-            for (const turma of abertas) {
-              try {
-                const info = await emitirTokenCheckin(turma.id);
-                if (info && info.token) {
-                  novoMapaTokens[turma.id] = info;
-                  if (info.expira_em) {
-                    const ms = new Date(info.expira_em).getTime() - Date.now();
-                    const segs = Math.max(1, Math.floor(ms / 1000));
-                    menorTempoRestante = Math.min(menorTempoRestante, segs);
-                  } else if (info.periodo_segundos) {
-                    menorTempoRestante = Math.min(menorTempoRestante, info.periodo_segundos);
+            // Os tokens de todas as turmas são pedidos ao mesmo tempo. O prazo de
+            // exibição conta do instante do pedido.
+            const pedidoEm = relogio.agora();
+            const resultados = await Promise.allSettled(
+              abertas.map((turma) => emitirTokenCheckin(turma.id))
+            );
+
+            const agora = relogio.agora();
+            let falhasSemCodigo = 0;
+            let primeiraFalhaSemCodigo: unknown = null;
+
+            abertas.forEach((turma, i) => {
+              const resultado = resultados[i];
+              if (resultado.status === "rejected") {
+                const erroTurma = mapearErroRpc(resultado.reason);
+                if (erroTurma.codigo === "sessao_expirada") {
+                  erroDeSessao = erroDeSessao ?? resultado.reason;
+                  return;
+                }
+                if (erroTurma.codigo === "GENERICO") {
+                  // Falha sem código de negócio (rede, 5xx, limite de requisições).
+                  falhasSemCodigo++;
+                  primeiraFalhaSemCodigo = primeiraFalhaSemCodigo ?? resultado.reason;
+                  // O QR que está na tela continua valendo até o prazo dele: não
+                  // some por causa de uma renovação que falhou.
+                  const anterior = tokensRef.current[turma.id];
+                  if (tokenAindaExibivel(anterior, agora)) {
+                    novoMapaTokens[turma.id] = anterior;
+                    // Tenta de novo antes de ele sair da tela.
+                    menorTempoRestante = Math.min(
+                      menorTempoRestante,
+                      segundosAteRenovar(anterior, agora)
+                    );
+                    return;
                   }
-                } else {
-                  novoMapaErros[turma.id] = {
-                    codigo: "GENERICO",
-                    titulo: "Token Indisponível",
-                    mensagem: "Não foi possível emitir o token de check-in para esta turma.",
-                    acaoSugerida: "Aguarde a próxima renovação.",
-                  };
                 }
-              } catch (errTurma: any) {
-                if (isErroAutenticacao(errTurma)) {
-                  throw errTurma;
-                }
-                novoMapaErros[turma.id] = mapearErroRpc(errTurma);
+                novoMapaErros[turma.id] = erroTurma;
+                return;
               }
+
+              const info = resultado.value;
+              if (info && info.token) {
+                const recebido = { info, exibirAte: prazoExibicaoToken(info, pedidoEm) };
+                novoMapaTokens[turma.id] = recebido;
+                menorTempoRestante = Math.min(
+                  menorTempoRestante,
+                  segundosAteRenovar(recebido, agora)
+                );
+              } else {
+                novoMapaErros[turma.id] = {
+                  codigo: "GENERICO",
+                  titulo: "Token Indisponível",
+                  mensagem: "Não foi possível emitir o token de check-in para esta turma.",
+                  acaoSugerida: "Aguarde a próxima renovação.",
+                };
+              }
+            });
+
+            // Sessão expirada em qualquer turma: trata no catch (renova ou desloga).
+            if (erroDeSessao) {
+              throw erroDeSessao;
+            }
+
+            // Nenhum token veio e todas as falhas são sem código de negócio: é
+            // queda de conexão, não problema de uma turma. Trata no catch, que
+            // mantém o que está na tela e reconecta com espera crescente.
+            if (falhasSemCodigo === abertas.length) {
+              throw primeiraFalhaSemCodigo;
             }
 
             setTokens(novoMapaTokens);
@@ -139,10 +195,18 @@ export const TotemPage: React.FC<TotemPageProps> = ({ slug, onSessionChange }) =
             setErrosTokens({});
             setSegundosRestantes(30);
           }
+
+          // Só aqui o ciclo deu certo por inteiro (turmas e tokens). Zerar a
+          // contagem de falhas antes da emissão dos tokens faria a espera
+          // crescente recomeçar em 5 s a cada ciclo em que só a emissão falha.
+          setErroTotem(null);
+          setStatusConexao("conectado");
+          setTentativasFalhas(0);
           executou = true;
         } catch (err: any) {
           const erroMapeado = mapearErroRpc(err);
-          const ehAuth = isErroAutenticacao(err) || erroMapeado.codigo === "sessao_expirada";
+          // mapearErroRpc decide pelo hint primeiro: erro de negócio nunca vira sessão expirada.
+          const ehAuth = erroMapeado.codigo === "sessao_expirada";
 
           // Categoria 3: Erro de autenticação (sessão expirada/revogada, 401/JWT)
           // Dispositivo que acorda de repouso: tenta renovar via refresh token antes de deslogar.
@@ -221,6 +285,7 @@ export const TotemPage: React.FC<TotemPageProps> = ({ slug, onSessionChange }) =
         }
       }
     } finally {
+      carregandoCicloRef.current = false;
       setCarregandoCiclo(false);
     }
   };
@@ -269,7 +334,7 @@ export const TotemPage: React.FC<TotemPageProps> = ({ slug, onSessionChange }) =
     e?: React.FormEvent,
     emailDemo?: string,
     senhaDemo?: string,
-    papelOverride?: UsuarioEquipe["papel"]
+    papelOverride?: MembroEquipePapel
   ) => {
     if (e) e.preventDefault();
     setErroLogin(null);
@@ -444,7 +509,7 @@ export const TotemPage: React.FC<TotemPageProps> = ({ slug, onSessionChange }) =
             </Badge>
             <span className="text-xs text-zinc-400 flex items-center gap-1 ml-2 font-mono">
               <UserCheck className="w-3.5 h-3.5 text-red-500" />
-              Operador: <strong className="text-white">{usuarioEquipe.nome}</strong> ({usuarioEquipe.papel})
+              Operador: <strong className="text-white">{usuarioEquipe.nome}</strong> ({usuarioEquipe.papel ?? "papel não confirmado"})
             </span>
           </div>
           <h2 className="text-2xl font-black text-white tracking-tight mt-1">
@@ -595,12 +660,12 @@ export const TotemPage: React.FC<TotemPageProps> = ({ slug, onSessionChange }) =
           )}
           <div className={`grid gap-6 ${turmasAbertas.length === 1 ? "max-w-md mx-auto" : "grid-cols-1 md:grid-cols-2"}`}>
             {turmasAbertas.map((turma) => {
-              const tokenInfo = tokens[turma.id];
-              const tokenExpirado = tokenInfo?.expira_em
-                ? new Date(tokenInfo.expira_em).getTime() <= Date.now()
-                : false;
-              const tokenValido = !!tokenInfo?.token && !tokenExpirado;
-              const token = tokenValido ? tokenInfo.token : "";
+              // A validade na tela usa o tempo decorrido desde o pedido, não a hora
+              // do aparelho: totem com relógio errado continua mostrando o QR.
+              const tokenRecebido = tokens[turma.id];
+              const tokenValido = tokenAindaExibivel(tokenRecebido, relogio.agora());
+              const tokenExpirado = !!tokenRecebido && !tokenValido;
+              const token = tokenValido ? tokenRecebido.info.token : "";
               const erroToken = errosTokens[turma.id];
               const checkinUrl = `${currentOrigin}/?slug=${slug}&turma=${turma.id}&t=${token || ""}&tab=checkin`;
 
@@ -635,10 +700,17 @@ export const TotemPage: React.FC<TotemPageProps> = ({ slug, onSessionChange }) =
                         />
                       </div>
 
-                      <div className="mt-4 flex items-center gap-2 text-[11px] text-zinc-500 font-mono">
-                        <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-                        Token rotativo ativo • Renovando em {segundosRestantes}s
-                      </div>
+                      {statusConexao === "reconectando" ? (
+                        <div className="mt-4 flex items-center gap-2 text-[11px] text-amber-400/80 font-mono">
+                          <span className="w-2 h-2 rounded-full bg-amber-400 animate-pulse" />
+                          Código ainda válido • Sem conexão para renovar
+                        </div>
+                      ) : (
+                        <div className="mt-4 flex items-center gap-2 text-[11px] text-zinc-500 font-mono">
+                          <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                          Token rotativo ativo • Renovando em {segundosRestantes}s
+                        </div>
+                      )}
                     </>
                   ) : tokenExpirado ? (
                     <div className="my-6 p-6 border border-amber-800/40 bg-amber-950/20 rounded-2xl max-w-xs flex flex-col items-center">
@@ -651,7 +723,9 @@ export const TotemPage: React.FC<TotemPageProps> = ({ slug, onSessionChange }) =
                       </p>
                       <p className="text-[11px] text-amber-400/80 font-mono flex items-center gap-1.5">
                         <span className="w-2 h-2 rounded-full bg-amber-400 animate-pulse" />
-                        Reconectando em {segundosRestantes}s...
+                        {statusConexao === "reconectando"
+                          ? `Reconectando em ${segundosRestantes}s...`
+                          : `Novo código em ${segundosRestantes}s...`}
                       </p>
                     </div>
                   ) : (
