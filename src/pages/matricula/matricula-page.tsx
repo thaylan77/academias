@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useCallback } from "react";
 import {
   AcademiaPublica,
   MatriculaOnlinePayload,
@@ -35,6 +35,45 @@ import {
 interface MatriculaPageProps {
   slug: string;
 }
+
+const TurmaCard = React.memo(({ turma, selecionada, onToggle }: { turma: any, selecionada: boolean, onToggle: (id: string) => void }) => {
+  return (
+    <div
+      onClick={() => onToggle(turma.id)}
+      className={`p-3.5 rounded-xl border transition-all cursor-pointer select-none flex flex-col justify-between ${
+        selecionada
+          ? "border-red-600 bg-red-950/20 shadow-md ring-1 ring-red-600/50"
+          : "border-zinc-800 bg-zinc-900/60 hover:border-zinc-700 hover:bg-zinc-900"
+      }`}
+    >
+      <div className="flex items-start justify-between gap-2 mb-2">
+        <div>
+          <p className="font-semibold text-sm text-white">{turma.nome}</p>
+          <Badge variant="outline" className="text-[10px] mt-1 capitalize text-zinc-400">
+            Público: {turma.publico}
+          </Badge>
+        </div>
+        <input
+          type="checkbox"
+          checked={selecionada}
+          onChange={() => {}} // tratado no onClick do container
+          className="h-4 w-4 rounded accent-red-600 cursor-pointer"
+        />
+      </div>
+
+      <div className="space-y-1 mt-2 pt-2 border-t border-zinc-800/80">
+        {turma.horarios.map((h: any, idx: number) => (
+          <div key={idx} className="flex items-center gap-1.5 text-xs text-zinc-400">
+            <Clock className="w-3 h-3 text-red-400" />
+            <span>
+              {formatarDiaSemana(h.dia_semana)}: {h.inicio} às {h.fim}
+            </span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+});
 
 export const MatriculaPage: React.FC<MatriculaPageProps> = ({ slug }) => {
   const [academia, setAcademia] = useState<AcademiaPublica | null>(null);
@@ -88,13 +127,15 @@ export const MatriculaPage: React.FC<MatriculaPageProps> = ({ slug }) => {
     }
   };
 
-  const toggleTurma = (id: string) => {
-    if (turmasSelecionadas.includes(id)) {
-      setTurmasSelecionadas(turmasSelecionadas.filter((t) => t !== id));
-    } else {
-      setTurmasSelecionadas([...turmasSelecionadas, id]);
-    }
-  };
+  const toggleTurma = useCallback((id: string) => {
+    setTurmasSelecionadas((prev) => {
+      if (prev.includes(id)) {
+        return prev.filter((t) => t !== id);
+      } else {
+        return [...prev, id];
+      }
+    });
+  }, []);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -303,46 +344,14 @@ export const MatriculaPage: React.FC<MatriculaPageProps> = ({ slug }) => {
               </p>
             ) : (
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                {academia.turmas.map((turma) => {
-                  const selecionada = turmasSelecionadas.includes(turma.id);
-                  return (
-                    <div
-                      key={turma.id}
-                      onClick={() => toggleTurma(turma.id)}
-                      className={`p-3.5 rounded-xl border transition-all cursor-pointer select-none flex flex-col justify-between ${
-                        selecionada
-                          ? "border-red-600 bg-red-950/20 shadow-md ring-1 ring-red-600/50"
-                          : "border-zinc-800 bg-zinc-900/60 hover:border-zinc-700 hover:bg-zinc-900"
-                      }`}
-                    >
-                      <div className="flex items-start justify-between gap-2 mb-2">
-                        <div>
-                          <p className="font-semibold text-sm text-white">{turma.nome}</p>
-                          <Badge variant="outline" className="text-[10px] mt-1 capitalize text-zinc-400">
-                            Público: {turma.publico}
-                          </Badge>
-                        </div>
-                        <input
-                          type="checkbox"
-                          checked={selecionada}
-                          onChange={() => {}} // tratado no onClick do container
-                          className="h-4 w-4 rounded accent-red-600 cursor-pointer"
-                        />
-                      </div>
-
-                      <div className="space-y-1 mt-2 pt-2 border-t border-zinc-800/80">
-                        {turma.horarios.map((h, idx) => (
-                          <div key={idx} className="flex items-center gap-1.5 text-xs text-zinc-400">
-                            <Clock className="w-3 h-3 text-red-400" />
-                            <span>
-                              {formatarDiaSemana(h.dia_semana)}: {h.inicio} às {h.fim}
-                            </span>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  );
-                })}
+                {academia.turmas.map((turma) => (
+                  <TurmaCard
+                    key={turma.id}
+                    turma={turma}
+                    selecionada={turmasSelecionadas.includes(turma.id)}
+                    onToggle={toggleTurma}
+                  />
+                ))}
               </div>
             )}
 
