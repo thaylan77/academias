@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
+  cn,
   formatarCPF,
   formatarTelefone,
   formatarMoeda,
@@ -8,6 +9,27 @@ import {
 } from "../lib/utils";
 
 describe("Funções Utilitárias e Validações", () => {
+  describe("cn", () => {
+    it("deve mesclar classes simples", () => {
+      expect(cn("class1", "class2")).toBe("class1 class2");
+    });
+
+    it("deve ignorar valores falsy", () => {
+      expect(cn("class1", false, null, undefined, "", "class2")).toBe("class1 class2");
+    });
+
+    it("deve lidar com arrays e objetos", () => {
+      expect(cn(["class1", "class2"])).toBe("class1 class2");
+      expect(cn({ class1: true, class2: false, class3: true })).toBe("class1 class3");
+    });
+
+    it("deve resolver conflitos do Tailwind", () => {
+      expect(cn("p-4", "p-2")).toBe("p-2");
+      expect(cn("bg-red-500", "bg-blue-500")).toBe("bg-blue-500");
+      expect(cn("text-sm", "text-lg")).toBe("text-lg");
+    });
+  });
+
   it("deve formatar CPF corretamente com máscara", () => {
     expect(formatarCPF("12345678901")).toBe("123.456.789-01");
     expect(formatarCPF("123.456.789-01")).toBe("123.456.789-01");
