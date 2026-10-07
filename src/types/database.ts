@@ -1,4 +1,6 @@
 
+import { AcademiaPublica, MatriculaOnlinePayload, TurmaAbertaTotem, TokenCheckinInfo } from "./app";
+
 export type Json = string | number | boolean | null | { [key: string]: Json | undefined } | Json[]
 
 export type Database = {
@@ -480,7 +482,7 @@ isOneToOne: false
 { Args: { "p_academia_id": string }; Returns: boolean
                            },
 "academia_publica":
-{ Args: { "p_slug": string }; Returns: Json
+{ Args: { "p_slug": string }; Returns: AcademiaPublica
                            },
 "aluno_sem_dados_pessoais":
 { Args: { "p_aluno": Database["public"]['Tables']["alunos"]['Row'] }; Returns: boolean
@@ -521,7 +523,7 @@ isOneToOne: false
 { Args: { "p_nome": string,"p_slug": string }; Returns: string
                            },
 "emitir_token_checkin":
-{ Args: { "p_turma_id": string }; Returns: Json
+{ Args: { "p_turma_id": string }; Returns: TokenCheckinInfo
                            },
 "fazer_checkin":
 { Args: { "p_aluno_id"?: string,"p_token": string,"p_turma_id": string }; Returns: string
@@ -545,7 +547,7 @@ isOneToOne: false
 { Args: { "p_cobranca_id": string,"p_recusa": string,"p_tentativa": string }; Returns: undefined
                            },
 "matricula_online":
-{ Args: { "p_dados": Json,"p_slug": string }; Returns: string
+{ Args: { "p_dados": MatriculaOnlinePayload,"p_slug": string }; Returns: string
                            },
 "membro_pode_gerir":
 { Args: { "p_academia_id": string,"p_papeis": (string)[],"p_user_id": string }; Returns: boolean
@@ -569,7 +571,7 @@ isOneToOne: false
 { Args: { "p_academia_id": string,"p_papeis"?: (string)[] }; Returns: boolean
                            },
 "totem_turmas_agora":
-{ Args: { "p_academia_id": string }; Returns: Json
+{ Args: { "p_academia_id": string }; Returns: TurmaAbertaTotem[]
                            },
 "vincular_meu_cadastro_aluno":
 { Args: Record<PropertyKey, never>; Returns: number
