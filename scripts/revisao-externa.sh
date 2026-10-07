@@ -58,7 +58,6 @@ fi
 
 rev="$(dirname "$raiz")/honorteam-revisao-${sha:0:12}"
 [ -e "$rev" ] && { echo "já existe $rev: remova antes" >&2; exit 1; }
-git -C "$raiz" worktree add --quiet --detach "$rev" "$sha"
 
 limpa() {
   # O plugin do Codex deixa um app-server vivo com a pasta aberta; no Windows
@@ -80,7 +79,11 @@ limpa() {
     echo "ATENÇÃO: não consegui remover $rev" >&2
   fi
 }
+# A limpeza é registrada antes de criar o worktree: se a criação falhar no
+# meio (um hook post-checkout, por exemplo), o que sobrou é removido e o
+# código de erro original é preservado.
 trap limpa EXIT
+git -C "$raiz" worktree add --quiet --detach "$rev" "$sha"
 
 base=origin/main
 if [ "${#arquivos[@]}" -gt 0 ]; then

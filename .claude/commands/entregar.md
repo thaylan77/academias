@@ -45,15 +45,19 @@ avise.
 Ordem das revisões: **Gemini primeiro** (só em PR de front e de risco),
 **Codex por último**, no head final. A decisão é **só a linha do Codex**.
 
-### 5.1 Preparar
+### 5.1 Preparar, nesta ordem
 
-- Traga `main` para a branch (merge, não rebase) **antes** de pedir revisão.
-- Commit e push; abra o PR com base `main` (`Closes #<número>`), para ter
-  onde publicar as rodadas.
-- Se o PR muda o schema: antes de pedir revisão, espere o CI falhar no passo
-  de tipos, baixe o artifact `database-types` daquela execução, commite como
-  `src/types/database.ts` e faça push. As revisões rodam no head que já tem
-  os tipos.
+1. Traga `main` para a branch (merge, não rebase).
+2. Commit e push da branch, **ainda sem PR**.
+3. Se a branch muda o schema: espere o CI de push falhar no passo de tipos,
+   baixe o artifact `database-types` daquela execução, commite como
+   `src/types/database.ts` e faça push de novo.
+4. Espere o CI `Banco` de **push** ficar verde no último commit.
+5. Confira o "Checklist antes de abrir PR" do `AGENTS.md` e só então abra o
+   PR com base `main` (`Closes #<número>`). É nele que as rodadas de revisão
+   são publicadas.
+
+As revisões rodam no head do PR, que já tem os tipos e o CI de push verde.
 
 ### 5.2 Como toda revisão externa roda
 
