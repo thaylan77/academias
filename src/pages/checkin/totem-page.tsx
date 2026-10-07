@@ -110,9 +110,6 @@ export const TotemPage: React.FC<TotemPageProps> = ({ slug, onSessionChange }) =
         try {
           const abertas = await obterTurmasAbertasTotem(academia.id);
           setTurmasAbertas(abertas);
-          setErroTotem(null);
-          setStatusConexao("conectado");
-          setTentativasFalhas(0);
 
           if (abertas.length > 0) {
             const novoMapaTokens: Record<string, TokenRecebido> = {};
@@ -198,6 +195,13 @@ export const TotemPage: React.FC<TotemPageProps> = ({ slug, onSessionChange }) =
             setErrosTokens({});
             setSegundosRestantes(30);
           }
+
+          // Só aqui o ciclo deu certo por inteiro (turmas e tokens). Zerar a
+          // contagem de falhas antes da emissão dos tokens faria a espera
+          // crescente recomeçar em 5 s a cada ciclo em que só a emissão falha.
+          setErroTotem(null);
+          setStatusConexao("conectado");
+          setTentativasFalhas(0);
           executou = true;
         } catch (err: any) {
           const erroMapeado = mapearErroRpc(err);

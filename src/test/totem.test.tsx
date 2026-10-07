@@ -507,6 +507,55 @@ describe("Tela de Totem (Proteção de Equipe e Token Rotativo)", () => {
     expect(screen.queryByText(/Token rotativo ativo/i)).not.toBeInTheDocument();
   });
 
+  it("falhas seguidas só na emissão dos tokens aumentam a espera (5, 15, 30 s) e a recuperação zera a contagem", async () => {
+    // A lista de turmas sempre responde; só a emissão dos tokens cai, com atraso de rede.
+    vi.spyOn(supabaseModule, "obterTurmasAbertasTotem").mockResolvedValue([TURMA_JUDO]);
+    let emissaoNoAr = false;
+    vi.spyOn(supabaseModule, "emitirTokenCheckin").mockImplementation(async () => {
+      await new Promise((r) => setTimeout(r, 30));
+      if (!emissaoNoAr) throw new TypeError("Failed to fetch");
+      return {
+        token: "tok-voltou",
+        // expira logo: o totem busca o próximo token em 1 s
+        expira_em: new Date(Date.now() + 1_500).toISOString(),
+        periodo_segundos: 30,
+      };
+    });
+
+    await entrarNoTotem();
+
+    await waitFor(() => {
+      expect(screen.getByText(/Reconectando em 5s/i)).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByText("Reconectar Agora"));
+    await waitFor(() => {
+      expect(screen.getByText(/Reconectando em 15s/i)).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByText("Reconectar Agora"));
+    await waitFor(() => {
+      expect(screen.getByText(/Reconectando em 30s/i)).toBeInTheDocument();
+    });
+
+    // A emissão volta: o totem mostra o QR e sai da reconexão.
+    emissaoNoAr = true;
+    fireEvent.click(screen.getByText("Reconectar Agora"));
+    await waitFor(() => {
+      expect(screen.getByText(/Token rotativo ativo/i)).toBeInTheDocument();
+    });
+    expect(screen.queryByText(/Oscilação de rede detectada/i)).not.toBeInTheDocument();
+
+    // A emissão cai de novo no ciclo seguinte: a espera recomeça em 5 s, não em 60.
+    emissaoNoAr = false;
+    await waitFor(
+      () => {
+        expect(screen.getByText(/Reconectando em 5s/i)).toBeInTheDocument();
+      },
+      { timeout: 4000 }
+    );
+  });
+
   it("erro de negócio na emissão de todos os tokens não é tratado como queda de conexão", async () => {
     vi.spyOn(supabaseModule, "obterTurmasAbertasTotem").mockResolvedValue([TURMA_JUDO]);
     vi.spyOn(supabaseModule, "emitirTokenCheckin").mockRejectedValue({
@@ -528,14 +577,18 @@ describe("Tela de Totem (Proteção de Equipe e Token Rotativo)", () => {
     const TURMA_2 = { id: "turma-2", nome: "Muay Thai Geral", hora_inicio: "18:30", hora_fim: "19:30" };
     vi.spyOn(supabaseModule, "obterTurmasAbertasTotem").mockResolvedValue([TURMA_JUDO, TURMA_2]);
 
-    // 1º ciclo: as duas turmas recebem token, com renovação em 1 s.
-    // 2º ciclo em diante: a turma 2 falha por rede, a turma 1 segue normal.
-    let ciclo2 = false;
+    // 1º pedido de cada turma: token com renovação em 1 s.
+    // Do 2º pedido em diante: a turma 2 falha por rede, a turma 1 segue normal.
+    // (Decidido pela contagem de pedidos, não por um sinal ligado pelo teste,
+    // para não depender de quando o segundo ciclo dispara.)
+    const pedidos: Record<string, number> = {};
     const emitirMock = vi.spyOn(supabaseModule, "emitirTokenCheckin").mockImplementation(async (turmaId: string) => {
-      if (ciclo2 && turmaId === "turma-2") throw new TypeError("Failed to fetch");
+      pedidos[turmaId] = (pedidos[turmaId] ?? 0) + 1;
+      const primeiro = pedidos[turmaId] === 1;
+      if (!primeiro && turmaId === "turma-2") throw new TypeError("Failed to fetch");
       return {
         token: `tok-${turmaId}`,
-        expira_em: new Date(Date.now() + (ciclo2 ? 30_000 : 1_500)).toISOString(),
+        expira_em: new Date(Date.now() + (primeiro ? 1_500 : 30_000)).toISOString(),
         periodo_segundos: 30,
       };
     });
@@ -545,7 +598,6 @@ describe("Tela de Totem (Proteção de Equipe e Token Rotativo)", () => {
     await waitFor(() => {
       expect(screen.getAllByText(/Token rotativo ativo/i)).toHaveLength(2);
     });
-    ciclo2 = true;
 
     // Espera o segundo ciclo (4 chamadas: 2 do primeiro, 2 do segundo).
     await waitFor(
