@@ -49,13 +49,19 @@ A revisão é proporcional ao risco (`AGENTS.md`, "Revisão proporcional ao
 risco"). Antes de pedir revisão, classifique o PR pelo `git diff --name-only
 origin/main...HEAD`:
 
-- **Muda código que roda** (`src/` fora de testes, `supabase/`, `.github/`;
-  basta um arquivo): **Gemini primeiro**, se for front ou risco, e **Codex
-  por último**, no head final. A decisão é **só a linha do Codex**.
-- **Só testes ou só documentação**: Gemini (5.3, obrigatório aqui) e a sua
-  revisão (5.6). Não gaste rodada do Codex.
+- **Muda código que roda** (basta um arquivo): `src/` fora de testes,
+  `supabase/` fora de `supabase/tests/`, `.github/`, `AGENTS.md`, `CLAUDE.md`,
+  `.claude/`, `scripts/`, `package.json`, `package-lock.json` ou arquivo de
+  configuração. **Gemini primeiro**, se for front ou risco, e **Codex por
+  último**, no head final. A decisão é **só a linha do Codex**.
+- **Só testes ou só documentação** (`README.md`, `docs/`): Gemini (5.3,
+  obrigatório aqui) e a sua revisão (5.6). Não gaste rodada do Codex.
 
 Na dúvida, vale o primeiro caso.
+
+**Mudança que enfraquece uma trava** (revisão, CI, proteção do `main`, regra
+de aprovação prévia): além do Codex, diga no PR e na sessão qual trava muda
+e como, e **só mescle depois do ok explícito do dono do projeto**.
 
 ### 5.1 Preparar, nesta ordem
 
@@ -217,7 +223,9 @@ Mescle (squash) só se **todos** valerem, conferidos pela API nesta ordem:
 4. o CI `Banco` (`testes` e `front`) está verde no head atual, no push e
    no pull request;
 5. a branch está atualizada com `main` (a trava do `main` recusa o merge se
-   não estiver).
+   não estiver);
+6. se o PR enfraquece uma trava, o dono do projeto deu o ok explícito na
+   sessão.
 
 Se qualquer item falhar, não mescle e avise.
 
@@ -250,6 +258,7 @@ Siga sem perguntar, exceto:
 
 - decisão de produto (regra de negócio que a issue ou a spec não define);
 - plano de schema que cai num dos três casos de aprovação prévia (passo 3);
+- o PR enfraquece uma trava (passo 5): espere o ok explícito antes do merge;
 - você e o Codex discordarem **duas vezes no mesmo ponto**: pare, mostre as
   duas posições e espere a decisão;
 - dependência fora de `main` (passo 1).

@@ -34,8 +34,9 @@ jobs:
             exit 1
           fi
 
-  # Front: mesma sequência do checklist do AGENTS.md. Node em versão fixa;
-  # as dependências vêm do package-lock.json (npm ci).
+  # Front: mesma sequência do checklist do AGENTS.md. Node em versão fixa,
+  # a mesma dos agentes, lida do .nvmrc (o "engines" do package.json repete
+  # o número); as dependências vêm do package-lock.json (npm ci).
   front:
     runs-on: ubuntu-latest
     steps:
@@ -43,7 +44,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 22.12.0
+          node-version-file: .nvmrc
           cache: npm
 
       - run: npm ci

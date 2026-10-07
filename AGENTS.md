@@ -196,12 +196,27 @@ Plano, status e slug da academia só mudam via `service_role` (billing do SaaS).
 
 | O PR muda | Revisão exigida | Quem libera o merge |
 |---|---|---|
-| **Código que roda**: `src/` fora de testes, `supabase/`, `.github/` | Codex, sempre. Antes dele, Gemini se for front ou risco (financeiro, segurança/RLS) | linha `APROVADO: <sha>` do Codex |
-| **Só testes** (`src/test/`, `supabase/tests/`) **ou só documentação** | Gemini e revisão do Claude, registradas no PR | o Claude, com CI verde |
+| **Código que roda** (lista abaixo) | Codex, sempre. Antes dele, Gemini se for front ou risco (financeiro, segurança/RLS) | linha `APROVADO: <sha>` do Codex |
+| **Só testes** (`src/test/`, `supabase/tests/`) **ou só documentação** (`README.md`, `docs/`) | Gemini e revisão do Claude, registradas no PR | o Claude, com CI verde |
+
+Conta como **código que roda**:
+
+- `src/` fora de testes, `supabase/` (menos `supabase/tests/`) e `.github/`;
+- **as regras que os agentes executam**: `AGENTS.md`, `CLAUDE.md` e `.claude/`;
+- `scripts/`, `package.json`, `package-lock.json` e arquivos de
+  configuração (`vite.config.ts`, `tsconfig.json`, `tailwind.config.js`,
+  `.nvmrc`, `.gitattributes` e semelhantes).
 
 - Basta um arquivo de código que roda para o PR inteiro cair na primeira
   linha. PR misto não é dividido para escapar do Codex.
 - Na dúvida sobre em qual linha um arquivo cai, vale a primeira.
+- **Mudança que enfraquece uma trava** precisa, além do Codex, do **ok
+  explícito do dono do projeto na sessão, antes do merge**. Travas: a
+  revisão (quem revisa, quando o Codex é exigido, a linha de aprovação), o
+  CI (jobs, passos, versões fixas, checks exigidos), a proteção do `main`
+  (ruleset) e as regras de aprovação prévia do `CLAUDE.md`. O Claude diz no
+  PR e na sessão qual trava muda e como, e espera a resposta. Apertar uma
+  trava não precisa desse ok.
 - No PR só de testes ou só de documentação, o Gemini é obrigatório (não
   depende de ser front ou risco). Se ele estiver fora do ar ou sem cota, o
   PR espera ou vai para o Codex; o Claude não aprova sozinho.
@@ -252,7 +267,7 @@ Plano, status e slug da academia só mudam via `service_role` (billing do SaaS).
 - [ ] Tipos: `src/types/database.ts` igual ao artifact `database-types` do
       CI da própria branch (o passo de conferência do CI passa)
 - [ ] `npm run lint`, `npm test` e `npm run build` passando (o job `front`
-      do CI roda os três com Node 22.12.0)
+      do CI roda os três com Node 24.13.0, a versão do `.nvmrc`)
 
 ## Backlog conhecido
 
