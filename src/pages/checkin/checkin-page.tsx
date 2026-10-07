@@ -69,11 +69,11 @@ export const CheckinPage: React.FC<CheckinPageProps> = ({
       const cenario = import.meta.env.DEV ? (cenarioOverride || cenarioSimulado) : undefined;
       const res = await realizarCheckin(tId, tokenEfetivo, alunoId, cenario);
       setResultado(res);
-    } catch (err: any) {
+    } catch (err) {
       setResultado({
         sucesso: false,
         codigo_erro: "GENERICO",
-        mensagem: err.message || "Erro inesperado ao registrar check-in.",
+        mensagem: err instanceof Error && err.message ? err.message : "Erro inesperado ao registrar check-in.",
       });
     } finally {
       setLoading(false);
