@@ -1,8 +1,13 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 describe("emitirTokenCheckin", () => {
   beforeEach(() => {
     vi.resetModules();
+  });
+
+  // As variáveis simuladas não podem vazar para outros testes.
+  afterEach(() => {
+    vi.unstubAllEnvs();
   });
 
   it("deve retornar mock em ambiente DEV sem supabase configurado", async () => {
@@ -39,18 +44,14 @@ describe("emitirTokenCheckin", () => {
       periodo_segundos: 30,
     };
 
-    if(supabase) {
-        // mock rpc behavior
-        supabase.rpc = vi.fn().mockResolvedValue({
-            data: mockData,
-            error: null
-        });
-    }
+    // Sem cliente, a função cairia no token simulado e o teste passaria sem testar nada.
+    if (!supabase) throw new Error("o cliente Supabase deveria existir com as variáveis definidas");
+    supabase.rpc = vi.fn().mockResolvedValue({ data: mockData, error: null });
 
     const resultado = await emitirTokenCheckin("turma-123");
 
     expect(resultado).toEqual(mockData);
-    expect(supabase?.rpc).toHaveBeenCalledWith("emitir_token_checkin", {
+    expect(supabase.rpc).toHaveBeenCalledWith("emitir_token_checkin", {
       p_turma_id: "turma-123"
     });
   });
@@ -61,15 +62,18 @@ describe("emitirTokenCheckin", () => {
 
     const { emitirTokenCheckin, supabase } = await import("../lib/supabase");
 
-    const mockError = new Error("RPC Error");
+    // Erro no formato do PostgREST: objeto com o código de negócio no hint.
+    const mockError = {
+      message: "Fora da janela da aula",
+      code: "P0001",
+      hint: "checkin_fora_do_horario",
+      details: "",
+    };
 
-    if(supabase) {
-        supabase.rpc = vi.fn().mockResolvedValue({
-            data: null,
-            error: mockError
-        });
-    }
+    if (!supabase) throw new Error("o cliente Supabase deveria existir com as variáveis definidas");
+    supabase.rpc = vi.fn().mockResolvedValue({ data: null, error: mockError });
 
-    await expect(emitirTokenCheckin("turma-123")).rejects.toThrow("RPC Error");
+    // O erro sobe como veio, com o hint, para quem chama decidir por ele.
+    await expect(emitirTokenCheckin("turma-123")).rejects.toMatchObject({ hint: "checkin_fora_do_horario" });
   });
 });

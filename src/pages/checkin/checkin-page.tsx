@@ -70,10 +70,15 @@ export const CheckinPage: React.FC<CheckinPageProps> = ({
       const res = await realizarCheckin(tId, tokenEfetivo, alunoId, cenario);
       setResultado(res);
     } catch (err) {
+      // Erro do Supabase não é instância de Error: é um objeto com `message`.
+      const mensagem =
+        typeof err === "object" && err !== null && "message" in err && typeof err.message === "string"
+          ? err.message
+          : "";
       setResultado({
         sucesso: false,
         codigo_erro: "GENERICO",
-        mensagem: err instanceof Error && err.message ? err.message : "Erro inesperado ao registrar check-in.",
+        mensagem: mensagem || "Erro inesperado ao registrar check-in.",
       });
     } finally {
       setLoading(false);
