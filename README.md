@@ -12,8 +12,8 @@ O que já existe em `main`:
   tabelas, papéis da equipe (dono, admin, professor, recepção, totem),
   matrícula online, check-in por QR com token rotativo, graduações e
   financeiro (cobranças, recorrência, baixa manual, inadimplência).
-- **Testes pgTAP** de RLS, check-in, matrícula online e financeiro, sempre
-  com duas academias.
+- **Testes pgTAP** de RLS, check-in, matrícula online e financeiro,
+  incluindo cenários de isolamento entre academias.
 - **Front** (React + Vite + TypeScript + Tailwind) com três telas:
   matrícula pública, check-in do aluno e totem com o QR da turma.
 
