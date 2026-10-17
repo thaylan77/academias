@@ -11,6 +11,7 @@ import {
 } from "../types/app";
 import { ACADEMIA_DEMO_A, ACADEMIA_DEMO_B } from "./mock-data";
 import { mapearErroRpc } from "./rpc-errors";
+import { lerAcademiaPublica, lerTokenCheckin, lerTurmasAbertasTotem } from "./leitura-rpc";
 
 const supabaseUrl = import.meta.env?.VITE_SUPABASE_URL || "";
 const supabaseAnonKey = import.meta.env?.VITE_SUPABASE_ANON_KEY || "";
@@ -62,13 +63,13 @@ export async function obterAcademiaPublica(slug: string): Promise<AcademiaPublic
 
   if (supabase) {
     try {
-      const { data, error } = await (supabase.rpc as any)("academia_publica", {
+      const { data, error } = await supabase.rpc("academia_publica", {
         p_slug: slugNormalizado,
       });
       if (error) {
         throw error;
       }
-      return data as unknown as AcademiaPublica;
+      return lerAcademiaPublica(data);
     } catch (e) {
       console.warn("Falha ao consultar Supabase, caindo no mock se disponível:", e);
     }
@@ -98,7 +99,7 @@ export async function submeterMatriculaOnline(
 ): Promise<{ sucesso: boolean; matricula_id?: string; mensagem?: string; titulo?: string; acao?: string }> {
   if (supabase) {
     try {
-      const { data, error } = await (supabase.rpc as any)("matricula_online", {
+      const { data, error } = await supabase.rpc("matricula_online", {
         p_slug: slug.toLowerCase().trim(),
         p_dados: dados,
       });
@@ -157,13 +158,13 @@ export async function submeterMatriculaOnline(
 // Helper para buscar turmas com check-in aberto neste momento para o Totem
 export async function obterTurmasAbertasTotem(academiaId: string): Promise<TurmaAbertaTotem[]> {
   if (supabase) {
-    const { data, error } = await (supabase.rpc as any)("totem_turmas_agora", {
+    const { data, error } = await supabase.rpc("totem_turmas_agora", {
       p_academia_id: academiaId,
     });
     if (error) {
       throw error;
     }
-    return (data as TurmaAbertaTotem[]) || [];
+    return lerTurmasAbertasTotem(data);
   }
 
   // Fallback para simulação local / dev apenas sem cliente supabase configurado
@@ -192,13 +193,13 @@ export async function obterTurmasAbertasTotem(academiaId: string): Promise<Turma
 // Helper para emitir token HMAC rotativo de check-in para uma turma
 export async function emitirTokenCheckin(turmaId: string): Promise<TokenCheckinInfo | null> {
   if (supabase) {
-    const { data, error } = await (supabase.rpc as any)("emitir_token_checkin", {
+    const { data, error } = await supabase.rpc("emitir_token_checkin", {
       p_turma_id: turmaId,
     });
     if (error) {
       throw error;
     }
-    return data as TokenCheckinInfo;
+    return lerTokenCheckin(data);
   }
 
   // Mock em ambiente DEV apenas sem cliente supabase configurado
@@ -225,10 +226,11 @@ export async function realizarCheckin(
 
   if (supabase && (!import.meta.env.DEV || !simulacaoCenario)) {
     try {
-      const { data, error } = await (supabase.rpc as any)("fazer_checkin", {
+      // Sem aluno escolhido, o parâmetro é omitido e a função usa o padrão (nulo).
+      const { data, error } = await supabase.rpc("fazer_checkin", {
         p_turma_id: turmaId,
         p_token: tokenEfetivo,
-        p_aluno_id: alunoId || null,
+        ...(alunoId ? { p_aluno_id: alunoId } : {}),
       });
 
       if (error) {
