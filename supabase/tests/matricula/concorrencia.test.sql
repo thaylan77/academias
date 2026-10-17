@@ -11,12 +11,17 @@ create extension if not exists pgtap with schema extensions;
 create extension if not exists dblink with schema extensions;
 select plan(12);
 
--- Mesmo banco e mesma porta deste teste. No CI (Supabase local) o usuário
--- postgres tem a senha padrão postgres; no Postgres temporário de
--- desenvolvimento a autenticação local é trust e a senha é ignorada.
+-- Mesmo servidor, banco e porta da conexão deste teste. Pelo endereço de
+-- rede, e não por localhost: no Supabase local o postgres não é
+-- superusuário, e o dblink só aceita a conexão se a senha for de fato usada
+-- (pelo loopback a autenticação do contêiner não pede senha). No Postgres
+-- temporário de desenvolvimento o usuário é superusuário e a senha é
+-- ignorada.
 create function pg_temp.conexao() returns text language sql as $$
-  select format('host=localhost port=%s dbname=%s user=postgres password=postgres application_name=teste_concorrencia',
-                current_setting('port'), current_database())
+  select format('host=%s port=%s dbname=%s user=postgres password=postgres application_name=teste_concorrencia',
+                coalesce(host(inet_server_addr()), 'localhost'),
+                coalesce(inet_server_port(), current_setting('port')::int),
+                current_database())
 $$;
 
 select extensions.dblink_connect('prep', pg_temp.conexao());
