@@ -9,7 +9,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 create extension if not exists dblink with schema extensions;
-select plan(12);
+select plan(13);
 
 -- Mesmo servidor, banco e porta da conexão deste teste. Pelo endereço de
 -- rede, e não por localhost: no Supabase local o postgres não é
@@ -62,9 +62,12 @@ select extensions.dblink_exec('prep', $f$
 $f$);
 
 -- Espera até a sessão s2 estar bloqueada esperando outra (no máximo 10 s).
+-- Dentro de uma transação, o pg_stat_activity guarda a primeira leitura; sem
+-- descartá-la a cada volta, a espera nunca veria s2 mudar de estado.
 create function pg_temp.s2_esperando() returns boolean language plpgsql as $$
 begin
   for i in 1..100 loop
+    perform pg_stat_clear_snapshot();
     if exists (select 1 from pg_stat_activity
                where application_name = 'teste_concorrencia'
                  and wait_event_type = 'Lock'
@@ -94,6 +97,11 @@ $$;
 -- ---------------------------------------------------------------------
 -- A. s1 reativa M2 (ainda sem turma) e não confirma; s2 liga M2 à turma T.
 -- ---------------------------------------------------------------------
+-- Carrega a leitura do pg_stat_activity com ninguém esperando: a espera
+-- abaixo só passa se enxergar a mudança que vem depois.
+select ok(not exists (select 1 from pg_stat_activity
+                      where application_name = 'teste_concorrencia' and wait_event_type = 'Lock'),
+  'A: antes do envio, nenhuma sessão do teste está esperando');
 select extensions.dblink_exec('s1', 'begin');
 select extensions.dblink_exec('s1', $$update public.matriculas set status = 'ativa' where id = 'f8000000-0000-4000-8000-000000000402'$$);
 select is(extensions.dblink_send_query('s2', $$

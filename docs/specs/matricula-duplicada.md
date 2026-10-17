@@ -76,7 +76,7 @@ A conferência vem depois dos gatilhos de propósito: a partir da criação dele
 
 A conferência dos dados existentes (seção 6) não cabe no pgTAP, que roda depois das migrations. Foi verificada à parte: com um par duplicado a migration falha listando o par; depois de cancelar uma das duas, aplica.
 
-**Concorrência**: `supabase/tests/matricula/concorrencia.test.sql` (12 asserções) abre duas transações de verdade, em conexões separadas (`dblink`), e confere que a segunda espera a primeira e é recusada depois do commit, em três intercalações: reativação aberta e ligação da turma; reabertura de período aberta e ligação de outra matrícula; ligação aberta e reativação. As fixtures desse arquivo são confirmadas por uma conexão própria e apagadas no fim. Sem a correção acima, as intercalações 1 e 3 deixam a duplicata passar.
+**Concorrência**: `supabase/tests/matricula/concorrencia.test.sql` (13 asserções) abre duas transações de verdade, em conexões separadas (`dblink`), e confere que a segunda espera a primeira e é recusada depois do commit, em três intercalações: reativação aberta e ligação da turma; reabertura de período aberta e ligação de outra matrícula; ligação aberta e reativação. As fixtures desse arquivo são confirmadas por uma conexão própria e apagadas no fim. Sem a correção acima, as intercalações 1 e 3 deixam a duplicata passar.
 
 ## 8. Fora desta entrega
 
