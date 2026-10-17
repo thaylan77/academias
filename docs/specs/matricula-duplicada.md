@@ -38,7 +38,12 @@ O insert em `matriculas` não é conferido: a matrícula nasce sem turma.
 
 A função é `security definer` com `search_path = ''`: a conferência enxerga todas as matrículas do aluno, qualquer que seja o RLS de quem grava. Não tem grant para `anon` nem `authenticated`.
 
-**Concorrência.** Antes de conferir, a função pega uma trava de transação por aluno (`pg_advisory_xact_lock`). Duas gravações simultâneas para o mesmo aluno entram uma de cada vez, e a segunda já enxerga o que a primeira gravou. Um comando que grava para vários alunos pega as travas na ordem das linhas; dois comandos assim em ordens opostas podem cair em deadlock, que o Postgres resolve abortando um deles.
+**Concorrência.** Duas travas, nesta ordem:
+
+1. No gatilho de `matricula_turmas`, a linha da matrícula é lida com `for share`. Se outra transação estiver mudando a situação, as datas ou o aluno dessa matrícula, esta espera e lê o valor já confirmado. (No gatilho de `matriculas`, a linha já está travada pelo próprio update.)
+2. Depois, **antes de qualquer saída** (inclusive a de matrícula cancelada), uma trava de transação por aluno (`pg_advisory_xact_lock`). Duas gravações simultâneas para o mesmo aluno entram uma de cada vez, e a segunda já enxerga o que a primeira gravou.
+
+A primeira versão lia a matrícula sem trava e saía antes da trava do aluno quando a lia como cancelada: uma reativação ainda não confirmada, numa transação, e a ligação da mesma matrícula a uma turma, em outra, passavam as duas (achado do Codex no PR #45). Um comando que grava para vários alunos pega as travas na ordem das linhas; dois comandos assim em ordens opostas podem cair em deadlock, que o Postgres resolve abortando um deles.
 
 ## 5. Erro
 
@@ -71,7 +76,7 @@ A conferência vem depois dos gatilhos de propósito: a partir da criação dele
 
 A conferência dos dados existentes (seção 6) não cabe no pgTAP, que roda depois das migrations. Foi verificada à parte: com um par duplicado a migration falha listando o par; depois de cancelar uma das duas, aplica.
 
-A trava de concorrência é conferida só pela presença (`pg_locks`); duas sessões simultâneas não foram exercitadas.
+**Concorrência**: `supabase/tests/matricula/concorrencia.test.sql` (12 asserções) abre duas transações de verdade, em conexões separadas (`dblink`), e confere que a segunda espera a primeira e é recusada depois do commit, em três intercalações: reativação aberta e ligação da turma; reabertura de período aberta e ligação de outra matrícula; ligação aberta e reativação. As fixtures desse arquivo são confirmadas por uma conexão própria e apagadas no fim. Sem a correção acima, as intercalações 1 e 3 deixam a duplicata passar.
 
 ## 8. Fora desta entrega
 

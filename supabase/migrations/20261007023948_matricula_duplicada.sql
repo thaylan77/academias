@@ -24,7 +24,8 @@
 --    security definer: a conferência precisa ver todas as matrículas do
 --    aluno, qualquer que seja o RLS de quem está gravando.
 --
---    Concorrência: trava de transação por aluno. Duas gravações
+--    Concorrência: a linha da matrícula é lida com FOR SHARE e, antes de
+--    qualquer saída, vem a trava de transação por aluno. Duas gravações
 --    simultâneas para o mesmo aluno entram uma de cada vez, e a segunda já
 --    enxerga o que a primeira gravou.
 -- ---------------------------------------------------------------------
@@ -40,21 +41,33 @@ declare
   v_conflito  record;
 begin
   if tg_table_name = 'matricula_turmas' then
+    -- Lê a matrícula travando a linha (FOR SHARE): uma transação que esteja
+    -- mudando a situação, as datas ou o aluno dela termina antes, e a leitura
+    -- vem com o valor já confirmado. Sem isso, uma reativação ainda não
+    -- confirmada passaria despercebida aqui (lida como 'cancelada').
     select m.* into v_matricula
     from public.matriculas m
-    where m.id = new.matricula_id;
+    where m.id = new.matricula_id
+    for share;
     v_turma_id := new.turma_id;
   else
+    -- No update, a própria linha já está travada por este comando.
     v_matricula := new;
   end if;
 
-  -- Matrícula cancelada não disputa turma com ninguém.
-  if v_matricula.id is null or v_matricula.status = 'cancelada' then
+  if v_matricula.id is null then
     return null;
   end if;
 
+  -- A trava do aluno vem antes de qualquer saída: quem chega depois espera
+  -- esta transação terminar e já enxerga o que ela gravou.
   perform pg_advisory_xact_lock(
     hashtextextended('matricula_duplicada:' || v_matricula.aluno_id::text, 0));
+
+  -- Matrícula cancelada não disputa turma com ninguém.
+  if v_matricula.status = 'cancelada' then
+    return null;
+  end if;
 
   select o.id as matricula_id, mt.turma_id, t.nome as turma_nome
   into v_conflito
