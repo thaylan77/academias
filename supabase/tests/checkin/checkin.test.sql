@@ -207,7 +207,7 @@ select is(public.__hint_de(format($$select public.fazer_checkin('f4000000-0000-4
 -- 4. fazer_checkin: caminho feliz
 -- ---------------------------------------------------------------------
 select isnt(public.fazer_checkin('f4000000-0000-4000-8000-0000000003a1', (select tok from t_tok where nome = 't1-anterior')),
-  null, 'Token da janela anterior é aceito (aluno com a matrícula antiga e a nova na mesma turma não vira "múltiplos")');
+  null, 'Token da janela anterior é aceito (aluno com matrícula antiga encerrada na mesma turma: a antiga não conta)');
 select is(public.fazer_checkin('f4000000-0000-4000-8000-0000000003a1', (select tok from t_tok where nome = 't1')),
   (select id from public.presencas where aluno_id = 'f4000000-0000-4000-8000-0000000001a1'),
   'Token da janela atual é aceito e o check-in repetido devolve a mesma presença');

@@ -60,7 +60,7 @@ A conferência vem depois dos gatilhos de propósito: a partir da criação dele
 
 ## 7. Testes
 
-`supabase/tests/matricula/duplicada.test.sql` (32 asserções), com duas academias:
+`supabase/tests/matricula/duplicada.test.sql` (39 asserções), com duas academias:
 
 - caso base, nos dois sentidos, com mensagem, `detail` e a linha recusada fora do banco;
 - pendente e trancada disputam, cancelada não, e reativar a cancelada é barrado;

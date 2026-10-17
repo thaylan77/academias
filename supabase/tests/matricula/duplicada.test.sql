@@ -4,7 +4,7 @@
 -- matricula_duplicada.
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(32);
+select plan(39);
 
 -- Devolve hint, detail e mensagem do erro de um comando (ou 'sem erro').
 create function public.__erro_de(p_sql text)
@@ -20,7 +20,7 @@ begin
 exception when others then
   get stacked diagnostics v_hint = pg_exception_hint, v_detail = pg_exception_detail;
   return jsonb_build_object('hint', coalesce(nullif(v_hint, ''), 'sem hint'),
-                            'detail', v_detail, 'mensagem', sqlerrm);
+                            'detail', v_detail, 'mensagem', sqlerrm, 'sqlstate', sqlstate);
 end
 $$;
 grant execute on function public.__erro_de(text) to authenticated;
@@ -165,6 +165,22 @@ select lives_ok($$
   update public.matriculas set status = 'ativa' where id = pg_temp.mat('06')
 $$, 'Depois de cancelar a outra, a reativação passa');
 
+-- Duas canceladas do mesmo aluno na mesma turma, reativadas num único update.
+insert into public.matriculas (id, academia_id, aluno_id, status) values
+  (pg_temp.mat('40'), pg_temp.a(), pg_temp.aluno('a5'), 'cancelada'),
+  (pg_temp.mat('41'), pg_temp.a(), pg_temp.aluno('a5'), 'cancelada');
+insert into public.matricula_turmas (academia_id, matricula_id, turma_id) values
+  (pg_temp.a(), pg_temp.mat('40'), pg_temp.turma('a3')),
+  (pg_temp.a(), pg_temp.mat('41'), pg_temp.turma('a3'));
+
+select is(public.__hint_de($$
+  update public.matriculas set status = 'ativa' where id in (pg_temp.mat('40'), pg_temp.mat('41'))
+$$), 'matricula_duplicada', 'Reativar duas matrículas em conflito no mesmo update: matricula_duplicada');
+
+select is(
+  (select count(*) from public.matriculas where id in (pg_temp.mat('40'), pg_temp.mat('41')) and status = 'cancelada'),
+  2::bigint, 'O update recusado não reativou nenhuma das duas');
+
 -- ---------------------------------------------------------------------
 -- 3. Períodos e troca de plano
 -- ---------------------------------------------------------------------
@@ -195,9 +211,55 @@ select lives_ok($$
   update public.matriculas set data_inicio = current_date - 9 where id = pg_temp.mat('09')
 $$, 'Mudar as datas sem sobrepor é aceito');
 
+-- Para provar que o gatilho não dispara em campo irrelevante, é preciso um par
+-- já em conflito: monta um, com os gatilhos desligados (como um dado antigo).
+insert into public.matriculas (id, academia_id, aluno_id) values
+  (pg_temp.mat('20'), pg_temp.a(), pg_temp.aluno('a4')),
+  (pg_temp.mat('21'), pg_temp.a(), pg_temp.aluno('a4'));
+alter table public.matricula_turmas disable trigger matricula_turmas_sem_duplicata;
+insert into public.matricula_turmas (academia_id, matricula_id, turma_id) values
+  (pg_temp.a(), pg_temp.mat('20'), pg_temp.turma('a3')),
+  (pg_temp.a(), pg_temp.mat('21'), pg_temp.turma('a3'));
+alter table public.matricula_turmas enable trigger matricula_turmas_sem_duplicata;
+
 select lives_ok($$
-  update public.matriculas set valor = 123.45, dia_vencimento = 10 where id = pg_temp.mat('08')
-$$, 'Alterar campo que não é situação, data nem aluno não dispara a conferência');
+  update public.matriculas set valor = 123.45, dia_vencimento = 10 where id = pg_temp.mat('20')
+$$, 'Alterar campo que não é situação, data nem aluno não dispara a conferência (mesmo num par já em conflito)');
+
+select is(public.__hint_de($$
+  update public.matriculas set data_inicio = current_date - 1 where id = pg_temp.mat('20')
+$$), 'matricula_duplicada', 'No mesmo par, mudar a data dispara a conferência');
+
+update public.matriculas set status = 'cancelada' where id = pg_temp.mat('21');
+
+-- ---------------------------------------------------------------------
+-- 3b. Dois períodos fechados
+-- ---------------------------------------------------------------------
+insert into public.matriculas (id, academia_id, aluno_id, data_inicio, data_fim) values
+  (pg_temp.mat('30'), pg_temp.a(), pg_temp.aluno('a6'), current_date - 30, current_date - 10),
+  (pg_temp.mat('31'), pg_temp.a(), pg_temp.aluno('a6'), current_date - 15, current_date - 5),
+  (pg_temp.mat('32'), pg_temp.a(), pg_temp.aluno('a6'), current_date - 25, current_date - 20),
+  (pg_temp.mat('33'), pg_temp.a(), pg_temp.aluno('a6'), current_date - 9,  current_date - 5);
+
+select lives_ok($$
+  insert into public.matricula_turmas (academia_id, matricula_id, turma_id)
+  values (pg_temp.a(), pg_temp.mat('30'), pg_temp.turma('a3'))
+$$, 'Período fechado [D-30, D-10] entra na turma 3');
+
+select is(public.__hint_de($$
+  insert into public.matricula_turmas (academia_id, matricula_id, turma_id)
+  values (pg_temp.a(), pg_temp.mat('31'), pg_temp.turma('a3'))
+$$), 'matricula_duplicada', 'Dois períodos fechados com sobreposição parcial ([D-15, D-5]): matricula_duplicada');
+
+select is(public.__hint_de($$
+  insert into public.matricula_turmas (academia_id, matricula_id, turma_id)
+  values (pg_temp.a(), pg_temp.mat('32'), pg_temp.turma('a3'))
+$$), 'matricula_duplicada', 'Período fechado contido em outro ([D-25, D-20]): matricula_duplicada');
+
+select lives_ok($$
+  insert into public.matricula_turmas (academia_id, matricula_id, turma_id)
+  values (pg_temp.a(), pg_temp.mat('33'), pg_temp.turma('a3'))
+$$, 'Período fechado que começa no dia seguinte ao fim do outro ([D-9, D-5]) entra');
 
 -- ---------------------------------------------------------------------
 -- 4. Mesmo comando, troca de aluno e matrícula sem turma
@@ -248,10 +310,10 @@ select is(public.__hint_de($$
   values (pg_temp.b(), pg_temp.mat('b2'), pg_temp.turma('b1'))
 $$), 'matricula_duplicada', 'Academia B: a mesma regra vale');
 
-select isnt(public.__hint_de($$
+select is(public.__erro_de($$
   insert into public.matricula_turmas (academia_id, matricula_id, turma_id)
   values (pg_temp.b(), pg_temp.mat('b2'), pg_temp.turma('a1'))
-$$), 'sem erro', 'Matrícula de B não entra em turma de A (FK composta)');
+$$) ->> 'sqlstate', '23503', 'Matrícula de B não entra em turma de A (FK composta: foreign_key_violation)');
 
 -- ---------------------------------------------------------------------
 -- 6. Pela API, como recepção: a regra vale por cima do RLS
