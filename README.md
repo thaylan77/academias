@@ -23,7 +23,7 @@ backlog está no fim do [AGENTS.md](AGENTS.md) e nas issues.
 
 ## Rodando o front
 
-Requer Node 22.12.0 (a mesma versão do CI).
+Requer Node 24.13.0 (a mesma versão do CI, fixada no `.nvmrc`).
 
 ```bash
 npm ci
