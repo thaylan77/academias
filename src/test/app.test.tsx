@@ -36,6 +36,38 @@ describe("Carregamento sob demanda das telas", () => {
     expect(carregados.has("qrcode.react")).toBe(false);
   });
 
+  it("/painel abre o painel da equipe, sem bibliotecas de QR nem telas públicas", async () => {
+    abrir("/painel");
+    const { App } = await import("../App");
+    render(<App />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Painel da equipe")).toBeInTheDocument();
+    });
+    expect(screen.queryByText(/Ficha de Matrícula|Matrícula Online/i)).not.toBeInTheDocument();
+    expect(carregados.has("html5-qrcode")).toBe(false);
+    expect(carregados.has("qrcode.react")).toBe(false);
+  });
+
+  it("sub-rotas do painel também abrem o painel; slug que só começa com 'painel' é público", async () => {
+    abrir("/painel/honor-demo-a/turmas");
+    let { App } = await import("../App");
+    const { unmount } = render(<App />);
+    await waitFor(() => {
+      expect(screen.getByText("Painel da equipe")).toBeInTheDocument();
+    });
+    unmount();
+
+    vi.resetModules();
+    abrir("/painel-dojo/matricula");
+    ({ App } = await import("../App"));
+    render(<App />);
+    await waitFor(() => {
+      expect(screen.queryByText(/Carregando/)).not.toBeInTheDocument();
+    });
+    expect(screen.queryByText("Painel da equipe")).not.toBeInTheDocument();
+  });
+
   it("o check-in carrega o leitor de QR, e não o gerador do totem", async () => {
     abrir("/honor-demo-a/checkin");
     const { App } = await import("../App");
