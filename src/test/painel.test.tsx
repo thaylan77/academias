@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
+import { act, render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import { PainelApp } from "../pages/painel/painel-app";
 import * as painel from "../lib/painel";
 import { AcademiaDoMembro } from "../lib/painel";
@@ -172,18 +172,91 @@ describe("Painel da equipe: entrada e escolha de academia", () => {
     expect(window.location.pathname).toBe("/painel/alpha");
   });
 
-  it("se o signOut falhar, a tela sai da academia mesmo assim", async () => {
+  it("se a sessão pode ter ficado guardada, não finge que saiu: esconde a academia e pede nova tentativa", async () => {
     vi.spyOn(painel, "listarMinhasAcademias").mockResolvedValue([A]);
-    vi.spyOn(painel, "sairDoPainel").mockRejectedValue(new Error("rede"));
+    const sair = vi.spyOn(painel, "sairDoPainel").mockResolvedValueOnce(false).mockResolvedValueOnce(true);
     localStorage.setItem("honorteam.painel.academia", "alpha");
     render(<PainelApp />);
 
     await waitFor(() => expect(screen.getByRole("heading", { name: "Academia Alpha" })).toBeInTheDocument());
     fireEvent.click(screen.getByRole("button", { name: /Sair/ }));
 
+    await waitFor(() =>
+      expect(screen.getByRole("alert")).toHaveTextContent("Não foi possível encerrar a sessão neste aparelho")
+    );
+    expect(screen.queryByText("Painel da equipe")).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Academia Alpha" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("navigation", { name: "Menu do painel" })).not.toBeInTheDocument();
+    expect(localStorage.getItem("honorteam.painel.academia")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Tentar sair de novo" }));
+    await waitFor(() => expect(screen.getByText("Painel da equipe")).toBeInTheDocument());
+    expect(sair).toHaveBeenCalledTimes(2);
+  });
+
+  it("saída em outra aba leva esta aba ao login", async () => {
+    let avisar: (id: string | null) => void = () => {};
+    vi.spyOn(painel, "observarSessao").mockImplementation((cb) => {
+      avisar = cb;
+      cb("user-a");
+      return () => {};
+    });
+    vi.spyOn(painel, "listarMinhasAcademias").mockResolvedValue([A]);
+    render(<PainelApp />);
+
+    await waitFor(() => expect(screen.getByRole("heading", { name: "Academia Alpha" })).toBeInTheDocument());
+    act(() => avisar(null));
     await waitFor(() => expect(screen.getByText("Painel da equipe")).toBeInTheDocument());
     expect(screen.queryByRole("heading", { name: "Academia Alpha" })).not.toBeInTheDocument();
-    expect(localStorage.getItem("honorteam.painel.academia")).toBeNull();
+  });
+
+  it("troca de usuário em outra aba recarrega academias e papel; resposta atrasada do anterior é descartada", async () => {
+    let avisar: (id: string | null) => void = () => {};
+    vi.spyOn(painel, "observarSessao").mockImplementation((cb) => {
+      avisar = cb;
+      cb("dono-a");
+      return () => {};
+    });
+    let soltarAntiga: (v: AcademiaDoMembro[]) => void = () => {};
+    vi.spyOn(painel, "listarMinhasAcademias")
+      .mockImplementationOnce(() => new Promise((r) => (soltarAntiga = r)))
+      .mockResolvedValueOnce([B]);
+    render(<PainelApp />);
+
+    // Carga do dono ainda pendente quando o login troca para o professor.
+    act(() => avisar("professor-b"));
+    await waitFor(() => expect(screen.getByRole("heading", { name: "Academia Beta" })).toBeInTheDocument());
+
+    await act(async () => soltarAntiga([A]));
+    expect(screen.getByRole("heading", { name: "Academia Beta" })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Academia Alpha" })).not.toBeInTheDocument();
+    const menu = screen.getByRole("navigation", { name: "Menu do painel" });
+    expect(within(menu).queryByRole("link", { name: "Cobranças" })).not.toBeInTheDocument();
+  });
+
+  it("entrada pelo formulário não é atropelada pelo aviso de sessão (mensagem de recusa fica)", async () => {
+    let avisar: (id: string | null) => void = () => {};
+    vi.spyOn(painel, "observarSessao").mockImplementation((cb) => {
+      avisar = cb;
+      cb(null);
+      return () => {};
+    });
+    vi.spyOn(painel, "listarMinhasAcademias").mockResolvedValue([]);
+    vi.spyOn(painel, "entrarNoPainel").mockImplementation(async () => {
+      avisar("totem-1"); // SIGNED_IN durante o login
+      avisar(null); // signOut local da recusa
+      return { sucesso: false, mensagem: "Este login não faz parte da equipe de nenhuma academia." };
+    });
+    render(<PainelApp />);
+
+    await waitFor(() => expect(screen.getByText("Painel da equipe")).toBeInTheDocument());
+    fireEvent.change(screen.getByLabelText("E-mail"), { target: { value: "totem@a.test" } });
+    fireEvent.change(screen.getByLabelText("Senha"), { target: { value: "senha" } });
+    fireEvent.click(screen.getByRole("button", { name: "Entrar" }));
+
+    await waitFor(() =>
+      expect(screen.getByRole("alert")).toHaveTextContent("Este login não faz parte da equipe de nenhuma academia.")
+    );
   });
 
   it("navega pelo menu e a URL acompanha", async () => {
@@ -199,7 +272,7 @@ describe("Painel da equipe: entrada e escolha de academia", () => {
 
   it("sair volta ao login e esquece a escolha", async () => {
     vi.spyOn(painel, "listarMinhasAcademias").mockResolvedValue([A, B]);
-    const sair = vi.spyOn(painel, "sairDoPainel").mockResolvedValue();
+    const sair = vi.spyOn(painel, "sairDoPainel").mockResolvedValue(true);
     localStorage.setItem("honorteam.painel.academia", "alpha");
     render(<PainelApp />);
 

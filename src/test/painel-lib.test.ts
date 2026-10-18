@@ -77,6 +77,7 @@ function clienteFalso(vinculos: unknown[], ativas: Record<string, boolean>, usua
       getUser: vi.fn().mockResolvedValue({ data: { user: usuario }, error: null }),
       signInWithPassword: vi.fn().mockResolvedValue({ data: { user: usuario }, error: null }),
       signOut: vi.fn().mockResolvedValue({ error: null }),
+      onAuthStateChange: vi.fn(),
     },
     select,
     eqUsuario,
@@ -213,7 +214,40 @@ describe("Academias do login", () => {
   it("sair desfaz a sessão só neste aparelho", async () => {
     const cliente = clienteFalso(VINCULOS, {});
     const lib = await carregarComCliente(cliente);
-    await lib.sairDoPainel();
+    expect(await lib.sairDoPainel()).toBe(true);
     expect(cliente.auth.signOut).toHaveBeenCalledWith({ scope: "local" });
+  });
+
+  it("sair avisa quando a sessão pode ter ficado guardada (erro devolvido ou lançado)", async () => {
+    const comErro = clienteFalso(VINCULOS, {});
+    // Token vencido e renovação falhando: o SDK devolve erro sem remover a sessão.
+    comErro.auth.signOut.mockResolvedValue({ error: { name: "AuthRetryableFetchError", status: 0 } });
+    let lib = await carregarComCliente(comErro);
+    expect(await lib.sairDoPainel()).toBe(false);
+
+    const lancando = clienteFalso(VINCULOS, {});
+    lancando.auth.signOut.mockRejectedValue(new Error("rede"));
+    lib = await carregarComCliente(lancando);
+    expect(await lib.sairDoPainel()).toBe(false);
+  });
+
+  it("observarSessao repassa o id do usuário (ou null) e para de observar", async () => {
+    const cliente = clienteFalso(VINCULOS, {});
+    const unsubscribe = vi.fn();
+    let callback: (evento: string, sessao: { user: { id: string } } | null) => void = () => {};
+    cliente.auth.onAuthStateChange.mockImplementation((cb) => {
+      callback = cb;
+      return { data: { subscription: { unsubscribe } } };
+    });
+    const lib = await carregarComCliente(cliente);
+
+    const vistos: Array<string | null> = [];
+    const parar = lib.observarSessao((id) => vistos.push(id));
+    callback("SIGNED_IN", { user: { id: "u1" } });
+    callback("SIGNED_OUT", null);
+    parar();
+
+    expect(vistos).toEqual(["u1", null]);
+    expect(unsubscribe).toHaveBeenCalled();
   });
 });

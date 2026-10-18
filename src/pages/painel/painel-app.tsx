@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
   AcademiaDoMembro,
   SecaoPainel,
@@ -10,6 +10,7 @@ import {
   lerAcademiaGuardada,
   lerCaminhoPainel,
   listarMinhasAcademias,
+  observarSessao,
   papelPodeVer,
   sairDoPainel,
 } from "../../lib/painel";
@@ -63,24 +64,60 @@ function ehCliqueSimples(e: React.MouseEvent): boolean {
 type Estado =
   | { fase: "carregando" }
   | { fase: "login"; aviso?: string }
+  | { fase: "falha_ao_sair" }
   | { fase: "pronto"; academias: AcademiaDoMembro[] };
 
 export const PainelApp: React.FC = () => {
   const [estado, setEstado] = useState<Estado>({ fase: "carregando" });
   const [caminho, navegar, substituir] = usarCaminho();
+  // Cada carga de academias tem um número; resposta de carga antiga (de outro
+  // usuário, ou de antes de sair) é descartada.
+  const geracao = useRef(0);
+  const usuarioAtual = useRef<string | null | undefined>(undefined);
 
-  useEffect(() => {
-    let vivo = true;
+  const carregar = useCallback(() => {
+    const minha = ++geracao.current;
     listarMinhasAcademias()
       .then((academias) => {
-        if (!vivo) return;
+        if (minha !== geracao.current) return;
         setEstado(academias.length ? { fase: "pronto", academias } : { fase: "login" });
       })
-      .catch(() => vivo && setEstado({ fase: "login", aviso: "Não foi possível carregar suas academias. Entre de novo." }));
-    return () => {
-      vivo = false;
-    };
+      .catch(() => {
+        if (minha !== geracao.current) return;
+        setEstado({ fase: "login", aviso: "Não foi possível carregar suas academias. Entre de novo." });
+      });
   }, []);
+
+  useEffect(() => {
+    carregar();
+    return () => {
+      geracao.current++;
+    };
+  }, [carregar]);
+
+  // Saída ou troca de login em outra aba: a tela não fica com academias,
+  // papel e menu do usuário anterior.
+  useEffect(
+    () =>
+      observarSessao((usuarioId) => {
+        const anterior = usuarioAtual.current;
+        usuarioAtual.current = usuarioId;
+        if (anterior === undefined || anterior === usuarioId) return;
+        if (usuarioId === null) {
+          geracao.current++;
+          setEstado({ fase: "login" });
+          return;
+        }
+        // Entrada a partir do login (desta aba ou de outra): quem cuida é o
+        // formulário. Só a troca de um usuário por outro recarrega aqui.
+        if (anterior === null) return;
+        geracao.current++;
+        setEstado({ fase: "carregando" });
+        // Fora do callback do Auth: chamar o cliente dentro dele trava a fila de sessão.
+        setTimeout(carregar, 0);
+      }),
+    [carregar]
+  );
 
   // A URL mostra o que está na tela: sem slug (uma academia só, ou a guardada),
   // ganha o slug; seção que o papel não vê volta para o início.
@@ -95,18 +132,33 @@ export const PainelApp: React.FC = () => {
   }, [estado, caminho, substituir]);
 
   const sair = async () => {
-    try {
-      await sairDoPainel();
-    } catch {
-      // Mesmo se o signOut falhar, a tela não continua mostrando a academia.
-    }
+    geracao.current++;
+    const saiu = await sairDoPainel();
     guardarAcademia(null);
     navegar("/painel");
-    setEstado({ fase: "login" });
+    // Se a sessão pode ter ficado guardada, não finge que saiu: esconde a
+    // academia e pede nova tentativa (computador compartilhado da recepção).
+    setEstado(saiu ? { fase: "login" } : { fase: "falha_ao_sair" });
   };
 
   if (estado.fase === "carregando") {
     return <p className="py-16 text-center text-sm text-zinc-500" role="status">Carregando o painel...</p>;
+  }
+
+  if (estado.fase === "falha_ao_sair") {
+    return (
+      <Moldura aoSair={sair}>
+        <Alert variant="destructive" role="alert" className="max-w-lg mx-auto">
+          <AlertDescription>
+            Não foi possível encerrar a sessão neste aparelho, e ela pode continuar ativa. Verifique a conexão
+            e tente sair de novo antes de deixar o computador.
+          </AlertDescription>
+        </Alert>
+        <div className="text-center mt-6">
+          <Button onClick={sair}>Tentar sair de novo</Button>
+        </div>
+      </Moldura>
+    );
   }
 
   if (estado.fase === "login") {

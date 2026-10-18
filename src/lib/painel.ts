@@ -148,12 +148,34 @@ export async function entrarNoPainel(email: string, senha: string): Promise<Resu
   return { sucesso: true, academias };
 }
 
-/** Sai só neste aparelho: não derruba a sessão do mesmo login em outro lugar (um totem, por exemplo). */
-export async function sairDoPainel(): Promise<void> {
-  if (supabase) {
-    await supabase.auth.signOut({ scope: "local" });
-  }
+/**
+ * Sai só neste aparelho: não derruba a sessão do mesmo login em outro lugar
+ * (um totem, por exemplo). Devolve `false` se a sessão pode ter ficado
+ * guardada: com o token vencido e a renovação falhando (rede), o SDK devolve
+ * erro antes de remover a sessão, e ela voltaria ao reabrir o painel.
+ */
+export async function sairDoPainel(): Promise<boolean> {
   sessaoDemo = false;
+  if (!supabase) return true;
+  try {
+    const { error } = await supabase.auth.signOut({ scope: "local" });
+    return !error;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Avisa quando o usuário da sessão muda (saída ou entrada em outra aba,
+ * troca de login). Recebe o id do usuário, ou `null` sem sessão. Devolve a
+ * função que para de observar.
+ */
+export function observarSessao(aoMudar: (usuarioId: string | null) => void): () => void {
+  if (!supabase) return () => {};
+  const { data } = supabase.auth.onAuthStateChange((_evento, sessao) => {
+    aoMudar(sessao?.user.id ?? null);
+  });
+  return () => data.subscription.unsubscribe();
 }
 
 // ------------------------------------------------------------------ escolha da academia
