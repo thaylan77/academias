@@ -62,14 +62,41 @@ describe("Painel da equipe: entrada e escolha de academia", () => {
     await waitFor(() => expect(screen.getByRole("heading", { name: "Academia Beta" })).toBeInTheDocument());
   });
 
-  it("troca de academia sem sair", async () => {
+  it("login pelo formulário repassa e-mail e senha e abre a academia", async () => {
+    vi.spyOn(painel, "listarMinhasAcademias").mockResolvedValue([]);
+    const entrar = vi.spyOn(painel, "entrarNoPainel").mockResolvedValue({ sucesso: true, academias: [A] });
+    render(<PainelApp />);
+
+    await waitFor(() => expect(screen.getByText("Painel da equipe")).toBeInTheDocument());
+    fireEvent.change(screen.getByLabelText("E-mail"), { target: { value: "  dono@a.test " } });
+    fireEvent.change(screen.getByLabelText("Senha"), { target: { value: "segredo" } });
+    fireEvent.click(screen.getByRole("button", { name: "Entrar" }));
+
+    await waitFor(() => expect(screen.getByRole("heading", { name: "Academia Alpha" })).toBeInTheDocument());
+    expect(entrar).toHaveBeenCalledWith("dono@a.test", "segredo");
+    expect(window.location.pathname).toBe("/painel/alpha");
+  });
+
+  it("troca de academia sem sair, inclusive entrando pela guardada em /painel", async () => {
     vi.spyOn(painel, "listarMinhasAcademias").mockResolvedValue([A, B]);
-    abrir("/painel/alpha");
+    localStorage.setItem("honorteam.painel.academia", "alpha");
+    abrir("/painel");
     render(<PainelApp />);
 
     await waitFor(() => expect(screen.getByRole("heading", { name: "Academia Alpha" })).toBeInTheDocument());
+    expect(window.location.pathname).toBe("/painel/alpha");
     fireEvent.click(screen.getByRole("button", { name: /Trocar de academia/ }));
+
     await waitFor(() => expect(screen.getByText("Em qual academia você quer entrar?")).toBeInTheDocument());
+    expect(screen.queryByRole("heading", { name: "Academia Alpha" })).not.toBeInTheDocument();
+    expect(window.location.pathname).toBe("/painel");
+    expect(localStorage.getItem("honorteam.painel.academia")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: /Academia Beta/ }));
+    await waitFor(() => expect(screen.getByRole("heading", { name: "Academia Beta" })).toBeInTheDocument());
+    expect(window.location.pathname).toBe("/painel/beta");
+    expect(localStorage.getItem("honorteam.painel.academia")).toBe("beta");
+    expect(screen.getByText(/Você entrou como/)).toHaveTextContent("Professor");
   });
 
   it("usuário da academia A não abre o painel da B trocando a URL", async () => {
@@ -81,6 +108,11 @@ describe("Painel da equipe: entrada e escolha de academia", () => {
       expect(screen.getByRole("alert")).toHaveTextContent("Você não faz parte da equipe da academia beta")
     );
     expect(screen.queryByRole("navigation", { name: "Menu do painel" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Academia Alpha" })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Ver minhas academias" }));
+    await waitFor(() => expect(screen.getByRole("heading", { name: "Academia Alpha" })).toBeInTheDocument());
+    expect(window.location.pathname).toBe("/painel/alpha");
   });
 
   it("academia suspensa ou com teste vencido mostra o aviso de só leitura", async () => {
@@ -101,6 +133,57 @@ describe("Painel da equipe: entrada e escolha de academia", () => {
     const itens = within(menu).getAllByRole("link").map((l) => l.textContent);
     expect(itens).toEqual(["Início", "Alunos", "Turmas", "Graduações"]);
     expect(within(menu).getByRole("link", { name: "Início" })).toHaveAttribute("aria-current", "page");
+    expect(screen.queryByText(/issue #29/)).not.toBeInTheDocument();
+    await waitFor(() => expect(window.location.pathname).toBe("/painel/beta"));
+  });
+
+  it("voltar do navegador muda a seção na tela", async () => {
+    vi.spyOn(painel, "listarMinhasAcademias").mockResolvedValue([A]);
+    abrir("/painel/alpha/alunos");
+    render(<PainelApp />);
+
+    const menu = await screen.findByRole("navigation", { name: "Menu do painel" });
+    fireEvent.click(within(menu).getByRole("link", { name: "Turmas" }));
+    await waitFor(() => expect(screen.getByText(/issue #27/)).toBeInTheDocument());
+
+    window.history.pushState({}, "", "/painel/alpha/alunos");
+    fireEvent(window, new PopStateEvent("popstate"));
+    await waitFor(() => expect(screen.getByText(/issue #26/)).toBeInTheDocument());
+  });
+
+  it("Ctrl+clique no menu fica com o navegador (nova aba), sem navegar aqui", async () => {
+    vi.spyOn(painel, "listarMinhasAcademias").mockResolvedValue([A]);
+    abrir("/painel/alpha");
+    render(<PainelApp />);
+
+    const menu = await screen.findByRole("navigation", { name: "Menu do painel" });
+    const turmas = within(menu).getByRole("link", { name: "Turmas" });
+    expect(turmas).toHaveAttribute("href", "/painel/alpha/turmas");
+    // Depois do React: anota se o painel cancelou o clique e impede o jsdom de navegar.
+    let canceladoPeloPainel: boolean | null = null;
+    const depois = (e: Event) => {
+      canceladoPeloPainel = e.defaultPrevented;
+      e.preventDefault();
+    };
+    window.addEventListener("click", depois);
+    fireEvent.click(turmas, { ctrlKey: true });
+    window.removeEventListener("click", depois);
+    expect(canceladoPeloPainel).toBe(false);
+    expect(window.location.pathname).toBe("/painel/alpha");
+  });
+
+  it("se o signOut falhar, a tela sai da academia mesmo assim", async () => {
+    vi.spyOn(painel, "listarMinhasAcademias").mockResolvedValue([A]);
+    vi.spyOn(painel, "sairDoPainel").mockRejectedValue(new Error("rede"));
+    localStorage.setItem("honorteam.painel.academia", "alpha");
+    render(<PainelApp />);
+
+    await waitFor(() => expect(screen.getByRole("heading", { name: "Academia Alpha" })).toBeInTheDocument());
+    fireEvent.click(screen.getByRole("button", { name: /Sair/ }));
+
+    await waitFor(() => expect(screen.getByText("Painel da equipe")).toBeInTheDocument());
+    expect(screen.queryByRole("heading", { name: "Academia Alpha" })).not.toBeInTheDocument();
+    expect(localStorage.getItem("honorteam.painel.academia")).toBeNull();
   });
 
   it("navega pelo menu e a URL acompanha", async () => {

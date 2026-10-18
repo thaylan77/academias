@@ -73,7 +73,8 @@ function clienteFalso(vinculos: unknown[], ativas: Record<string, boolean>, usua
     from: vi.fn().mockReturnValue({ select }),
     rpc: vi.fn(async (_nome: string, args: { p_academia_id: string }) => ({ data: ativas[args.p_academia_id] ?? false, error: null })),
     auth: {
-      getUser: vi.fn().mockResolvedValue({ data: { user: usuario } }),
+      getSession: vi.fn().mockResolvedValue({ data: { session: usuario ? { user: usuario } : null } }),
+      getUser: vi.fn().mockResolvedValue({ data: { user: usuario }, error: null }),
       signInWithPassword: vi.fn().mockResolvedValue({ data: { user: usuario }, error: null }),
       signOut: vi.fn().mockResolvedValue({ error: null }),
     },
@@ -110,6 +111,7 @@ describe("Academias do login", () => {
     await lib.listarMinhasAcademias();
 
     expect(cliente.from).toHaveBeenCalledWith("membros_academia");
+    expect(cliente.select).toHaveBeenCalledWith("academia_id, papel, academias(nome, slug)");
     expect(cliente.eqUsuario).toHaveBeenCalledWith("user_id", "user-1");
     expect(cliente.eqAtivo).toHaveBeenCalledWith("ativo", true);
   });
@@ -154,6 +156,58 @@ describe("Academias do login", () => {
 
     expect(res).toEqual({ sucesso: false, mensagem: "E-mail ou senha incorretos." });
     expect(cliente.from).not.toHaveBeenCalled();
+  });
+
+  it("falha ao confirmar o usuário (rede) é erro, não 'login sem academia'", async () => {
+    const cliente = clienteFalso(VINCULOS, {});
+    cliente.auth.getUser.mockResolvedValue({ data: { user: null }, error: { status: 0, message: "Failed to fetch" } });
+    const lib = await carregarComCliente(cliente);
+
+    await expect(lib.listarMinhasAcademias()).rejects.toMatchObject({ message: "Failed to fetch" });
+    const res = await lib.entrarNoPainel("x@a.test", "senha");
+    expect(res).toEqual({
+      sucesso: false,
+      mensagem: "Não foi possível carregar suas academias. Verifique a conexão e tente de novo.",
+    });
+  });
+
+  it("erro na consulta dos vínculos ou em academia_ativa propaga (nunca marca academia como ativa)", async () => {
+    const comErroNaConsulta = clienteFalso(VINCULOS, {});
+    comErroNaConsulta.eqAtivo.mockResolvedValue({ data: null, error: { message: "boom" } });
+    let lib = await carregarComCliente(comErroNaConsulta);
+    await expect(lib.listarMinhasAcademias()).rejects.toMatchObject({ message: "boom" });
+
+    const comErroNaAtiva = clienteFalso(VINCULOS, {});
+    comErroNaAtiva.rpc.mockResolvedValue({ data: null, error: { message: "rpc falhou" } } as never);
+    lib = await carregarComCliente(comErroNaAtiva);
+    await expect(lib.listarMinhasAcademias()).rejects.toMatchObject({ message: "rpc falhou" });
+  });
+
+  it("login com sucesso devolve as academias já carregadas", async () => {
+    const cliente = clienteFalso(VINCULOS, { a: true, b: true });
+    const lib = await carregarComCliente(cliente);
+
+    const res = await lib.entrarNoPainel("dono@a.test", "senha");
+
+    expect(cliente.auth.signInWithPassword).toHaveBeenCalledWith({ email: "dono@a.test", password: "senha" });
+    expect(res).toMatchObject({ sucesso: true, academias: [{ slug: "alpha" }, { slug: "zen" }] });
+    expect(cliente.auth.signOut).not.toHaveBeenCalled();
+  });
+
+  it("só credencial recusada vira 'senha incorreta'", async () => {
+    const casos: Array<[object, string]> = [
+      [{ status: 400, code: "invalid_credentials" }, "E-mail ou senha incorretos."],
+      [{ status: 400, code: "email_not_confirmed" }, "Confirme o seu e-mail antes de entrar."],
+      [{ status: 429, code: "over_request_rate_limit" }, "Muitas tentativas. Espere um pouco e tente de novo."],
+      [{ status: 0 }, "Não foi possível entrar agora. Verifique a conexão e tente de novo."],
+      [{ status: 503 }, "Não foi possível entrar agora. Verifique a conexão e tente de novo."],
+    ];
+    for (const [erro, mensagem] of casos) {
+      const cliente = clienteFalso(VINCULOS, {});
+      cliente.auth.signInWithPassword.mockResolvedValue({ data: { user: null }, error: { message: "x", ...erro } });
+      const lib = await carregarComCliente(cliente);
+      expect(await lib.entrarNoPainel("x@a.test", "senha")).toEqual({ sucesso: false, mensagem });
+    }
   });
 
   it("sair desfaz a sessão só neste aparelho", async () => {

@@ -35,7 +35,9 @@ export interface PainelContextoValor {
 export const PainelContexto = React.createContext<PainelContextoValor | null>(null);
 
 // Caminho atual do navegador, atualizado por navegação do painel e pelo voltar/avançar.
-function usarCaminho(): [string, (novo: string) => void] {
+// `substituir` corrige o endereço sem criar entrada no histórico; o estado acompanha
+// sempre a URL, senão uma navegação seguinte para o caminho antigo não redesenha.
+function usarCaminho(): [string, (novo: string) => void, (novo: string) => void] {
   const [caminho, setCaminho] = useState(window.location.pathname);
   useEffect(() => {
     const aoVoltar = () => setCaminho(window.location.pathname);
@@ -46,7 +48,16 @@ function usarCaminho(): [string, (novo: string) => void] {
     if (novo !== window.location.pathname) window.history.pushState({}, "", novo);
     setCaminho(novo);
   }, []);
-  return [caminho, navegar];
+  const substituir = useCallback((novo: string) => {
+    if (novo !== window.location.pathname) window.history.replaceState({}, "", novo);
+    setCaminho(novo);
+  }, []);
+  return [caminho, navegar, substituir];
+}
+
+// Clique com o botão do meio ou com Ctrl/Cmd/Shift abre em outra aba: deixa o navegador agir.
+function ehCliqueSimples(e: React.MouseEvent): boolean {
+  return e.button === 0 && !e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey;
 }
 
 type Estado =
@@ -56,7 +67,7 @@ type Estado =
 
 export const PainelApp: React.FC = () => {
   const [estado, setEstado] = useState<Estado>({ fase: "carregando" });
-  const [caminho, navegar] = usarCaminho();
+  const [caminho, navegar, substituir] = usarCaminho();
 
   useEffect(() => {
     let vivo = true;
@@ -71,19 +82,24 @@ export const PainelApp: React.FC = () => {
     };
   }, []);
 
-  // Sem slug na URL (uma academia só, ou a guardada): mostra o endereço completo.
+  // A URL mostra o que está na tela: sem slug (uma academia só, ou a guardada),
+  // ganha o slug; seção que o papel não vê volta para o início.
   useEffect(() => {
     if (estado.fase !== "pronto") return;
     const { slug, secao } = lerCaminhoPainel(caminho);
-    if (slug) return;
-    const escolha = escolherAcademia(estado.academias, null, lerAcademiaGuardada());
-    if (escolha.tipo === "academia") {
-      window.history.replaceState({}, "", caminhoPainel(escolha.academia.slug, secao));
-    }
-  }, [estado, caminho]);
+    const escolha = escolherAcademia(estado.academias, slug, lerAcademiaGuardada());
+    if (escolha.tipo !== "academia") return;
+    const { academia } = escolha;
+    const correto = caminhoPainel(academia.slug, papelPodeVer(academia.papel, secao) ? secao : "inicio");
+    if (correto !== caminho) substituir(correto);
+  }, [estado, caminho, substituir]);
 
   const sair = async () => {
-    await sairDoPainel();
+    try {
+      await sairDoPainel();
+    } catch {
+      // Mesmo se o signOut falhar, a tela não continua mostrando a academia.
+    }
     guardarAcademia(null);
     navegar("/painel");
     setEstado({ fase: "login" });
@@ -179,6 +195,7 @@ export const PainelApp: React.FC = () => {
                     href={caminhoPainel(academia.slug, item.secao)}
                     aria-current={item.secao === secaoVisivel ? "page" : undefined}
                     onClick={(e) => {
+                      if (!ehCliqueSimples(e)) return;
                       e.preventDefault();
                       navegar(caminhoPainel(academia.slug, item.secao));
                     }}

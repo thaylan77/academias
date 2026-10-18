@@ -69,7 +69,12 @@ let sessaoDemo = false;
  */
 export async function listarMinhasAcademias(): Promise<AcademiaDoMembro[]> {
   if (supabase) {
-    const { data: auth } = await supabase.auth.getUser();
+    // Sem sessão guardada, não há academia. Com sessão, falha ao confirmar o
+    // usuário (rede, Auth fora do ar) é erro, não "login sem academia".
+    const { data: sessao } = await supabase.auth.getSession();
+    if (!sessao?.session) return [];
+    const { data: auth, error: erroUsuario } = await supabase.auth.getUser();
+    if (erroUsuario) throw erroUsuario;
     const usuario = auth?.user;
     if (!usuario) return [];
 
@@ -106,12 +111,21 @@ export type ResultadoEntrada =
   | { sucesso: true; academias: AcademiaDoMembro[] }
   | { sucesso: false; mensagem: string };
 
+// Só credencial recusada vira "senha incorreta"; limite de tentativas e falha de
+// rede ou do servidor ganham mensagem própria, para ninguém trocar a senha à toa.
+function mensagemDeFalhaNoLogin(erro: { status?: number; code?: string }): string {
+  if (erro.code === "email_not_confirmed") return "Confirme o seu e-mail antes de entrar.";
+  if (erro.code === "invalid_credentials" || erro.status === 400) return "E-mail ou senha incorretos.";
+  if (erro.status === 429) return "Muitas tentativas. Espere um pouco e tente de novo.";
+  return "Não foi possível entrar agora. Verifique a conexão e tente de novo.";
+}
+
 /** Login da equipe no painel. Sem vínculo em nenhuma academia, recusa. */
 export async function entrarNoPainel(email: string, senha: string): Promise<ResultadoEntrada> {
   if (supabase) {
     const { error } = await supabase.auth.signInWithPassword({ email, password: senha });
     if (error) {
-      return { sucesso: false, mensagem: "E-mail ou senha incorretos." };
+      return { sucesso: false, mensagem: mensagemDeFalhaNoLogin(error) };
     }
   } else if (import.meta.env.DEV) {
     sessaoDemo = true;
