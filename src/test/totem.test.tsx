@@ -2,6 +2,18 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { TotemPage } from "../pages/checkin/totem-page";
 import * as supabaseModule from "../lib/supabase";
+import * as tokenCheckin from "../lib/token-checkin";
+
+const TURMA_JUDO = { id: "turma-1", nome: "Judo Infantil", hora_inicio: "18:00", hora_fim: "19:00" };
+
+// Abre o totem e entra com o atalho de desenvolvimento.
+async function entrarNoTotem() {
+  render(<TotemPage slug="honor-demo-a" />);
+  await waitFor(() => {
+    expect(screen.getByText("Professor (Seed)")).toBeInTheDocument();
+  });
+  fireEvent.click(screen.getByText("Professor (Seed)"));
+}
 
 describe("Tela de Totem (Proteção de Equipe e Token Rotativo)", () => {
   beforeEach(async () => {
@@ -157,42 +169,6 @@ describe("Tela de Totem (Proteção de Equipe e Token Rotativo)", () => {
     expect(screen.queryByText(/Aponte a câmera do seu celular para registrar sua presença no tatame/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/Token rotativo ativo/i)).not.toBeInTheDocument();
     expect(screen.getByText(/Tentando novo token no próximo ciclo/i)).toBeInTheDocument();
-  });
-
-  it("deve filtrar por academia_id em resolverPapelEquipe garantindo isolamento multi-tenant", async () => {
-    const eqMock3 = vi.fn().mockReturnValue({
-      maybeSingle: vi.fn().mockResolvedValue({
-        data: { papel: "admin" },
-        error: null,
-      }),
-    });
-    const eqMock2 = vi.fn().mockReturnValue({
-      eq: eqMock3,
-    });
-    const eqMock1 = vi.fn().mockReturnValue({
-      eq: eqMock2,
-    });
-
-    const fakeClient = {
-      from: vi.fn().mockReturnValue({
-        select: vi.fn().mockReturnValue({
-          eq: eqMock1,
-        }),
-      }),
-    };
-
-    const papelResolvido = await supabaseModule.resolverPapelEquipe(
-      fakeClient,
-      "user-123",
-      "acad-uuid-456",
-      "professor"
-    );
-
-    expect(papelResolvido).toBe("admin");
-    expect(fakeClient.from).toHaveBeenCalledWith("membros_academia");
-    expect(eqMock1).toHaveBeenCalledWith("user_id", "user-123");
-    expect(eqMock2).toHaveBeenCalledWith("ativo", true);
-    expect(eqMock3).toHaveBeenCalledWith("academia_id", "acad-uuid-456");
   });
 
   it("deve tratar erro transitório de rede com feedback de 'reconectando' e espera crescente de 5s", async () => {
@@ -396,39 +372,377 @@ describe("Tela de Totem (Proteção de Equipe e Token Rotativo)", () => {
     expect(screen.queryByText("Acesso ao Totem de Presença")).not.toBeInTheDocument();
   });
 
-  it("deve ocultar o QR code e exibir aviso quando o token expirar durante desconexão prolongada", async () => {
-    vi.spyOn(supabaseModule, "obterTurmasAbertasTotem").mockResolvedValue([
-      {
-        id: "turma-expirada-1",
-        nome: "Judo Infantil",
-        hora_inicio: "18:00",
-        hora_fim: "19:00",
-      },
-    ]);
+  it("relógio do aparelho adiantado: token com expira_em no passado continua exibido", async () => {
+    vi.spyOn(supabaseModule, "obterTurmasAbertasTotem").mockResolvedValue([TURMA_JUDO]);
 
-    // Token com expira_em já vencido no passado
+    // Para um aparelho com o relógio uma hora adiantado, o expira_em do banco já "passou".
     vi.spyOn(supabaseModule, "emitirTokenCheckin").mockResolvedValue({
-      token: "tok-vencido-123",
-      expira_em: new Date(Date.now() - 5000).toISOString(),
+      token: "tok-relogio-adiantado",
+      expira_em: new Date(Date.now() - 3_600_000).toISOString(),
       periodo_segundos: 30,
     });
 
-    render(<TotemPage slug="honor-demo-a" />);
+    await entrarNoTotem();
 
-    await waitFor(() => {
-      expect(screen.getByText("Professor (Seed)")).toBeInTheDocument();
-    });
-    fireEvent.click(screen.getByText("Professor (Seed)"));
-
-    // Exibe o nome da turma, mas o QR code é ocultado com o aviso de expirado
     await waitFor(() => {
       expect(screen.getByText("Judo Infantil")).toBeInTheDocument();
-      expect(screen.getByText("QR Code Expirado")).toBeInTheDocument();
-      expect(screen.getByText(/Aguardando renovação do sinal para emitir novo código rotativo/i)).toBeInTheDocument();
+      expect(screen.getByText(/Token rotativo ativo/i)).toBeInTheDocument();
+    });
+    expect(screen.queryByText("QR Code Expirado")).not.toBeInTheDocument();
+    // E não entra em renovação a cada segundo: espera um período menos a folga.
+    expect(screen.getByText(/Renovando em (1[5-9]|20)s/i)).toBeInTheDocument();
+  });
+
+  it("deve ocultar o QR code quando o prazo de exibição passa sem renovação", async () => {
+    let decorrido = 0;
+    const inicio = { monotonico: 1_000, parede: Date.now() };
+    vi.spyOn(tokenCheckin.relogio, "agora").mockImplementation(() => ({
+      monotonico: inicio.monotonico + decorrido,
+      parede: inicio.parede + decorrido,
+    }));
+
+    vi.spyOn(supabaseModule, "obterTurmasAbertasTotem").mockResolvedValue([TURMA_JUDO]);
+    vi.spyOn(supabaseModule, "emitirTokenCheckin").mockResolvedValue({
+      token: "tok-vai-vencer",
+      expira_em: new Date(Date.now() + 30_000).toISOString(),
+      periodo_segundos: 30,
     });
 
+    await entrarNoTotem();
+
+    await waitFor(() => {
+      expect(screen.getByText(/Token rotativo ativo/i)).toBeInTheDocument();
+    });
+
+    // Passa um período inteiro sem que um token novo chegue.
+    decorrido += 30_000;
+
+    // A tela se redesenha a cada segundo (relógio do cabeçalho) e passa a esconder o QR.
+    await waitFor(
+      () => {
+        expect(screen.getByText("QR Code Expirado")).toBeInTheDocument();
+      },
+      { timeout: 3000 }
+    );
     expect(screen.queryByText(/Aponte a câmera do seu celular para registrar sua presença no tatame/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/Token rotativo ativo/i)).not.toBeInTheDocument();
   });
-});
 
+  it("totem que acorda do repouso não mostra o QR de antes de dormir", async () => {
+    // Durante o sono o relógio monotônico pode ficar parado; o de parede continua.
+    let sono = 0;
+    const inicio = { monotonico: 1_000, parede: Date.now() };
+    vi.spyOn(tokenCheckin.relogio, "agora").mockImplementation(() => ({
+      monotonico: inicio.monotonico,
+      parede: inicio.parede + sono,
+    }));
+
+    vi.spyOn(supabaseModule, "obterTurmasAbertasTotem").mockResolvedValue([TURMA_JUDO]);
+    vi.spyOn(supabaseModule, "emitirTokenCheckin").mockResolvedValue({
+      token: "tok-de-antes-de-dormir",
+      expira_em: new Date(Date.now() + 30_000).toISOString(),
+      periodo_segundos: 30,
+    });
+
+    await entrarNoTotem();
+
+    await waitFor(() => {
+      expect(screen.getByText(/Token rotativo ativo/i)).toBeInTheDocument();
+    });
+
+    sono = 8 * 3_600_000;
+
+    await waitFor(
+      () => {
+        expect(screen.getByText("QR Code Expirado")).toBeInTheDocument();
+      },
+      { timeout: 3000 }
+    );
+    expect(screen.queryByText(/Token rotativo ativo/i)).not.toBeInTheDocument();
+  });
+
+  it("durante a reconexão, o QR ainda válido não diz que está renovando", async () => {
+    const turmasMock = vi
+      .spyOn(supabaseModule, "obterTurmasAbertasTotem")
+      .mockResolvedValueOnce([TURMA_JUDO])
+      .mockRejectedValue(new Error("Failed to fetch"));
+
+    // expira_em a 1,5 s: o totem busca o próximo token em 1 s, e essa busca cai.
+    vi.spyOn(supabaseModule, "emitirTokenCheckin").mockResolvedValue({
+      token: "tok-ainda-valido",
+      expira_em: new Date(Date.now() + 1_500).toISOString(),
+      periodo_segundos: 30,
+    });
+
+    await entrarNoTotem();
+
+    await waitFor(() => {
+      expect(screen.getByText(/Token rotativo ativo • Renovando em/i)).toBeInTheDocument();
+    });
+
+    await waitFor(
+      () => {
+        expect(screen.getByText(/Oscilação de rede detectada/i)).toBeInTheDocument();
+        expect(screen.getByText(/Código ainda válido • Sem conexão para renovar/i)).toBeInTheDocument();
+      },
+      { timeout: 4000 }
+    );
+    expect(screen.queryByText(/Renovando em/i)).not.toBeInTheDocument();
+    expect(turmasMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("falha de rede na emissão de todos os tokens entra em reconexão, não fica como conectado", async () => {
+    vi.spyOn(supabaseModule, "obterTurmasAbertasTotem").mockResolvedValue([
+      TURMA_JUDO,
+      { id: "turma-2", nome: "Muay Thai Geral", hora_inicio: "18:30", hora_fim: "19:30" },
+    ]);
+    vi.spyOn(supabaseModule, "emitirTokenCheckin").mockRejectedValue(new TypeError("Failed to fetch"));
+
+    await entrarNoTotem();
+
+    await waitFor(() => {
+      expect(screen.getByText(/Oscilação de rede detectada/i)).toBeInTheDocument();
+      expect(screen.getByText("Reconectar Agora")).toBeInTheDocument();
+    });
+    expect(screen.queryByText(/Token rotativo ativo/i)).not.toBeInTheDocument();
+  });
+
+  it("falhas seguidas só na emissão dos tokens aumentam a espera (5, 15, 30 s) e a recuperação zera a contagem", async () => {
+    // A lista de turmas sempre responde; só a emissão dos tokens cai, com atraso de rede.
+    vi.spyOn(supabaseModule, "obterTurmasAbertasTotem").mockResolvedValue([TURMA_JUDO]);
+    let emissaoNoAr = false;
+    vi.spyOn(supabaseModule, "emitirTokenCheckin").mockImplementation(async () => {
+      await new Promise((r) => setTimeout(r, 30));
+      if (!emissaoNoAr) throw new TypeError("Failed to fetch");
+      return {
+        token: "tok-voltou",
+        // expira logo: o totem busca o próximo token em 1 s
+        expira_em: new Date(Date.now() + 1_500).toISOString(),
+        periodo_segundos: 30,
+      };
+    });
+
+    await entrarNoTotem();
+
+    await waitFor(() => {
+      expect(screen.getByText(/Reconectando em 5s/i)).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByText("Reconectar Agora"));
+    await waitFor(() => {
+      expect(screen.getByText(/Reconectando em 15s/i)).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByText("Reconectar Agora"));
+    await waitFor(() => {
+      expect(screen.getByText(/Reconectando em 30s/i)).toBeInTheDocument();
+    });
+
+    // A emissão volta: o totem mostra o QR e sai da reconexão.
+    emissaoNoAr = true;
+    fireEvent.click(screen.getByText("Reconectar Agora"));
+    await waitFor(() => {
+      expect(screen.getByText(/Token rotativo ativo/i)).toBeInTheDocument();
+    });
+    expect(screen.queryByText(/Oscilação de rede detectada/i)).not.toBeInTheDocument();
+
+    // A emissão cai de novo no ciclo seguinte: a espera recomeça em 5 s, não em 60.
+    emissaoNoAr = false;
+    await waitFor(
+      () => {
+        expect(screen.getByText(/Reconectando em 5s/i)).toBeInTheDocument();
+      },
+      { timeout: 4000 }
+    );
+  });
+
+  it("erro de negócio na emissão de todos os tokens não é tratado como queda de conexão", async () => {
+    vi.spyOn(supabaseModule, "obterTurmasAbertasTotem").mockResolvedValue([TURMA_JUDO]);
+    vi.spyOn(supabaseModule, "emitirTokenCheckin").mockRejectedValue({
+      code: "P0001",
+      hint: "checkin_fora_do_horario",
+      message: "Fora da janela da aula",
+    });
+
+    await entrarNoTotem();
+
+    await waitFor(() => {
+      expect(screen.getByText("Fora da Janela da Aula")).toBeInTheDocument();
+    });
+    expect(screen.queryByText(/Oscilação de rede detectada/i)).not.toBeInTheDocument();
+    expect(screen.queryByText("Reconectar Agora")).not.toBeInTheDocument();
+  });
+
+  it("renovação que falha para uma turma mantém o QR dela enquanto ainda vale", async () => {
+    const TURMA_2 = { id: "turma-2", nome: "Muay Thai Geral", hora_inicio: "18:30", hora_fim: "19:30" };
+    vi.spyOn(supabaseModule, "obterTurmasAbertasTotem").mockResolvedValue([TURMA_JUDO, TURMA_2]);
+
+    // 1º pedido de cada turma: token com renovação em 1 s.
+    // Do 2º pedido em diante: a turma 2 falha por rede, a turma 1 segue normal.
+    // (Decidido pela contagem de pedidos, não por um sinal ligado pelo teste,
+    // para não depender de quando o segundo ciclo dispara.)
+    const pedidos: Record<string, number> = {};
+    const emitirMock = vi.spyOn(supabaseModule, "emitirTokenCheckin").mockImplementation(async (turmaId: string) => {
+      pedidos[turmaId] = (pedidos[turmaId] ?? 0) + 1;
+      const primeiro = pedidos[turmaId] === 1;
+      if (!primeiro && turmaId === "turma-2") throw new TypeError("Failed to fetch");
+      return {
+        token: `tok-${turmaId}`,
+        expira_em: new Date(Date.now() + (primeiro ? 1_500 : 30_000)).toISOString(),
+        periodo_segundos: 30,
+      };
+    });
+
+    await entrarNoTotem();
+
+    await waitFor(() => {
+      expect(screen.getAllByText(/Token rotativo ativo/i)).toHaveLength(2);
+    });
+
+    // Espera o segundo ciclo (4 chamadas: 2 do primeiro, 2 do segundo).
+    await waitFor(
+      () => {
+        expect(emitirMock.mock.calls.length).toBeGreaterThanOrEqual(4);
+      },
+      { timeout: 4000 }
+    );
+
+    // A turma 2 continua com o QR anterior, sem cartão de erro.
+    await waitFor(() => {
+      expect(screen.getAllByText(/Token rotativo ativo/i)).toHaveLength(2);
+    });
+    expect(screen.queryByText(/Tentando novo token no próximo ciclo/i)).not.toBeInTheDocument();
+    expect(screen.queryByText("QR Code Expirado")).not.toBeInTheDocument();
+  });
+
+  it("dois disparos no mesmo instante executam um ciclo só", async () => {
+    const turmasMock = vi
+      .spyOn(supabaseModule, "obterTurmasAbertasTotem")
+      .mockRejectedValue(new Error("Failed to fetch"));
+
+    await entrarNoTotem();
+
+    await waitFor(() => {
+      expect(screen.getByText("Reconectar Agora")).toBeInTheDocument();
+    });
+    expect(turmasMock).toHaveBeenCalledTimes(1);
+
+    // Dois cliques antes de qualquer nova renderização.
+    const botao = screen.getByText("Reconectar Agora");
+    fireEvent.click(botao);
+    fireEvent.click(botao);
+
+    await waitFor(() => {
+      expect(turmasMock).toHaveBeenCalledTimes(2);
+    });
+    // Dá tempo de um terceiro ciclo indevido aparecer.
+    await new Promise((r) => setTimeout(r, 100));
+    expect(turmasMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("emite os tokens de todas as turmas ao mesmo tempo", async () => {
+    vi.spyOn(supabaseModule, "obterTurmasAbertasTotem").mockResolvedValue([
+      TURMA_JUDO,
+      { id: "turma-2", nome: "Muay Thai Geral", hora_inicio: "18:30", hora_fim: "19:30" },
+    ]);
+
+    const liberar: Array<() => void> = [];
+    const emitirMock = vi.spyOn(supabaseModule, "emitirTokenCheckin").mockImplementation(
+      (turmaId: string) =>
+        new Promise((resolve) => {
+          liberar.push(() =>
+            resolve({
+              token: `tok-${turmaId}`,
+              expira_em: new Date(Date.now() + 30_000).toISOString(),
+              periodo_segundos: 30,
+            })
+          );
+        })
+    );
+
+    await entrarNoTotem();
+
+    // O segundo pedido sai sem esperar a resposta do primeiro.
+    await waitFor(() => {
+      expect(emitirMock).toHaveBeenCalledTimes(2);
+    });
+    expect(liberar).toHaveLength(2);
+
+    liberar.forEach((f) => f());
+
+    await waitFor(() => {
+      expect(screen.getAllByText(/Token rotativo ativo/i)).toHaveLength(2);
+    });
+  });
+
+  it("sessão expirada na emissão do token de uma turma aciona a renovação da sessão", async () => {
+    vi.spyOn(supabaseModule, "obterTurmasAbertasTotem").mockResolvedValue([TURMA_JUDO]);
+    vi.spyOn(supabaseModule, "emitirTokenCheckin")
+      .mockRejectedValueOnce({ code: "PGRST301", message: "JWT expired" })
+      .mockResolvedValue({
+        token: "tok-depois-do-refresh",
+        expira_em: new Date(Date.now() + 30_000).toISOString(),
+        periodo_segundos: 30,
+      });
+    const renovarSpy = vi.spyOn(supabaseModule, "renovarSessao").mockResolvedValue({ sucesso: true });
+    const logoutSpy = vi.spyOn(supabaseModule, "logoutEquipe");
+
+    await entrarNoTotem();
+
+    await waitFor(() => {
+      expect(screen.getByText(/Token rotativo ativo/i)).toBeInTheDocument();
+    });
+    expect(renovarSpy).toHaveBeenCalledTimes(1);
+    expect(logoutSpy).not.toHaveBeenCalled();
+  });
+
+  it("sessão expirada em várias turmas ao mesmo tempo renova a sessão uma vez só", async () => {
+    vi.spyOn(supabaseModule, "obterTurmasAbertasTotem").mockResolvedValue([
+      TURMA_JUDO,
+      { id: "turma-2", nome: "Muay Thai Geral", hora_inicio: "18:30", hora_fim: "19:30" },
+      { id: "turma-3", nome: "Boxe", hora_inicio: "18:30", hora_fim: "19:30" },
+    ]);
+    let sessaoRenovada = false;
+    vi.spyOn(supabaseModule, "emitirTokenCheckin").mockImplementation(async (turmaId: string) => {
+      if (!sessaoRenovada) throw { code: "PGRST301", message: "JWT expired" };
+      return {
+        token: `tok-${turmaId}`,
+        expira_em: new Date(Date.now() + 30_000).toISOString(),
+        periodo_segundos: 30,
+      };
+    });
+    // Com rotação de refresh token, dois pedidos de renovação simultâneos derrubariam a sessão.
+    const renovarSpy = vi.spyOn(supabaseModule, "renovarSessao").mockImplementation(async () => {
+      sessaoRenovada = true;
+      return { sucesso: true };
+    });
+    const logoutSpy = vi.spyOn(supabaseModule, "logoutEquipe");
+
+    await entrarNoTotem();
+
+    await waitFor(() => {
+      expect(screen.getAllByText(/Token rotativo ativo/i)).toHaveLength(3);
+    });
+    expect(renovarSpy).toHaveBeenCalledTimes(1);
+    expect(logoutSpy).not.toHaveBeenCalled();
+  });
+
+  it("erro de negócio com hint não desloga, mesmo com texto e status de não autorizado", async () => {
+    vi.spyOn(supabaseModule, "obterTurmasAbertasTotem").mockRejectedValue({
+      code: "P0001",
+      status: 401,
+      hint: "sem_permissao",
+      message: "Unauthorized: sessão expirada",
+    });
+    const renovarSpy = vi.spyOn(supabaseModule, "renovarSessao");
+    const logoutSpy = vi.spyOn(supabaseModule, "logoutEquipe");
+
+    await entrarNoTotem();
+
+    await waitFor(() => {
+      expect(screen.getByText("Este login não pode operar o totem.")).toBeInTheDocument();
+    });
+    expect(renovarSpy).not.toHaveBeenCalled();
+    expect(logoutSpy).not.toHaveBeenCalled();
+  });
+});

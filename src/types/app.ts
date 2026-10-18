@@ -77,7 +77,8 @@ export interface UsuarioEquipe {
   id: string;
   nome: string;
   email: string;
-  papel: MembroEquipePapel;
+  // null: há sessão, mas o papel nesta academia ainda não pôde ser confirmado.
+  papel: MembroEquipePapel | null;
 }
 
 export interface TurmaAbertaTotem {

@@ -86,6 +86,7 @@ O código vai no `hint` do erro (`raise exception '<mensagem em português>' usi
 | `menor_sem_responsavel` | `matricula_online` | menor de 18 anos sem nome e CPF do responsável |
 | `dados_invalidos` | `matricula_online` | nome vazio, termo não aceito, plano inválido, CPF malformado (D7); e qualquer entrada malformada: `p_dados` que não é objeto, `plano_id` que não é uuid, `data_nascimento` fora de `AAAA-MM-DD`, inexistente ou no futuro, `aceite_termo` que não é o booleano `true`, `turma_ids` que não é lista de uuids |
 | `sem_permissao` | `emitir_token_checkin`, `totem_turmas_agora`, `rotacionar_segredo_checkin` | quem chama não tem o papel na academia (D7) |
+| `matricula_duplicada` | gravação em `matricula_turmas` e em `matriculas` | o aluno já tem matrícula não cancelada na turma em período sobreposto. O `detail` traz `matricula_id` e `turma_id` em conflito. Regra em `docs/specs/matricula-duplicada.md` |
 
 
 **Lista de candidatos em `checkin_multiplos_alunos`.** O erro leva no `detail` (no PostgREST, `error.details`) um JSON com os alunos daquele login naquela turma, em ordem de nome:
