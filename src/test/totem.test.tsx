@@ -15,10 +15,7 @@ async function entrarNoTotem() {
   fireEvent.click(screen.getByText("Professor (Seed)"));
 }
 
-// Vários testes daqui esperam ciclos reais do totem (renovação em 1 s, espera
-// crescente). Com a máquina carregada eles já passaram de 5 s; o limite maior
-// não esconde erro de lógica, porque cada teste confere o resultado.
-describe("Tela de Totem (Proteção de Equipe e Token Rotativo)", { timeout: 15_000 }, () => {
+describe("Tela de Totem (Proteção de Equipe e Token Rotativo)", () => {
   beforeEach(async () => {
     vi.restoreAllMocks();
     await supabaseModule.logoutEquipe();
