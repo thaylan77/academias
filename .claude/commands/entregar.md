@@ -28,8 +28,11 @@ avise.
   códigos estáveis no `hint`.
 - Toda mudança vem com teste: pgTAP para banco e RLS (com 2 academias),
   Vitest para o front.
-- Mudança de schema ou de política RLS: apresente o plano e espere aprovação
-  antes de escrever a migration (`CLAUDE.md`).
+- Mudança de schema: o plano vai na descrição do PR. Apresente o plano e
+  **espere aprovação antes de escrever a migration** só nos três casos do
+  `CLAUDE.md`: perda ou alteração irreversível de dados existentes; mudança
+  em RLS, papéis ou vínculo de login; fluxo de dinheiro (cobrança, baixa,
+  gateway).
 - Migration nova com `npx supabase@2.119.0 migration new <nome>`. Nunca edite
   migration já aplicada.
 
@@ -42,8 +45,23 @@ avise.
 
 ## 5. Atualizar com `main`, abrir o PR e revisar
 
-Ordem das revisões: **Gemini primeiro** (só em PR de front e de risco),
-**Codex por último**, no head final. A decisão é **só a linha do Codex**.
+A revisão é proporcional ao risco (`AGENTS.md`, "Revisão proporcional ao
+risco"). Antes de pedir revisão, classifique o PR pelo `git diff --name-only
+origin/main...HEAD`:
+
+- **Muda código que roda** (basta um arquivo): `src/` fora de testes,
+  `supabase/` fora de `supabase/tests/`, `.github/`, `AGENTS.md`, `CLAUDE.md`,
+  `.claude/`, `scripts/`, `package.json`, `package-lock.json` ou arquivo de
+  configuração. **Gemini primeiro**, se for front ou risco, e **Codex por
+  último**, no head final. A decisão é **só a linha do Codex**.
+- **Só testes ou só documentação** (`README.md`, `docs/`): Gemini (5.3,
+  obrigatório aqui) e a sua revisão (5.6). Não gaste rodada do Codex.
+
+Na dúvida, vale o primeiro caso.
+
+**Mudança que enfraquece uma trava** (revisão, CI, proteção do `main`, regra
+de aprovação prévia): além do Codex, diga no PR e na sessão qual trava muda
+e como, e **só mescle depois do ok explícito do dono do projeto**.
 
 ### 5.1 Preparar, nesta ordem
 
@@ -86,8 +104,8 @@ Não gaste rodada de revisor com teste de ambiente ou de ferramenta.
 
 ### 5.3 Primeira revisão: Gemini (plugin do Antigravity)
 
-Só em PR de **front** e em PR de **risco** (financeiro, segurança/RLS). Nos
-demais, vá direto ao 5.4.
+Em PR de **front**, em PR de **risco** (financeiro, segurança/RLS) e em
+**todo PR só de testes ou só de documentação**. Nos demais, vá direto ao 5.4.
 
 ```bash
 scripts/revisao-externa.sh gemini "$(git rev-parse HEAD)" "<saída>" "<foco>"
@@ -132,7 +150,8 @@ Depois:
 
 ### 5.4 Revisão final: Codex
 
-Roda **uma vez, no head final**, depois das correções vindas do Gemini:
+Em todo PR que muda código que roda. Roda **uma vez, no head final**, depois
+das correções vindas do Gemini:
 
 ```bash
 scripts/revisao-externa.sh codex "$(git rev-parse HEAD)" "<saída>" "<foco>"
@@ -165,6 +184,22 @@ issue) que o Codex não levantou. Antes de registrar, veja as linhas dos dois
 PRs anteriores que tiveram Gemini: com **três "não" seguidos**, avise o
 usuário para decidir se desinstala o plugin.
 
+### 5.6 PR só de testes ou só de documentação: sua revisão
+
+No lugar do Codex. Depois da triagem do Gemini, releia o diff inteiro no
+head final e publique um comentário "Revisão do Claude" com:
+
+- o head revisado (sha completo) e a lista de arquivos, mostrando que
+  nenhum é código que roda;
+- o que conferiu: em teste, se cada um falha quando o comportamento testado
+  quebra (rode contra o código alterado de propósito, quando der); em
+  documentação, se cada afirmação bate com o repositório;
+- o que ficou de fora.
+
+Commit depois desse comentário pede novo comentário no head novo. Se o
+Gemini estiver fora do ar ou sem cota, o PR espera ou vai para o Codex:
+você não aprova sozinho.
+
 ## 6. CI verde
 
 - Espere o CI `Banco` (banco e front) ficar verde no head, no push e no pull
@@ -178,10 +213,19 @@ usuário para decidir se desinstala o plugin.
 Mescle (squash) só se **todos** valerem, conferidos pela API nesta ordem:
 
 1. o PR está aberto;
-2. a última linha da revisão do Codex é `APROVADO: <sha>` e esse sha é o head
-   atual do PR, ou vale o reaproveitamento abaixo;
+2. a revisão exigida está feita no head atual:
+   - PR com código que roda: a última linha da revisão do Codex é
+     `APROVADO: <sha>` e esse sha é o head atual do PR, ou vale o
+     reaproveitamento abaixo;
+   - PR só de testes ou só de documentação: saída do Gemini e triagem
+     publicadas, e o comentário "Revisão do Claude" (5.6) no head atual;
 3. a base é `main`;
-4. o CI `Banco` está verde no head atual, no push e no pull request.
+4. o CI `Banco` (`testes` e `front`) está verde no head atual, no push e
+   no pull request;
+5. a branch está atualizada com `main` (a trava do `main` recusa o merge se
+   não estiver);
+6. se o PR enfraquece uma trava, o dono do projeto deu o ok explícito na
+   sessão.
 
 Se qualquer item falhar, não mescle e avise.
 
@@ -213,7 +257,8 @@ Se depois do `APROVADO` a branch precisar receber `main`:
 Siga sem perguntar, exceto:
 
 - decisão de produto (regra de negócio que a issue ou a spec não define);
-- plano de schema ou RLS aguardando aprovação (passo 3);
+- plano de schema que cai num dos três casos de aprovação prévia (passo 3);
+- o PR enfraquece uma trava (passo 5): espere o ok explícito antes do merge;
 - você e o Codex discordarem **duas vezes no mesmo ponto**: pare, mostre as
   duas posições e espere a decisão;
 - dependência fora de `main` (passo 1).
