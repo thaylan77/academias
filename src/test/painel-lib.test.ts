@@ -65,6 +65,8 @@ describe("Caminhos do painel", () => {
 
 // ------------------------------------------------------------------ com cliente Supabase (falso)
 
+const SESSAO_DE = (id: string) => ({ access_token: `acesso-${id}`, refresh_token: `renova-${id}`, user: { id } });
+
 function clienteFalso(vinculos: unknown[], ativas: Record<string, boolean>, usuario: { id: string } | null = { id: "user-1" }) {
   const eqAtivo = vi.fn().mockResolvedValue({ data: vinculos, error: null });
   const eqUsuario = vi.fn().mockReturnValue({ eq: eqAtivo });
@@ -73,9 +75,12 @@ function clienteFalso(vinculos: unknown[], ativas: Record<string, boolean>, usua
     from: vi.fn().mockReturnValue({ select }),
     rpc: vi.fn(async (_nome: string, args: { p_academia_id: string }) => ({ data: ativas[args.p_academia_id] ?? false, error: null })),
     auth: {
-      getSession: vi.fn().mockResolvedValue({ data: { session: usuario ? { user: usuario } : null } }),
+      getSession: vi.fn().mockResolvedValue({ data: { session: usuario ? SESSAO_DE(usuario.id) : null }, error: null }),
       getUser: vi.fn().mockResolvedValue({ data: { user: usuario }, error: null }),
-      signInWithPassword: vi.fn().mockResolvedValue({ data: { user: usuario }, error: null }),
+      signInWithPassword: vi
+        .fn()
+        .mockResolvedValue({ data: { user: usuario, session: usuario ? SESSAO_DE(usuario.id) : null }, error: null }),
+      setSession: vi.fn().mockResolvedValue({ data: {}, error: null }),
       signOut: vi.fn().mockResolvedValue({ error: null }),
       onAuthStateChange: vi.fn(),
     },
@@ -85,12 +90,19 @@ function clienteFalso(vinculos: unknown[], ativas: Record<string, boolean>, usua
   };
 }
 
-async function carregarComCliente(cliente: unknown) {
+/**
+ * O primeiro createClient é o cliente compartilhado (sessão do navegador);
+ * os seguintes, os clientes isolados das tentativas de login.
+ */
+async function carregarComCliente(compartilhado: unknown, isolado?: unknown) {
   vi.resetModules();
   vi.stubEnv("VITE_SUPABASE_URL", "https://exemplo.supabase.co");
   vi.stubEnv("VITE_SUPABASE_ANON_KEY", "chave-anon-de-teste");
   const sb = await import("@supabase/supabase-js");
-  (sb.createClient as ReturnType<typeof vi.fn>).mockReturnValue(cliente);
+  (sb.createClient as ReturnType<typeof vi.fn>)
+    .mockReset()
+    .mockReturnValueOnce(compartilhado)
+    .mockReturnValue(isolado ?? compartilhado);
   return import("../lib/painel");
 }
 
@@ -104,6 +116,7 @@ describe("Academias do login", () => {
     { academia_id: "a", papel: "dono", academias: { nome: "Alpha", slug: "alpha" } },
     { academia_id: "t", papel: "totem", academias: { nome: "Totem", slug: "totem" } },
   ];
+  const SO_TOTEM = [{ academia_id: "t", papel: "totem", academias: { nome: "Totem", slug: "totem" } }];
 
   it("filtra pelo próprio usuário (não pelos vínculos que dono e admin enxergam) e só os ativos", async () => {
     const cliente = clienteFalso(VINCULOS, { a: true, b: false });
@@ -138,38 +151,20 @@ describe("Academias do login", () => {
     expect(cliente.from).not.toHaveBeenCalled();
   });
 
-  it("login sem vínculo em nenhuma academia é recusado e a sessão é desfeita só neste aparelho", async () => {
-    const cliente = clienteFalso([{ academia_id: "t", papel: "totem", academias: { nome: "Totem", slug: "totem" } }], {});
-    const lib = await carregarComCliente(cliente);
-
-    const res = await lib.entrarNoPainel("totem@a.test", "senha");
-
-    expect(res).toEqual({ sucesso: false, mensagem: "Este login não faz parte da equipe de nenhuma academia." });
-    expect(cliente.auth.signOut).toHaveBeenCalledWith({ scope: "local" });
-  });
-
-  it("senha errada: mensagem em português, sem consultar vínculos", async () => {
-    const cliente = clienteFalso(VINCULOS, {});
-    cliente.auth.signInWithPassword.mockResolvedValue({ data: { user: null }, error: { status: 400, message: "Invalid login credentials" } });
-    const lib = await carregarComCliente(cliente);
-
-    const res = await lib.entrarNoPainel("x@a.test", "errada");
-
-    expect(res).toEqual({ sucesso: false, mensagem: "E-mail ou senha incorretos." });
-    expect(cliente.from).not.toHaveBeenCalled();
-  });
-
-  it("falha ao confirmar o usuário (rede) é erro, não 'login sem academia'", async () => {
-    const cliente = clienteFalso(VINCULOS, {});
-    cliente.auth.getUser.mockResolvedValue({ data: { user: null }, error: { status: 0, message: "Failed to fetch" } });
-    const lib = await carregarComCliente(cliente);
-
-    await expect(lib.listarMinhasAcademias()).rejects.toMatchObject({ message: "Failed to fetch" });
-    const res = await lib.entrarNoPainel("x@a.test", "senha");
-    expect(res).toEqual({
-      sucesso: false,
-      mensagem: "Não foi possível carregar suas academias. Verifique a conexão e tente de novo.",
+  it("sessão que não deu para confirmar é erro, não 'sem sessão' (token vencido e renovação falhando)", async () => {
+    // O SDK devolve session null com erro de rede e mantém a credencial guardada.
+    const naRenovacao = clienteFalso(VINCULOS, {});
+    naRenovacao.auth.getSession.mockResolvedValue({
+      data: { session: null },
+      error: { name: "AuthRetryableFetchError", status: 0, message: "Failed to fetch" },
     });
+    let lib = await carregarComCliente(naRenovacao);
+    await expect(lib.listarMinhasAcademias()).rejects.toMatchObject({ name: "AuthRetryableFetchError" });
+
+    const naConfirmacao = clienteFalso(VINCULOS, {});
+    naConfirmacao.auth.getUser.mockResolvedValue({ data: { user: null }, error: { status: 0, message: "Failed to fetch" } });
+    lib = await carregarComCliente(naConfirmacao);
+    await expect(lib.listarMinhasAcademias()).rejects.toMatchObject({ message: "Failed to fetch" });
   });
 
   it("erro na consulta dos vínculos ou em academia_ativa propaga (nunca marca academia como ativa)", async () => {
@@ -184,71 +179,87 @@ describe("Academias do login", () => {
     await expect(lib.listarMinhasAcademias()).rejects.toMatchObject({ message: "rpc falhou" });
   });
 
-  it("login com sucesso devolve as academias já carregadas", async () => {
-    const cliente = clienteFalso(VINCULOS, { a: true, b: true });
-    const lib = await carregarComCliente(cliente);
+  describe("entrar: a tentativa roda num cliente isolado e só o login aceito vai para o navegador", () => {
+    it("sucesso: confere os vínculos no cliente isolado e então publica a sessão no compartilhado", async () => {
+      const compartilhado = clienteFalso([], {}, null);
+      const isolado = clienteFalso(VINCULOS, { a: true, b: true });
+      const lib = await carregarComCliente(compartilhado, isolado);
 
-    const res = await lib.entrarNoPainel("dono@a.test", "senha");
+      const res = await lib.entrarNoPainel("dono@a.test", "senha");
 
-    expect(cliente.auth.signInWithPassword).toHaveBeenCalledWith({ email: "dono@a.test", password: "senha" });
-    expect(res).toMatchObject({ sucesso: true, usuarioId: "user-1", academias: [{ slug: "alpha" }, { slug: "zen" }] });
-    expect(cliente.auth.signOut).not.toHaveBeenCalled();
-  });
-
-  it("login recusado cuja sessão não deu para desfazer: avisa que ela pode ter ficado", async () => {
-    // Erro na consulta e signOut devolvendo erro.
-    const comErro = clienteFalso(VINCULOS, {});
-    comErro.eqAtivo.mockResolvedValue({ data: null, error: { message: "rede" } });
-    comErro.auth.signOut.mockResolvedValue({ error: { name: "AuthRetryableFetchError", status: 0 } });
-    let lib = await carregarComCliente(comErro);
-    expect(await lib.entrarNoPainel("x@a.test", "senha")).toEqual({
-      sucesso: false,
-      mensagem: "Não foi possível carregar suas academias. Verifique a conexão e tente de novo.",
-      sessaoPodeTerFicado: true,
+      expect(isolado.auth.signInWithPassword).toHaveBeenCalledWith({ email: "dono@a.test", password: "senha" });
+      expect(isolado.eqUsuario).toHaveBeenCalledWith("user_id", "user-1");
+      expect(compartilhado.auth.signInWithPassword).not.toHaveBeenCalled();
+      expect(compartilhado.auth.setSession).toHaveBeenCalledWith({
+        access_token: "acesso-user-1",
+        refresh_token: "renova-user-1",
+      });
+      expect(isolado.auth.signOut).not.toHaveBeenCalled();
+      expect(res).toMatchObject({ sucesso: true, usuarioId: "user-1", academias: [{ slug: "alpha" }, { slug: "zen" }] });
     });
 
-    // Sem vínculo e signOut rejeitando.
-    const semVinculo = clienteFalso([], {});
-    semVinculo.auth.signOut.mockRejectedValue(new Error("rede"));
-    lib = await carregarComCliente(semVinculo);
-    expect(await lib.entrarNoPainel("x@a.test", "senha")).toEqual({
-      sucesso: false,
-      mensagem: "Este login não faz parte da equipe de nenhuma academia.",
-      sessaoPodeTerFicado: true,
+    it("recusa (sem vínculo ou erro ao carregar) não toca a sessão do navegador, nem a de outro usuário", async () => {
+      const casos: Array<[unknown[], boolean, string]> = [
+        [SO_TOTEM, false, "Este login não faz parte da equipe de nenhuma academia."],
+        [VINCULOS, true, "Não foi possível carregar suas academias. Verifique a conexão e tente de novo."],
+      ];
+      for (const [vinculos, comErro, mensagem] of casos) {
+        // B já está com sessão no navegador (outra aba); A tenta e é recusado.
+        const compartilhado = clienteFalso([], {}, { id: "user-b" });
+        const isolado = clienteFalso(vinculos, {});
+        if (comErro) isolado.eqAtivo.mockResolvedValue({ data: null, error: { message: "rede" } });
+        // Nem o signOut da tentativa falhando muda nada no navegador.
+        isolado.auth.signOut.mockRejectedValue(new Error("rede"));
+        const lib = await carregarComCliente(compartilhado, isolado);
+
+        expect(await lib.entrarNoPainel("a@a.test", "senha")).toEqual({ sucesso: false, mensagem });
+        expect(isolado.auth.signOut).toHaveBeenCalledWith({ scope: "local" });
+        expect(compartilhado.auth.signOut).not.toHaveBeenCalled();
+        expect(compartilhado.auth.setSession).not.toHaveBeenCalled();
+      }
     });
-  });
 
-  it("tentativa antiga de A não derruba nem mostra a sessão de B, que entrou em outra aba", async () => {
-    for (const caso of ["vazio", "erro", "com academias"] as const) {
-      const cliente = clienteFalso(caso === "com academias" ? VINCULOS : [], { a: true, b: true });
-      if (caso === "erro") cliente.eqAtivo.mockResolvedValue({ data: null, error: { message: "rede" } });
-      // Login de A (user-1); enquanto a consulta corre, B entra em outra aba.
-      cliente.auth.getSession
-        .mockResolvedValueOnce({ data: { session: { user: { id: "user-1" } } } })
-        .mockResolvedValue({ data: { session: { user: { id: "user-b" } } } });
-      const lib = await carregarComCliente(cliente);
+    it("senha errada: mensagem em português, sem consultar vínculos", async () => {
+      const compartilhado = clienteFalso([], {}, null);
+      const isolado = clienteFalso(VINCULOS, {});
+      isolado.auth.signInWithPassword.mockResolvedValue({
+        data: { user: null, session: null },
+        error: { status: 400, message: "Invalid login credentials" },
+      });
+      const lib = await carregarComCliente(compartilhado, isolado);
 
-      const res = await lib.entrarNoPainel("a@a.test", "senha");
+      expect(await lib.entrarNoPainel("x@a.test", "errada")).toEqual({ sucesso: false, mensagem: "E-mail ou senha incorretos." });
+      expect(isolado.from).not.toHaveBeenCalled();
+      expect(compartilhado.auth.setSession).not.toHaveBeenCalled();
+    });
 
-      expect(res).toEqual({ sucesso: false, mensagem: "A sessão deste navegador mudou em outra aba. Entre de novo." });
-      expect(cliente.auth.signOut).not.toHaveBeenCalled();
-    }
-  });
+    it("falha ao publicar a sessão no navegador: não entra", async () => {
+      const compartilhado = clienteFalso([], {}, null);
+      compartilhado.auth.setSession.mockResolvedValue({ data: {}, error: { status: 0, message: "Failed to fetch" } });
+      const isolado = clienteFalso(VINCULOS, { a: true });
+      const lib = await carregarComCliente(compartilhado, isolado);
 
-  it("só credencial recusada vira 'senha incorreta'", async () => {
-    const casos: Array<[object, string]> = [
-      [{ status: 400, code: "invalid_credentials" }, "E-mail ou senha incorretos."],
-      [{ status: 400, code: "email_not_confirmed" }, "Confirme o seu e-mail antes de entrar."],
-      [{ status: 429, code: "over_request_rate_limit" }, "Muitas tentativas. Espere um pouco e tente de novo."],
-      [{ status: 0 }, "Não foi possível entrar agora. Verifique a conexão e tente de novo."],
-      [{ status: 503 }, "Não foi possível entrar agora. Verifique a conexão e tente de novo."],
-    ];
-    for (const [erro, mensagem] of casos) {
-      const cliente = clienteFalso(VINCULOS, {});
-      cliente.auth.signInWithPassword.mockResolvedValue({ data: { user: null }, error: { message: "x", ...erro } });
-      const lib = await carregarComCliente(cliente);
-      expect(await lib.entrarNoPainel("x@a.test", "senha")).toEqual({ sucesso: false, mensagem });
-    }
+      expect(await lib.entrarNoPainel("dono@a.test", "senha")).toEqual({
+        sucesso: false,
+        mensagem: "Não foi possível entrar agora. Verifique a conexão e tente de novo.",
+      });
+    });
+
+    it("só credencial recusada vira 'senha incorreta'", async () => {
+      const casos: Array<[object, string]> = [
+        [{ status: 400, code: "invalid_credentials" }, "E-mail ou senha incorretos."],
+        [{ status: 400, code: "email_not_confirmed" }, "Confirme o seu e-mail antes de entrar."],
+        [{ status: 429, code: "over_request_rate_limit" }, "Muitas tentativas. Espere um pouco e tente de novo."],
+        [{ status: 0 }, "Não foi possível entrar agora. Verifique a conexão e tente de novo."],
+        [{ status: 503 }, "Não foi possível entrar agora. Verifique a conexão e tente de novo."],
+      ];
+      for (const [erro, mensagem] of casos) {
+        const isolado = clienteFalso(VINCULOS, {});
+        isolado.auth.signInWithPassword.mockResolvedValue({ data: { user: null, session: null }, error: { message: "x", ...erro } });
+        const lib = await carregarComCliente(clienteFalso([], {}, null), isolado);
+        expect(await lib.entrarNoPainel("x@a.test", "senha")).toEqual({ sucesso: false, mensagem });
+      }
+    });
   });
 
   it("sair desfaz a sessão só neste aparelho", async () => {

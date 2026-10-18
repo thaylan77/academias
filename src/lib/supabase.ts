@@ -57,6 +57,24 @@ export const supabase = (supabaseUrl && supabaseAnonKey)
     })
   : null;
 
+/**
+ * Cliente sem sessão guardada, sem renovação automática e sem aviso entre
+ * abas: valida um login antes de publicá-lo na sessão compartilhada do
+ * navegador. Login recusado nele não toca a sessão de ninguém.
+ */
+export function criarClienteIsolado() {
+  if (!supabaseUrl || !supabaseAnonKey) return null;
+  return createClient<Database>(supabaseUrl, supabaseAnonKey, {
+    auth: {
+      persistSession: false,
+      autoRefreshToken: false,
+      detectSessionInUrl: false,
+      storageKey: "honorteam-painel-tentativa",
+    },
+    global: { fetch: fetchQuePreservaSessao },
+  });
+}
+
 // Helper unificado para buscar dados públicos da academia
 export async function obterAcademiaPublica(slug: string): Promise<AcademiaPublica | null> {
   const slugNormalizado = slug.toLowerCase().trim();

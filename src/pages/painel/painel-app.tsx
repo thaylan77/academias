@@ -64,7 +64,10 @@ function ehCliqueSimples(e: React.MouseEvent): boolean {
 
 type Estado =
   | { fase: "carregando" }
-  | { fase: "login"; aviso?: string }
+  | { fase: "login" }
+  // Há sessão guardada, mas não deu para confirmá-la ou carregar as academias
+  // (rede, Auth fora do ar): nada de dados, nem de formulário fingindo que saiu.
+  | { fase: "falha_ao_carregar" }
   | { fase: "falha_ao_sair" }
   | { fase: "pronto"; academias: AcademiaDoMembro[] };
 
@@ -85,7 +88,7 @@ export const PainelApp: React.FC = () => {
       })
       .catch(() => {
         if (minha !== geracao.current) return;
-        setEstado({ fase: "login", aviso: "Não foi possível carregar suas academias. Entre de novo." });
+        setEstado({ fase: "falha_ao_carregar" });
       });
   }, []);
 
@@ -149,17 +152,8 @@ export const PainelApp: React.FC = () => {
   const entrar = async (email: string, senha: string): Promise<ResultadoEntrada | null> => {
     const minha = ++geracao.current;
     const res = await entrarNoPainel(email, senha);
-    // Recusa só mostra a mensagem, sem dados; e o signOut da própria recusa
-    // já mexe no contador. Se nem deu para desfazer a sessão, é saída que falhou.
-    if (!res.sucesso) {
-      if (res.sessaoPodeTerFicado) {
-        geracao.current++;
-        guardarAcademia(null);
-        setEstado({ fase: "falha_ao_sair" });
-        return null;
-      }
-      return res;
-    }
+    // Recusa só mostra a mensagem, sem dados (e não criou sessão no navegador).
+    if (!res.sucesso) return res;
     if (minha !== geracao.current) return null;
     const observado = usuarioAtual.current;
     if (observado !== undefined && observado !== res.usuarioId) return null;
@@ -169,6 +163,30 @@ export const PainelApp: React.FC = () => {
 
   if (estado.fase === "carregando") {
     return <p className="py-16 text-center text-sm text-zinc-500" role="status">Carregando o painel...</p>;
+  }
+
+  if (estado.fase === "falha_ao_carregar") {
+    return (
+      <Moldura aoSair={sair}>
+        <Alert variant="destructive" role="alert" className="max-w-lg mx-auto">
+          <AlertDescription>
+            Não foi possível confirmar a sua sessão nem carregar suas academias. Verifique a conexão e tente de
+            novo, ou saia deste aparelho.
+          </AlertDescription>
+        </Alert>
+        <div className="flex justify-center gap-3 mt-6">
+          <Button
+            onClick={() => {
+              setEstado({ fase: "carregando" });
+              carregar();
+            }}
+          >
+            Tentar de novo
+          </Button>
+          <Button variant="outline" onClick={sair}>Sair deste aparelho</Button>
+        </div>
+      </Moldura>
+    );
   }
 
   if (estado.fase === "falha_ao_sair") {
@@ -189,7 +207,7 @@ export const PainelApp: React.FC = () => {
 
   if (estado.fase === "login") {
     return (
-      <LoginPainel aviso={estado.aviso} entrar={entrar} />
+      <LoginPainel entrar={entrar} />
     );
   }
 
@@ -357,13 +375,12 @@ const EscolhaDeAcademia: React.FC<{
 );
 
 const LoginPainel: React.FC<{
-  aviso?: string;
   // `null`: tentativa descartada porque a sessão mudou no meio.
   entrar: (email: string, senha: string) => Promise<ResultadoEntrada | null>;
-}> = ({ aviso, entrar }) => {
+}> = ({ entrar }) => {
   const [email, setEmail] = useState("");
   const [senha, setSenha] = useState("");
-  const [erro, setErro] = useState<string | null>(aviso ?? null);
+  const [erro, setErro] = useState<string | null>(null);
   const [entrando, setEntrando] = useState(false);
 
   const enviar = async (e: React.FormEvent) => {

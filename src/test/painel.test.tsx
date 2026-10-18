@@ -196,27 +196,37 @@ describe("Painel da equipe: entrada e escolha de academia", () => {
     expect(sair).toHaveBeenCalledTimes(2);
   });
 
-  it("login recusado sem conseguir desfazer a sessão vai para a tela de nova tentativa de saída", async () => {
-    vi.spyOn(painel, "listarMinhasAcademias").mockResolvedValue([]);
-    vi.spyOn(painel, "entrarNoPainel").mockResolvedValue({
-      sucesso: false,
-      mensagem: "Não foi possível carregar suas academias. Verifique a conexão e tente de novo.",
-      sessaoPodeTerFicado: true,
-    });
-    const sair = vi.spyOn(painel, "sairDoPainel").mockResolvedValue(true);
+  it("sessão guardada que não deu para confirmar: sem dados nem formulário; tenta de novo ou sai", async () => {
+    const listar = vi
+      .spyOn(painel, "listarMinhasAcademias")
+      .mockRejectedValueOnce(Object.assign(new Error("Failed to fetch"), { name: "AuthRetryableFetchError" }))
+      .mockResolvedValueOnce([A]);
     render(<PainelApp />);
 
-    await waitFor(() => expect(screen.getByText("Painel da equipe")).toBeInTheDocument());
-    fireEvent.change(screen.getByLabelText("E-mail"), { target: { value: "x@a.test" } });
-    fireEvent.change(screen.getByLabelText("Senha"), { target: { value: "senha" } });
-    fireEvent.click(screen.getByRole("button", { name: "Entrar" }));
+    await waitFor(() =>
+      expect(screen.getByRole("alert")).toHaveTextContent("Não foi possível confirmar a sua sessão")
+    );
+    expect(screen.queryByText("Painel da equipe")).not.toBeInTheDocument();
+    expect(screen.queryByRole("navigation", { name: "Menu do painel" })).not.toBeInTheDocument();
 
+    fireEvent.click(screen.getByRole("button", { name: "Tentar de novo" }));
+    await waitFor(() => expect(screen.getByRole("heading", { name: "Academia Alpha" })).toBeInTheDocument());
+    expect(listar).toHaveBeenCalledTimes(2);
+  });
+
+  it("sessão que não deu para confirmar: 'Sair deste aparelho' encerra (ou avisa que não conseguiu)", async () => {
+    vi.spyOn(painel, "listarMinhasAcademias").mockRejectedValue(new Error("Failed to fetch"));
+    const sair = vi.spyOn(painel, "sairDoPainel").mockResolvedValueOnce(false).mockResolvedValueOnce(true);
+    render(<PainelApp />);
+
+    await waitFor(() => expect(screen.getByRole("button", { name: "Sair deste aparelho" })).toBeInTheDocument());
+    fireEvent.click(screen.getByRole("button", { name: "Sair deste aparelho" }));
     await waitFor(() =>
       expect(screen.getByRole("alert")).toHaveTextContent("Não foi possível encerrar a sessão neste aparelho")
     );
     fireEvent.click(screen.getByRole("button", { name: "Tentar sair de novo" }));
     await waitFor(() => expect(screen.getByText("Painel da equipe")).toBeInTheDocument());
-    expect(sair).toHaveBeenCalledTimes(1);
+    expect(sair).toHaveBeenCalledTimes(2);
   });
 
   it("saída em outra aba leva esta aba ao login", async () => {

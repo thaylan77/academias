@@ -1,4 +1,4 @@
-import { supabase } from "./supabase";
+import { criarClienteIsolado, supabase } from "./supabase";
 import { MembroEquipePapel } from "../types/app";
 
 /**
@@ -59,48 +59,58 @@ const ACADEMIAS_DEMO: AcademiaDoMembro[] = [
 ];
 let sessaoDemo = false;
 
+type ClienteSupabase = NonNullable<typeof supabase>;
+
 /**
- * Academias em que o login atual é membro ativo da equipe, sem o papel
- * `totem` (o aparelho do totem não entra no painel).
+ * Academias em que o usuário é membro ativo da equipe, sem o papel `totem`
+ * (o aparelho do totem não entra no painel), consultadas com o cliente dado.
  *
  * O filtro por `user_id` é obrigatório: a política de leitura de
  * `membros_academia` deixa dono e admin verem os vínculos de outras
  * pessoas da academia, e esses não são academias deste login.
  */
+async function academiasDoUsuario(cliente: ClienteSupabase, usuarioId: string): Promise<AcademiaDoMembro[]> {
+  const { data, error } = await cliente
+    .from("membros_academia")
+    .select("academia_id, papel, academias(nome, slug)")
+    .eq("user_id", usuarioId)
+    .eq("ativo", true);
+  if (error) throw error;
+
+  const vinculos = (data ?? []).filter((v) => ehPapelPainel(v.papel) && v.academias);
+  const lista = await Promise.all(
+    vinculos.map(async (v) => {
+      const { data: ativa, error: erroAtiva } = await cliente.rpc("academia_ativa", {
+        p_academia_id: v.academia_id,
+      });
+      if (erroAtiva) throw erroAtiva;
+      return {
+        academia_id: v.academia_id,
+        nome: v.academias!.nome,
+        slug: v.academias!.slug,
+        papel: v.papel as PapelPainel,
+        ativa: ativa === true,
+      };
+    })
+  );
+  return lista.sort((a, b) => a.nome.localeCompare(b.nome, "pt-BR"));
+}
+
+/**
+ * Academias do login da sessão guardada neste navegador. Lista vazia só
+ * quando não há sessão. Sessão que não deu para confirmar (token vencido e
+ * renovação falhando, Auth fora do ar) é erro: ela pode continuar guardada,
+ * e a tela não pode tratar isso como "saiu".
+ */
 export async function listarMinhasAcademias(): Promise<AcademiaDoMembro[]> {
   if (supabase) {
-    // Sem sessão guardada, não há academia. Com sessão, falha ao confirmar o
-    // usuário (rede, Auth fora do ar) é erro, não "login sem academia".
-    const { data: sessao } = await supabase.auth.getSession();
+    const { data: sessao, error: erroSessao } = await supabase.auth.getSession();
+    if (erroSessao) throw erroSessao;
     if (!sessao?.session) return [];
     const { data: auth, error: erroUsuario } = await supabase.auth.getUser();
     if (erroUsuario) throw erroUsuario;
-    const usuario = auth?.user;
-    if (!usuario) return [];
-
-    const { data, error } = await supabase
-      .from("membros_academia")
-      .select("academia_id, papel, academias(nome, slug)")
-      .eq("user_id", usuario.id)
-      .eq("ativo", true);
-    if (error) throw error;
-
-    const vinculos = (data ?? []).filter((v) => ehPapelPainel(v.papel) && v.academias);
-    return Promise.all(
-      vinculos.map(async (v) => {
-        const { data: ativa, error: erroAtiva } = await supabase!.rpc("academia_ativa", {
-          p_academia_id: v.academia_id,
-        });
-        if (erroAtiva) throw erroAtiva;
-        return {
-          academia_id: v.academia_id,
-          nome: v.academias!.nome,
-          slug: v.academias!.slug,
-          papel: v.papel as PapelPainel,
-          ativa: ativa === true,
-        };
-      })
-    ).then((lista) => lista.sort((a, b) => a.nome.localeCompare(b.nome, "pt-BR")));
+    if (!auth?.user) throw new Error("Sessão sem usuário.");
+    return academiasDoUsuario(supabase, auth.user.id);
   }
 
   if (import.meta.env.DEV) return sessaoDemo ? ACADEMIAS_DEMO : [];
@@ -111,32 +121,7 @@ export type ResultadoEntrada =
   // `usuarioId`: quem entrou, para a tela descartar o resultado se a sessão
   // mudar (saída ou outro login em outra aba) antes de ele chegar.
   | { sucesso: true; academias: AcademiaDoMembro[]; usuarioId: string }
-  // `sessaoPodeTerFicado`: a senha conferiu, o login foi recusado e não deu
-  // para desfazer a sessão; a tela trata como saída que falhou.
-  | { sucesso: false; mensagem: string; sessaoPodeTerFicado?: true };
-
-const MSG_SESSAO_MUDOU = "A sessão deste navegador mudou em outra aba. Entre de novo.";
-
-// Id do usuário da sessão guardada neste navegador, ou null.
-async function usuarioDaSessao(): Promise<string | null> {
-  if (!supabase) return sessaoDemo ? "demo" : null;
-  const { data } = await supabase.auth.getSession();
-  return data?.session?.user.id ?? null;
-}
-
-/**
- * Desfaz o login recusado, mas só se a sessão ainda for dele: se outro
- * usuário entrou em outra aba nesse meio-tempo, a sessão é desse outro e
- * fica. Devolve `false` se a sessão do login recusado pode ter ficado.
- */
-async function desfazerLoginRecusado(usuarioId: string): Promise<boolean> {
-  try {
-    if ((await usuarioDaSessao()) !== usuarioId) return true;
-  } catch {
-    // Sem como conferir: tenta sair, que só mexe na sessão deste aparelho.
-  }
-  return sairDoPainel();
-}
+  | { sucesso: false; mensagem: string };
 
 // Só credencial recusada vira "senha incorreta"; limite de tentativas e falha de
 // rede ou do servidor ganham mensagem própria, para ninguém trocar a senha à toa.
@@ -147,53 +132,54 @@ function mensagemDeFalhaNoLogin(erro: { status?: number; code?: string }): strin
   return "Não foi possível entrar agora. Verifique a conexão e tente de novo.";
 }
 
-/** Login da equipe no painel. Sem vínculo em nenhuma academia, recusa. */
+const MSG_FALHA_AO_CARREGAR = "Não foi possível carregar suas academias. Verifique a conexão e tente de novo.";
+const MSG_SEM_VINCULO = "Este login não faz parte da equipe de nenhuma academia.";
+
+/**
+ * Login da equipe no painel. A senha e os vínculos são conferidos num cliente
+ * isolado, sem sessão guardada; a sessão só vai para o navegador (e para as
+ * outras abas) quando o login tem academia. Login recusado não chega a
+ * existir no navegador, então não há o que desfazer nem sessão de outra aba
+ * para derrubar por engano.
+ */
 export async function entrarNoPainel(email: string, senha: string): Promise<ResultadoEntrada> {
-  let usuarioId: string;
-  if (supabase) {
-    const { data, error } = await supabase.auth.signInWithPassword({ email, password: senha });
-    if (error) {
-      return { sucesso: false, mensagem: mensagemDeFalhaNoLogin(error) };
-    }
-    usuarioId = data.user.id;
-  } else if (import.meta.env.DEV) {
+  if (!supabase) {
+    if (!import.meta.env.DEV) return { sucesso: false, mensagem: "O painel precisa de conexão com o servidor." };
     sessaoDemo = true;
-    usuarioId = "demo";
-  } else {
-    return { sucesso: false, mensagem: "O painel precisa de conexão com o servidor." };
+    return { sucesso: true, academias: ACADEMIAS_DEMO, usuarioId: "demo" };
   }
+
+  const tentativa = criarClienteIsolado();
+  if (!tentativa) return { sucesso: false, mensagem: "O painel precisa de conexão com o servidor." };
+
+  const { data, error } = await tentativa.auth.signInWithPassword({ email, password: senha });
+  if (error || !data.session) {
+    return { sucesso: false, mensagem: error ? mensagemDeFalhaNoLogin(error) : MSG_FALHA_AO_CARREGAR };
+  }
+  const usuarioId = data.user.id;
 
   let academias: AcademiaDoMembro[] | null;
   try {
-    academias = await listarMinhasAcademias();
+    academias = await academiasDoUsuario(tentativa, usuarioId);
   } catch {
     academias = null;
   }
 
-  // A lista vem da sessão atual. Se ela já não é deste login (outra aba
-  // entrou com outro usuário), nem o resultado nem a recusa valem: não
-  // mostra as academias de outro e não derruba a sessão dele.
-  let sessaoAtual: string | null | undefined;
-  try {
-    sessaoAtual = await usuarioDaSessao();
-  } catch {
-    sessaoAtual = undefined;
-  }
-  if (sessaoAtual !== undefined && sessaoAtual !== usuarioId) {
-    return { sucesso: false, mensagem: MSG_SESSAO_MUDOU };
+  if (!academias || academias.length === 0) {
+    // Encerra no servidor a sessão da tentativa, que só existia em memória.
+    // Falhar aqui não deixa nada guardado no navegador.
+    await tentativa.auth.signOut({ scope: "local" }).catch(() => undefined);
+    return { sucesso: false, mensagem: academias ? MSG_SEM_VINCULO : MSG_FALHA_AO_CARREGAR };
   }
 
-  if (academias && academias.length > 0) {
-    return { sucesso: true, academias, usuarioId };
+  const { error: erroAoPublicar } = await supabase.auth.setSession({
+    access_token: data.session.access_token,
+    refresh_token: data.session.refresh_token,
+  });
+  if (erroAoPublicar) {
+    return { sucesso: false, mensagem: "Não foi possível entrar agora. Verifique a conexão e tente de novo." };
   }
-
-  const mensagem = academias
-    ? "Este login não faz parte da equipe de nenhuma academia."
-    : "Não foi possível carregar suas academias. Verifique a conexão e tente de novo.";
-  if (!(await desfazerLoginRecusado(usuarioId))) {
-    return { sucesso: false, mensagem, sessaoPodeTerFicado: true };
-  }
-  return { sucesso: false, mensagem };
+  return { sucesso: true, academias, usuarioId };
 }
 
 /**
