@@ -1,5 +1,6 @@
 import React, { Suspense, lazy, useState, useEffect } from "react";
 import { Header } from "./components/layout/header";
+import { FalhaAoCarregar } from "./components/layout/falha-ao-carregar";
 import { Building2 } from "lucide-react";
 
 // Cada tela é carregada só quando é aberta. Quem abre a matrícula pública não
@@ -114,6 +115,8 @@ export function App() {
         {!slug ? (
           <AcademiaNaoEncontrada />
         ) : (
+          // A chave por aba faz o aviso de falha sumir ao trocar de tela.
+          <FalhaAoCarregar key={activeTab}>
           <Suspense fallback={<CarregandoTela />}>
             {activeTab === "matricula" && <MatriculaPage slug={slug} />}
             {activeTab === "totem" && (
@@ -126,6 +129,7 @@ export function App() {
               <CheckinPage slug={slug} initialTurmaId={turmaParam} />
             )}
           </Suspense>
+          </FalhaAoCarregar>
         )}
       </main>
 

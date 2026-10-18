@@ -36,7 +36,7 @@ describe("Carregamento sob demanda das telas", () => {
     expect(carregados.has("qrcode.react")).toBe(false);
   });
 
-  it("o check-in carrega o leitor de QR quando é aberto", async () => {
+  it("o check-in carrega o leitor de QR, e não o gerador do totem", async () => {
     abrir("/honor-demo-a/checkin");
     const { App } = await import("../App");
     render(<App />);
@@ -44,6 +44,38 @@ describe("Carregamento sob demanda das telas", () => {
     await waitFor(() => {
       expect(carregados.has("html5-qrcode")).toBe(true);
     });
+    expect(carregados.has("qrcode.react")).toBe(false);
+  });
+
+  it("o totem carrega o gerador de QR, e não o leitor do check-in", async () => {
+    abrir("/honor-demo-a/totem");
+    const { App } = await import("../App");
+    render(<App />);
+
+    await waitFor(() => {
+      expect(carregados.has("qrcode.react")).toBe(true);
+    });
+    expect(carregados.has("html5-qrcode")).toBe(false);
+  });
+
+  it("falha ao baixar a tela mostra aviso com opção de recarregar, sem página em branco", async () => {
+    vi.doMock("../pages/matricula/matricula-page", () => {
+      throw new Error("Failed to fetch dynamically imported module");
+    });
+    const silenciar = vi.spyOn(console, "error").mockImplementation(() => {});
+    abrir("/honor-demo-a/matricula");
+    const { App } = await import("../App");
+    render(<App />);
+
+    await waitFor(() => {
+      expect(screen.getByRole("alert")).toHaveTextContent("Não foi possível carregar esta tela");
+    });
+    expect(screen.getByRole("button", { name: "Recarregar" })).toBeInTheDocument();
+    // O resto do app continua na tela.
+    expect(screen.getByText(/Honor Team SaaS • Gestão Profissional/)).toBeInTheDocument();
+
+    silenciar.mockRestore();
+    vi.doUnmock("../pages/matricula/matricula-page");
   });
 
   it("enquanto a tela carrega, mostra um aviso", async () => {
