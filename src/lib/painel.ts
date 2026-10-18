@@ -134,6 +134,18 @@ function mensagemDeFalhaNoLogin(erro: { status?: number; code?: string }): strin
 
 const MSG_FALHA_AO_CARREGAR = "Não foi possível carregar suas academias. Verifique a conexão e tente de novo.";
 const MSG_SEM_VINCULO = "Este login não faz parte da equipe de nenhuma academia.";
+const MSG_SESSAO_MUDOU = "A sessão deste navegador mudou em outra aba. Entre de novo.";
+
+/**
+ * Quem chama decide se a tentativa ainda vale. `podePublicar` é consultado
+ * logo antes de gravar a sessão no navegador (e recebe o id de quem entrou,
+ * para a tela reconhecer o aviso SIGNED_IN da própria tentativa);
+ * `continuaValida`, logo depois.
+ */
+export interface ControleDaTentativa {
+  podePublicar(usuarioId: string): boolean;
+  continuaValida(): boolean;
+}
 
 /**
  * Login da equipe no painel. A senha e os vínculos são conferidos num cliente
@@ -142,7 +154,11 @@ const MSG_SEM_VINCULO = "Este login não faz parte da equipe de nenhuma academia
  * existir no navegador, então não há o que desfazer nem sessão de outra aba
  * para derrubar por engano.
  */
-export async function entrarNoPainel(email: string, senha: string): Promise<ResultadoEntrada> {
+export async function entrarNoPainel(
+  email: string,
+  senha: string,
+  controle?: ControleDaTentativa
+): Promise<ResultadoEntrada> {
   if (!supabase) {
     if (!import.meta.env.DEV) return { sucesso: false, mensagem: "O painel precisa de conexão com o servidor." };
     sessaoDemo = true;
@@ -172,12 +188,26 @@ export async function entrarNoPainel(email: string, senha: string): Promise<Resu
     return { sucesso: false, mensagem: academias ? MSG_SEM_VINCULO : MSG_FALHA_AO_CARREGAR };
   }
 
+  // A sessão do navegador mudou enquanto a tentativa corria (entrada ou saída
+  // em outra aba, saída aqui): a tentativa não grava nada.
+  if (controle && !controle.podePublicar(usuarioId)) {
+    await tentativa.auth.signOut({ scope: "local" }).catch(() => undefined);
+    return { sucesso: false, mensagem: MSG_SESSAO_MUDOU };
+  }
+
   const { error: erroAoPublicar } = await supabase.auth.setSession({
     access_token: data.session.access_token,
     refresh_token: data.session.refresh_token,
   });
   if (erroAoPublicar) {
     return { sucesso: false, mensagem: "Não foi possível entrar agora. Verifique a conexão e tente de novo." };
+  }
+  // Mudou durante a própria gravação (o setSession confere o usuário na
+  // rede antes de gravar): desfaz, para nenhum login ficar guardado sem que
+  // ninguém o tenha pedido por último.
+  if (controle && !controle.continuaValida()) {
+    await sairDoPainel();
+    return { sucesso: false, mensagem: MSG_SESSAO_MUDOU };
   }
   return { sucesso: true, academias, usuarioId };
 }

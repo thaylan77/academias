@@ -75,7 +75,7 @@ describe("Painel da equipe: entrada e escolha de academia", () => {
     fireEvent.click(screen.getByRole("button", { name: "Entrar" }));
 
     await waitFor(() => expect(screen.getByRole("heading", { name: "Academia Alpha" })).toBeInTheDocument());
-    expect(entrar).toHaveBeenCalledWith("dono@a.test", "segredo");
+    expect(entrar).toHaveBeenCalledWith("dono@a.test", "segredo", expect.anything());
     expect(window.location.pathname).toBe("/painel/alpha");
   });
 
@@ -270,6 +270,8 @@ describe("Painel da equipe: entrada e escolha de academia", () => {
   });
 
   describe("login pelo formulário ainda pendente quando a sessão muda", () => {
+    // Imita entrarNoPainel: consulta os vínculos (pendente até `concluirA`),
+    // pergunta se pode gravar a sessão, grava (avisando SIGNED_IN) e confere de novo.
     async function comLoginPendente() {
       let avisar: (id: string | null) => void = () => {};
       vi.spyOn(painel, "observarSessao").mockImplementation((cb) => {
@@ -278,11 +280,20 @@ describe("Painel da equipe: entrada e escolha de academia", () => {
         return () => {};
       });
       const listar = vi.spyOn(painel, "listarMinhasAcademias").mockResolvedValue([]);
-      let soltar: (r: painel.ResultadoEntrada) => void = () => {};
-      vi.spyOn(painel, "entrarNoPainel").mockImplementation(() => {
-        avisar("dono-a"); // SIGNED_IN de A, ainda carregando as academias
-        return new Promise((r) => (soltar = r));
-      });
+      const gravadas: string[] = [];
+      let concluirA: () => Promise<void> = async () => {};
+      vi.spyOn(painel, "entrarNoPainel").mockImplementation(
+        (_email, _senha, controle) =>
+          new Promise((resolve) => {
+            concluirA = async () => {
+              const mudou = { sucesso: false as const, mensagem: "A sessão deste navegador mudou em outra aba. Entre de novo." };
+              if (!controle!.podePublicar("dono-a")) return resolve(mudou);
+              gravadas.push("dono-a");
+              avisar("dono-a"); // SIGNED_IN da própria gravação
+              resolve(controle!.continuaValida() ? { sucesso: true, academias: [A], usuarioId: "dono-a" } : mudou);
+            };
+          })
+      );
       render(<PainelApp />);
 
       await waitFor(() => expect(screen.getByText("Painel da equipe")).toBeInTheDocument());
@@ -290,45 +301,62 @@ describe("Painel da equipe: entrada e escolha de academia", () => {
       fireEvent.change(screen.getByLabelText("Senha"), { target: { value: "senha" } });
       fireEvent.click(screen.getByRole("button", { name: "Entrar" }));
       await waitFor(() => expect(screen.getByRole("button", { name: "Entrando..." })).toBeInTheDocument());
-      return { avisar, listar, soltarA: () => soltar({ sucesso: true, academias: [A], usuarioId: "dono-a" }) };
+      return { avisar: (id: string | null) => act(() => avisar(id)), listar, gravadas, concluirA: () => act(concluirA) };
     }
 
-    it("saída em outra aba: o resultado atrasado de A é descartado", async () => {
-      const { avisar, soltarA } = await comLoginPendente();
+    it("B entra e sai em outra aba: a tentativa de A não grava a sessão nem mostra academias", async () => {
+      const { avisar, gravadas, concluirA } = await comLoginPendente();
 
-      act(() => avisar(null));
-      await act(async () => soltarA());
+      avisar("professor-b");
+      avisar(null);
+      await waitFor(() => expect(screen.getByText("Painel da equipe")).toBeInTheDocument());
+      await concluirA();
 
+      expect(gravadas).toEqual([]);
       expect(screen.queryByRole("heading", { name: "Academia Alpha" })).not.toBeInTheDocument();
-      expect(screen.getByText("Painel da equipe")).toBeInTheDocument();
-      expect(screen.getByRole("button", { name: "Entrar" })).toBeEnabled();
     });
 
-    it("troca para B em outra aba: A não reaparece por cima de B", async () => {
-      const { avisar, listar, soltarA } = await comLoginPendente();
+    it("B entra em outra aba: A não grava por cima de B, e a tela mostra B", async () => {
+      const { avisar, listar, gravadas, concluirA } = await comLoginPendente();
       listar.mockResolvedValue([B]);
 
-      act(() => avisar("professor-b"));
+      avisar("professor-b");
       await waitFor(() => expect(screen.getByRole("heading", { name: "Academia Beta" })).toBeInTheDocument());
-      await act(async () => soltarA());
+      await concluirA();
 
+      expect(gravadas).toEqual([]);
       expect(screen.getByRole("heading", { name: "Academia Beta" })).toBeInTheDocument();
       expect(screen.queryByRole("heading", { name: "Academia Alpha" })).not.toBeInTheDocument();
     });
+
+    it("B entra e a consulta de A termina no mesmo tique (antes da recarga): A não grava", async () => {
+      const { avisar, listar, gravadas, concluirA } = await comLoginPendente();
+      listar.mockResolvedValue([B]);
+
+      avisar("professor-b");
+      await concluirA(); // sem esperar o setTimeout da recarga
+
+      expect(gravadas).toEqual([]);
+      // Deixa a recarga de B terminar aqui, sem vazar para o próximo teste.
+      await waitFor(() => expect(screen.getByRole("heading", { name: "Academia Beta" })).toBeInTheDocument());
+    });
+
+    it("sem mudança: grava, e o SIGNED_IN da própria tentativa não recarrega nem descarta", async () => {
+      const { listar, gravadas, concluirA } = await comLoginPendente();
+
+      await concluirA();
+
+      expect(gravadas).toEqual(["dono-a"]);
+      await waitFor(() => expect(screen.getByRole("heading", { name: "Academia Alpha" })).toBeInTheDocument());
+      expect(listar).toHaveBeenCalledTimes(1); // só a carga inicial
+    });
   });
 
-  it("entrada pelo formulário não é atropelada pelo aviso de sessão (mensagem de recusa fica)", async () => {
-    let avisar: (id: string | null) => void = () => {};
-    vi.spyOn(painel, "observarSessao").mockImplementation((cb) => {
-      avisar = cb;
-      cb(null);
-      return () => {};
-    });
+  it("recusa do formulário mostra a mensagem", async () => {
     vi.spyOn(painel, "listarMinhasAcademias").mockResolvedValue([]);
-    vi.spyOn(painel, "entrarNoPainel").mockImplementation(async () => {
-      avisar("totem-1"); // SIGNED_IN durante o login
-      avisar(null); // signOut local da recusa
-      return { sucesso: false, mensagem: "Este login não faz parte da equipe de nenhuma academia." };
+    vi.spyOn(painel, "entrarNoPainel").mockResolvedValue({
+      sucesso: false,
+      mensagem: "Este login não faz parte da equipe de nenhuma academia.",
     });
     render(<PainelApp />);
 

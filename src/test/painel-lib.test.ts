@@ -233,6 +233,45 @@ describe("Academias do login", () => {
       expect(compartilhado.auth.setSession).not.toHaveBeenCalled();
     });
 
+    it("tentativa invalidada antes de gravar (a sessão mudou em outra aba): não grava nada no navegador", async () => {
+      const compartilhado = clienteFalso([], {}, null);
+      const isolado = clienteFalso(VINCULOS, { a: true });
+      const lib = await carregarComCliente(compartilhado, isolado);
+      const podePublicar = vi.fn().mockReturnValue(false);
+
+      const res = await lib.entrarNoPainel("dono@a.test", "senha", { podePublicar, continuaValida: () => true });
+
+      expect(res).toEqual({ sucesso: false, mensagem: "A sessão deste navegador mudou em outra aba. Entre de novo." });
+      expect(podePublicar).toHaveBeenCalledWith("user-1");
+      expect(compartilhado.auth.setSession).not.toHaveBeenCalled();
+      expect(compartilhado.auth.signOut).not.toHaveBeenCalled();
+      expect(isolado.auth.signOut).toHaveBeenCalledWith({ scope: "local" });
+    });
+
+    it("mudança durante a própria gravação: desfaz a sessão gravada", async () => {
+      const compartilhado = clienteFalso([], {}, null);
+      const isolado = clienteFalso(VINCULOS, { a: true });
+      const lib = await carregarComCliente(compartilhado, isolado);
+      const ordem: string[] = [];
+      compartilhado.auth.setSession.mockImplementation(async () => {
+        ordem.push("grava");
+        return { data: {}, error: null };
+      });
+      compartilhado.auth.signOut.mockImplementation(async () => {
+        ordem.push("desfaz");
+        return { error: null };
+      });
+
+      const res = await lib.entrarNoPainel("dono@a.test", "senha", {
+        podePublicar: () => true,
+        continuaValida: () => false,
+      });
+
+      expect(res).toEqual({ sucesso: false, mensagem: "A sessão deste navegador mudou em outra aba. Entre de novo." });
+      expect(ordem).toEqual(["grava", "desfaz"]);
+      expect(compartilhado.auth.signOut).toHaveBeenCalledWith({ scope: "local" });
+    });
+
     it("falha ao publicar a sessão no navegador: não entra", async () => {
       const compartilhado = clienteFalso([], {}, null);
       compartilhado.auth.setSession.mockResolvedValue({ data: {}, error: { status: 0, message: "Failed to fetch" } });

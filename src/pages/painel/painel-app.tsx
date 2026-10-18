@@ -78,6 +78,9 @@ export const PainelApp: React.FC = () => {
   // usuário, ou de antes de sair) é descartada.
   const geracao = useRef(0);
   const usuarioAtual = useRef<string | null | undefined>(undefined);
+  // Usuário que a tentativa do formulário está gravando agora: o SIGNED_IN
+  // dele é da própria tentativa, não de outra aba.
+  const publicando = useRef<string | null>(null);
 
   const carregar = useCallback(() => {
     const minha = ++geracao.current;
@@ -107,15 +110,14 @@ export const PainelApp: React.FC = () => {
         const anterior = usuarioAtual.current;
         usuarioAtual.current = usuarioId;
         if (anterior === undefined || anterior === usuarioId) return;
+        if (usuarioId !== null && usuarioId === publicando.current) return;
+        // Qualquer outra mudança (saída, ou entrada em outra aba) invalida a
+        // carga e a tentativa de login em andamento.
+        geracao.current++;
         if (usuarioId === null) {
-          geracao.current++;
           setEstado({ fase: "login" });
           return;
         }
-        // Entrada a partir do login (desta aba ou de outra): quem cuida é o
-        // formulário. Só a troca de um usuário por outro recarrega aqui.
-        if (anterior === null) return;
-        geracao.current++;
         setEstado({ fase: "carregando" });
         // Fora do callback do Auth: chamar o cliente dentro dele trava a fila de sessão.
         setTimeout(carregar, 0);
@@ -151,10 +153,23 @@ export const PainelApp: React.FC = () => {
   // academias de um login não reaparecem depois de outro.
   const entrar = async (email: string, senha: string): Promise<ResultadoEntrada | null> => {
     const minha = ++geracao.current;
-    const res = await entrarNoPainel(email, senha);
-    // Recusa só mostra a mensagem, sem dados (e não criou sessão no navegador).
+    const valida = () => minha === geracao.current;
+    let res: ResultadoEntrada;
+    try {
+      res = await entrarNoPainel(email, senha, {
+        podePublicar: (usuarioId) => {
+          if (!valida()) return false;
+          publicando.current = usuarioId;
+          return true;
+        },
+        continuaValida: valida,
+      });
+    } finally {
+      publicando.current = null;
+    }
+    // Recusa só mostra a mensagem, sem dados (e não deixou sessão no navegador).
     if (!res.sucesso) return res;
-    if (minha !== geracao.current) return null;
+    if (!valida()) return null;
     const observado = usuarioAtual.current;
     if (observado !== undefined && observado !== res.usuarioId) return null;
     setEstado({ fase: "pronto", academias: res.academias });
