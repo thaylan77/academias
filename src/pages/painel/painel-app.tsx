@@ -150,8 +150,16 @@ export const PainelApp: React.FC = () => {
     const minha = ++geracao.current;
     const res = await entrarNoPainel(email, senha);
     // Recusa só mostra a mensagem, sem dados; e o signOut da própria recusa
-    // já mexe no contador.
-    if (!res.sucesso) return res;
+    // já mexe no contador. Se nem deu para desfazer a sessão, é saída que falhou.
+    if (!res.sucesso) {
+      if (res.sessaoPodeTerFicado) {
+        geracao.current++;
+        guardarAcademia(null);
+        setEstado({ fase: "falha_ao_sair" });
+        return null;
+      }
+      return res;
+    }
     if (minha !== geracao.current) return null;
     const observado = usuarioAtual.current;
     if (observado !== undefined && observado !== res.usuarioId) return null;

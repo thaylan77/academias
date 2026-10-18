@@ -196,6 +196,29 @@ describe("Painel da equipe: entrada e escolha de academia", () => {
     expect(sair).toHaveBeenCalledTimes(2);
   });
 
+  it("login recusado sem conseguir desfazer a sessão vai para a tela de nova tentativa de saída", async () => {
+    vi.spyOn(painel, "listarMinhasAcademias").mockResolvedValue([]);
+    vi.spyOn(painel, "entrarNoPainel").mockResolvedValue({
+      sucesso: false,
+      mensagem: "Não foi possível carregar suas academias. Verifique a conexão e tente de novo.",
+      sessaoPodeTerFicado: true,
+    });
+    const sair = vi.spyOn(painel, "sairDoPainel").mockResolvedValue(true);
+    render(<PainelApp />);
+
+    await waitFor(() => expect(screen.getByText("Painel da equipe")).toBeInTheDocument());
+    fireEvent.change(screen.getByLabelText("E-mail"), { target: { value: "x@a.test" } });
+    fireEvent.change(screen.getByLabelText("Senha"), { target: { value: "senha" } });
+    fireEvent.click(screen.getByRole("button", { name: "Entrar" }));
+
+    await waitFor(() =>
+      expect(screen.getByRole("alert")).toHaveTextContent("Não foi possível encerrar a sessão neste aparelho")
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Tentar sair de novo" }));
+    await waitFor(() => expect(screen.getByText("Painel da equipe")).toBeInTheDocument());
+    expect(sair).toHaveBeenCalledTimes(1);
+  });
+
   it("saída em outra aba leva esta aba ao login", async () => {
     let avisar: (id: string | null) => void = () => {};
     vi.spyOn(painel, "observarSessao").mockImplementation((cb) => {

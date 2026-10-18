@@ -195,6 +195,46 @@ describe("Academias do login", () => {
     expect(cliente.auth.signOut).not.toHaveBeenCalled();
   });
 
+  it("login recusado cuja sessão não deu para desfazer: avisa que ela pode ter ficado", async () => {
+    // Erro na consulta e signOut devolvendo erro.
+    const comErro = clienteFalso(VINCULOS, {});
+    comErro.eqAtivo.mockResolvedValue({ data: null, error: { message: "rede" } });
+    comErro.auth.signOut.mockResolvedValue({ error: { name: "AuthRetryableFetchError", status: 0 } });
+    let lib = await carregarComCliente(comErro);
+    expect(await lib.entrarNoPainel("x@a.test", "senha")).toEqual({
+      sucesso: false,
+      mensagem: "Não foi possível carregar suas academias. Verifique a conexão e tente de novo.",
+      sessaoPodeTerFicado: true,
+    });
+
+    // Sem vínculo e signOut rejeitando.
+    const semVinculo = clienteFalso([], {});
+    semVinculo.auth.signOut.mockRejectedValue(new Error("rede"));
+    lib = await carregarComCliente(semVinculo);
+    expect(await lib.entrarNoPainel("x@a.test", "senha")).toEqual({
+      sucesso: false,
+      mensagem: "Este login não faz parte da equipe de nenhuma academia.",
+      sessaoPodeTerFicado: true,
+    });
+  });
+
+  it("tentativa antiga de A não derruba nem mostra a sessão de B, que entrou em outra aba", async () => {
+    for (const caso of ["vazio", "erro", "com academias"] as const) {
+      const cliente = clienteFalso(caso === "com academias" ? VINCULOS : [], { a: true, b: true });
+      if (caso === "erro") cliente.eqAtivo.mockResolvedValue({ data: null, error: { message: "rede" } });
+      // Login de A (user-1); enquanto a consulta corre, B entra em outra aba.
+      cliente.auth.getSession
+        .mockResolvedValueOnce({ data: { session: { user: { id: "user-1" } } } })
+        .mockResolvedValue({ data: { session: { user: { id: "user-b" } } } });
+      const lib = await carregarComCliente(cliente);
+
+      const res = await lib.entrarNoPainel("a@a.test", "senha");
+
+      expect(res).toEqual({ sucesso: false, mensagem: "A sessão deste navegador mudou em outra aba. Entre de novo." });
+      expect(cliente.auth.signOut).not.toHaveBeenCalled();
+    }
+  });
+
   it("só credencial recusada vira 'senha incorreta'", async () => {
     const casos: Array<[object, string]> = [
       [{ status: 400, code: "invalid_credentials" }, "E-mail ou senha incorretos."],

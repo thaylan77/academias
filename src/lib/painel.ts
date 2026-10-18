@@ -111,7 +111,32 @@ export type ResultadoEntrada =
   // `usuarioId`: quem entrou, para a tela descartar o resultado se a sessão
   // mudar (saída ou outro login em outra aba) antes de ele chegar.
   | { sucesso: true; academias: AcademiaDoMembro[]; usuarioId: string }
-  | { sucesso: false; mensagem: string };
+  // `sessaoPodeTerFicado`: a senha conferiu, o login foi recusado e não deu
+  // para desfazer a sessão; a tela trata como saída que falhou.
+  | { sucesso: false; mensagem: string; sessaoPodeTerFicado?: true };
+
+const MSG_SESSAO_MUDOU = "A sessão deste navegador mudou em outra aba. Entre de novo.";
+
+// Id do usuário da sessão guardada neste navegador, ou null.
+async function usuarioDaSessao(): Promise<string | null> {
+  if (!supabase) return sessaoDemo ? "demo" : null;
+  const { data } = await supabase.auth.getSession();
+  return data?.session?.user.id ?? null;
+}
+
+/**
+ * Desfaz o login recusado, mas só se a sessão ainda for dele: se outro
+ * usuário entrou em outra aba nesse meio-tempo, a sessão é desse outro e
+ * fica. Devolve `false` se a sessão do login recusado pode ter ficado.
+ */
+async function desfazerLoginRecusado(usuarioId: string): Promise<boolean> {
+  try {
+    if ((await usuarioDaSessao()) !== usuarioId) return true;
+  } catch {
+    // Sem como conferir: tenta sair, que só mexe na sessão deste aparelho.
+  }
+  return sairDoPainel();
+}
 
 // Só credencial recusada vira "senha incorreta"; limite de tentativas e falha de
 // rede ou do servidor ganham mensagem própria, para ninguém trocar a senha à toa.
@@ -138,19 +163,37 @@ export async function entrarNoPainel(email: string, senha: string): Promise<Resu
     return { sucesso: false, mensagem: "O painel precisa de conexão com o servidor." };
   }
 
-  let academias: AcademiaDoMembro[];
+  let academias: AcademiaDoMembro[] | null;
   try {
     academias = await listarMinhasAcademias();
   } catch {
-    await sairDoPainel();
-    return { sucesso: false, mensagem: "Não foi possível carregar suas academias. Verifique a conexão e tente de novo." };
+    academias = null;
   }
 
-  if (academias.length === 0) {
-    await sairDoPainel();
-    return { sucesso: false, mensagem: "Este login não faz parte da equipe de nenhuma academia." };
+  // A lista vem da sessão atual. Se ela já não é deste login (outra aba
+  // entrou com outro usuário), nem o resultado nem a recusa valem: não
+  // mostra as academias de outro e não derruba a sessão dele.
+  let sessaoAtual: string | null | undefined;
+  try {
+    sessaoAtual = await usuarioDaSessao();
+  } catch {
+    sessaoAtual = undefined;
   }
-  return { sucesso: true, academias, usuarioId };
+  if (sessaoAtual !== undefined && sessaoAtual !== usuarioId) {
+    return { sucesso: false, mensagem: MSG_SESSAO_MUDOU };
+  }
+
+  if (academias && academias.length > 0) {
+    return { sucesso: true, academias, usuarioId };
+  }
+
+  const mensagem = academias
+    ? "Este login não faz parte da equipe de nenhuma academia."
+    : "Não foi possível carregar suas academias. Verifique a conexão e tente de novo.";
+  if (!(await desfazerLoginRecusado(usuarioId))) {
+    return { sucesso: false, mensagem, sessaoPodeTerFicado: true };
+  }
+  return { sucesso: false, mensagem };
 }
 
 /**
