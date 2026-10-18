@@ -19,5 +19,9 @@ export default defineConfig(({ command }) => ({
     globals: true,
     environment: 'jsdom',
     setupFiles: './src/test/setup.ts',
+    // Vários testes esperam ciclos reais (totem, renovação de sessão, telas
+    // carregadas sob demanda). Com a máquina carregada, 5 s não bastavam; o
+    // limite maior não esconde erro, porque cada teste confere o resultado.
+    testTimeout: 15_000,
   },
 }));
