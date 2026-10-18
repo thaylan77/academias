@@ -1,9 +1,27 @@
-import React, { useState, useEffect } from "react";
+import React, { Suspense, lazy, useState, useEffect } from "react";
 import { Header } from "./components/layout/header";
-import { MatriculaPage } from "./pages/matricula/matricula-page";
-import { TotemPage } from "./pages/checkin/totem-page";
-import { CheckinPage } from "./pages/checkin/checkin-page";
 import { Building2 } from "lucide-react";
+
+// Cada tela é carregada só quando é aberta. Quem abre a matrícula pública não
+// baixa o leitor de QR do check-in (html5-qrcode, a maior dependência do app)
+// nem o gerador de QR do totem.
+const MatriculaPage = lazy(() =>
+  import("./pages/matricula/matricula-page").then((m) => ({ default: m.MatriculaPage }))
+);
+const TotemPage = lazy(() =>
+  import("./pages/checkin/totem-page").then((m) => ({ default: m.TotemPage }))
+);
+const CheckinPage = lazy(() =>
+  import("./pages/checkin/checkin-page").then((m) => ({ default: m.CheckinPage }))
+);
+
+function CarregandoTela() {
+  return (
+    <div className="container mx-auto px-4 py-16 text-center text-sm text-zinc-500" role="status">
+      Carregando...
+    </div>
+  );
+}
 
 function AcademiaNaoEncontrada() {
   return (
@@ -96,7 +114,7 @@ export function App() {
         {!slug ? (
           <AcademiaNaoEncontrada />
         ) : (
-          <>
+          <Suspense fallback={<CarregandoTela />}>
             {activeTab === "matricula" && <MatriculaPage slug={slug} />}
             {activeTab === "totem" && (
               <TotemPage
@@ -107,7 +125,7 @@ export function App() {
             {activeTab === "checkin" && (
               <CheckinPage slug={slug} initialTurmaId={turmaParam} />
             )}
-          </>
+          </Suspense>
         )}
       </main>
 
