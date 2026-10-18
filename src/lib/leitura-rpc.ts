@@ -52,8 +52,10 @@ function texto(o: Objeto, campo: string, rpc: string, onde: string): string {
 }
 
 function textoOuNulo(o: Objeto, campo: string, rpc: string, onde: string): string | null {
+  // A chave sempre vem (jsonb_build_object), mesmo com valor nulo: ausente é erro.
+  if (!(campo in o)) throw new RespostaRpcInvalida(rpc, `${onde}.${campo} está faltando`);
   const v = o[campo];
-  if (v === null || v === undefined) return null;
+  if (v === null) return null;
   if (typeof v !== "string") throw new RespostaRpcInvalida(rpc, `${onde}.${campo} deveria ser texto ou nulo`);
   return v;
 }

@@ -57,6 +57,7 @@ describe("lerAcademiaPublica", () => {
     ["campo aninhado faltando", ["turmas", 0, "horarios", 0, "fim"], undefined, /turmas\[0\]\.horarios\[0\]\.fim deveria ser texto/],
     ["valor do plano como texto", ["planos", 0, "valor"], "150.00", /planos\[0\]\.valor deveria ser número/],
     ["logo com tipo errado", ["logo_url"], 10, /logo_url deveria ser texto ou nulo/],
+    ["logo ausente (a chave sempre vem, mesmo nula)", ["logo_url"], undefined, /logo_url está faltando/],
   ])("%s gera RespostaRpcInvalida com o caminho do campo", (_nome, caminho, valor, mensagem) => {
     const ler = () => lerAcademiaPublica(comCampo(ACADEMIA, caminho as (string | number)[], valor as Json | undefined));
     expect(ler).toThrow(RespostaRpcInvalida);
