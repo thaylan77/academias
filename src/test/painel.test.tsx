@@ -352,6 +352,30 @@ describe("Painel da equipe: entrada e escolha de academia", () => {
     });
   });
 
+  it("tentativa que gravou a sessão e não conseguiu desfazê-la vai para 'Tentar sair de novo'", async () => {
+    vi.spyOn(painel, "listarMinhasAcademias").mockResolvedValue([]);
+    vi.spyOn(painel, "entrarNoPainel").mockResolvedValue({
+      sucesso: false,
+      mensagem: "A sessão deste navegador mudou em outra aba. Entre de novo.",
+      sessaoPodeTerFicado: true,
+    });
+    const sair = vi.spyOn(painel, "sairDoPainel").mockResolvedValue(true);
+    render(<PainelApp />);
+
+    await waitFor(() => expect(screen.getByText("Painel da equipe")).toBeInTheDocument());
+    fireEvent.change(screen.getByLabelText("E-mail"), { target: { value: "x@a.test" } });
+    fireEvent.change(screen.getByLabelText("Senha"), { target: { value: "senha" } });
+    fireEvent.click(screen.getByRole("button", { name: "Entrar" }));
+
+    await waitFor(() =>
+      expect(screen.getByRole("alert")).toHaveTextContent("Não foi possível encerrar a sessão neste aparelho")
+    );
+    expect(screen.queryByText("Painel da equipe")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Tentar sair de novo" }));
+    await waitFor(() => expect(screen.getByText("Painel da equipe")).toBeInTheDocument());
+    expect(sair).toHaveBeenCalledTimes(1);
+  });
+
   it("recusa do formulário mostra a mensagem", async () => {
     vi.spyOn(painel, "listarMinhasAcademias").mockResolvedValue([]);
     vi.spyOn(painel, "entrarNoPainel").mockResolvedValue({

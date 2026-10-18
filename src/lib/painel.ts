@@ -121,7 +121,9 @@ export type ResultadoEntrada =
   // `usuarioId`: quem entrou, para a tela descartar o resultado se a sessão
   // mudar (saída ou outro login em outra aba) antes de ele chegar.
   | { sucesso: true; academias: AcademiaDoMembro[]; usuarioId: string }
-  | { sucesso: false; mensagem: string };
+  // `sessaoPodeTerFicado`: a tentativa chegou a gravar a sessão, precisou
+  // desfazê-la e não conseguiu; a tela trata como saída que falhou.
+  | { sucesso: false; mensagem: string; sessaoPodeTerFicado?: true };
 
 // Só credencial recusada vira "senha incorreta"; limite de tentativas e falha de
 // rede ou do servidor ganham mensagem própria, para ninguém trocar a senha à toa.
@@ -206,7 +208,9 @@ export async function entrarNoPainel(
   // rede antes de gravar): desfaz, para nenhum login ficar guardado sem que
   // ninguém o tenha pedido por último.
   if (controle && !controle.continuaValida()) {
-    await sairDoPainel();
+    if (!(await sairDoPainel())) {
+      return { sucesso: false, mensagem: MSG_SESSAO_MUDOU, sessaoPodeTerFicado: true };
+    }
     return { sucesso: false, mensagem: MSG_SESSAO_MUDOU };
   }
   return { sucesso: true, academias, usuarioId };

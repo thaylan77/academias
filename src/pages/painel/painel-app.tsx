@@ -167,8 +167,18 @@ export const PainelApp: React.FC = () => {
     } finally {
       publicando.current = null;
     }
-    // Recusa só mostra a mensagem, sem dados (e não deixou sessão no navegador).
-    if (!res.sucesso) return res;
+    // Recusa só mostra a mensagem, sem dados. Se a tentativa gravou a sessão
+    // e não conseguiu desfazê-la, é saída que falhou: nada de cargas pendentes
+    // nem de formulário fingindo que não há sessão.
+    if (!res.sucesso) {
+      if (res.sessaoPodeTerFicado) {
+        geracao.current++;
+        guardarAcademia(null);
+        setEstado({ fase: "falha_ao_sair" });
+        return null;
+      }
+      return res;
+    }
     if (!valida()) return null;
     const observado = usuarioAtual.current;
     if (observado !== undefined && observado !== res.usuarioId) return null;

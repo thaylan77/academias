@@ -272,6 +272,30 @@ describe("Academias do login", () => {
       expect(compartilhado.auth.signOut).toHaveBeenCalledWith({ scope: "local" });
     });
 
+    it("mudança durante a gravação e falha ao desfazer (erro devolvido ou lançado): avisa que a sessão pode ter ficado", async () => {
+      for (const falha of ["devolvido", "lançado"] as const) {
+        const compartilhado = clienteFalso([], {}, null);
+        if (falha === "devolvido") {
+          compartilhado.auth.signOut.mockResolvedValue({ error: { name: "AuthRetryableFetchError", status: 0 } });
+        } else {
+          compartilhado.auth.signOut.mockRejectedValue(new Error("rede"));
+        }
+        const isolado = clienteFalso(VINCULOS, { a: true });
+        const lib = await carregarComCliente(compartilhado, isolado);
+
+        const res = await lib.entrarNoPainel("dono@a.test", "senha", {
+          podePublicar: () => true,
+          continuaValida: () => false,
+        });
+
+        expect(res).toEqual({
+          sucesso: false,
+          mensagem: "A sessão deste navegador mudou em outra aba. Entre de novo.",
+          sessaoPodeTerFicado: true,
+        });
+      }
+    });
+
     it("falha ao publicar a sessão no navegador: não entra", async () => {
       const compartilhado = clienteFalso([], {}, null);
       compartilhado.auth.setSession.mockResolvedValue({ data: {}, error: { status: 0, message: "Failed to fetch" } });
