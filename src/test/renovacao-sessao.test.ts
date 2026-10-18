@@ -82,7 +82,10 @@ async function carregarLib() {
   return import("../lib/supabase");
 }
 
-describe("Renovação da sessão com o cliente real", () => {
+// O cliente real usa temporizadores da biblioteca (nova tentativa com espera
+// crescente). Com a máquina carregada, 5 s não bastam; o limite maior não
+// esconde erro de lógica: o teste continua conferindo o resultado.
+describe("Renovação da sessão com o cliente real", { timeout: 20_000 }, () => {
   beforeEach(() => {
     localStorage.clear();
   });

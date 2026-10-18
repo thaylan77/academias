@@ -36,7 +36,8 @@ export interface AcademiaPublica {
   planos: PlanoPublico[];
 }
 
-export interface MatriculaOnlinePayload {
+// `type`, e não `interface`, para ser aceito como `Json` no argumento da RPC.
+export type MatriculaOnlinePayload = {
   nome: string;
   cpf?: string;
   data_nascimento?: string; // YYYY-MM-DD
@@ -50,7 +51,7 @@ export interface MatriculaOnlinePayload {
   aceite_termo: boolean;
   plano_id?: string;
   turma_ids?: string[];
-}
+};
 
 export interface AlunoCheckinInfo {
   id: string;
