@@ -190,9 +190,9 @@ Plano, status e slug da academia só mudam via `service_role` (billing do SaaS).
     `.github/`, `AGENTS.md`, `CLAUDE.md`, `.claude/`, `package.json`,
     `package-lock.json` e qualquer coisa de RLS, papéis, login ou dinheiro.
     PR que toque nisso é fechado, mesmo que o resto sirva.
-  - Todo PR dele passa pelo controle normal: CI `Banco` verde, Gemini
-    quando for front ou risco, Codex no head final. O Jules não mescla;
-    só o Claude mescla.
+  - Todo PR dele passa pelo controle normal, conforme "Revisão
+    proporcional ao risco": CI `Banco` verde e a revisão exigida para o
+    que ele muda. O Jules não mescla; só o Claude mescla.
 - Quem escreveu o PR não é quem revisa: o Claude ou o Jules escrevem, o
   Codex decide a aprovação.
 - Uma branch por issue. As do Claude são `claude/<número-da-issue>`; as do
