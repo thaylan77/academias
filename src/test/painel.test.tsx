@@ -64,7 +64,9 @@ describe("Painel da equipe: entrada e escolha de academia", () => {
 
   it("login pelo formulário repassa e-mail e senha e abre a academia", async () => {
     vi.spyOn(painel, "listarMinhasAcademias").mockResolvedValue([]);
-    const entrar = vi.spyOn(painel, "entrarNoPainel").mockResolvedValue({ sucesso: true, academias: [A] });
+    const entrar = vi
+      .spyOn(painel, "entrarNoPainel")
+      .mockResolvedValue({ sucesso: true, academias: [A], usuarioId: "user-a" });
     render(<PainelApp />);
 
     await waitFor(() => expect(screen.getByText("Painel da equipe")).toBeInTheDocument());
@@ -232,6 +234,54 @@ describe("Painel da equipe: entrada e escolha de academia", () => {
     expect(screen.queryByRole("heading", { name: "Academia Alpha" })).not.toBeInTheDocument();
     const menu = screen.getByRole("navigation", { name: "Menu do painel" });
     expect(within(menu).queryByRole("link", { name: "Cobranças" })).not.toBeInTheDocument();
+  });
+
+  describe("login pelo formulário ainda pendente quando a sessão muda", () => {
+    async function comLoginPendente() {
+      let avisar: (id: string | null) => void = () => {};
+      vi.spyOn(painel, "observarSessao").mockImplementation((cb) => {
+        avisar = cb;
+        cb(null);
+        return () => {};
+      });
+      const listar = vi.spyOn(painel, "listarMinhasAcademias").mockResolvedValue([]);
+      let soltar: (r: painel.ResultadoEntrada) => void = () => {};
+      vi.spyOn(painel, "entrarNoPainel").mockImplementation(() => {
+        avisar("dono-a"); // SIGNED_IN de A, ainda carregando as academias
+        return new Promise((r) => (soltar = r));
+      });
+      render(<PainelApp />);
+
+      await waitFor(() => expect(screen.getByText("Painel da equipe")).toBeInTheDocument());
+      fireEvent.change(screen.getByLabelText("E-mail"), { target: { value: "dono@a.test" } });
+      fireEvent.change(screen.getByLabelText("Senha"), { target: { value: "senha" } });
+      fireEvent.click(screen.getByRole("button", { name: "Entrar" }));
+      await waitFor(() => expect(screen.getByRole("button", { name: "Entrando..." })).toBeInTheDocument());
+      return { avisar, listar, soltarA: () => soltar({ sucesso: true, academias: [A], usuarioId: "dono-a" }) };
+    }
+
+    it("saída em outra aba: o resultado atrasado de A é descartado", async () => {
+      const { avisar, soltarA } = await comLoginPendente();
+
+      act(() => avisar(null));
+      await act(async () => soltarA());
+
+      expect(screen.queryByRole("heading", { name: "Academia Alpha" })).not.toBeInTheDocument();
+      expect(screen.getByText("Painel da equipe")).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Entrar" })).toBeEnabled();
+    });
+
+    it("troca para B em outra aba: A não reaparece por cima de B", async () => {
+      const { avisar, listar, soltarA } = await comLoginPendente();
+      listar.mockResolvedValue([B]);
+
+      act(() => avisar("professor-b"));
+      await waitFor(() => expect(screen.getByRole("heading", { name: "Academia Beta" })).toBeInTheDocument());
+      await act(async () => soltarA());
+
+      expect(screen.getByRole("heading", { name: "Academia Beta" })).toBeInTheDocument();
+      expect(screen.queryByRole("heading", { name: "Academia Alpha" })).not.toBeInTheDocument();
+    });
   });
 
   it("entrada pelo formulário não é atropelada pelo aviso de sessão (mensagem de recusa fica)", async () => {

@@ -108,7 +108,9 @@ export async function listarMinhasAcademias(): Promise<AcademiaDoMembro[]> {
 }
 
 export type ResultadoEntrada =
-  | { sucesso: true; academias: AcademiaDoMembro[] }
+  // `usuarioId`: quem entrou, para a tela descartar o resultado se a sessão
+  // mudar (saída ou outro login em outra aba) antes de ele chegar.
+  | { sucesso: true; academias: AcademiaDoMembro[]; usuarioId: string }
   | { sucesso: false; mensagem: string };
 
 // Só credencial recusada vira "senha incorreta"; limite de tentativas e falha de
@@ -122,13 +124,16 @@ function mensagemDeFalhaNoLogin(erro: { status?: number; code?: string }): strin
 
 /** Login da equipe no painel. Sem vínculo em nenhuma academia, recusa. */
 export async function entrarNoPainel(email: string, senha: string): Promise<ResultadoEntrada> {
+  let usuarioId: string;
   if (supabase) {
-    const { error } = await supabase.auth.signInWithPassword({ email, password: senha });
+    const { data, error } = await supabase.auth.signInWithPassword({ email, password: senha });
     if (error) {
       return { sucesso: false, mensagem: mensagemDeFalhaNoLogin(error) };
     }
+    usuarioId = data.user.id;
   } else if (import.meta.env.DEV) {
     sessaoDemo = true;
+    usuarioId = "demo";
   } else {
     return { sucesso: false, mensagem: "O painel precisa de conexão com o servidor." };
   }
@@ -145,7 +150,7 @@ export async function entrarNoPainel(email: string, senha: string): Promise<Resu
     await sairDoPainel();
     return { sucesso: false, mensagem: "Este login não faz parte da equipe de nenhuma academia." };
   }
-  return { sucesso: true, academias };
+  return { sucesso: true, academias, usuarioId };
 }
 
 /**

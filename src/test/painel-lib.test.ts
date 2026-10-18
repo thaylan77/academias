@@ -191,7 +191,7 @@ describe("Academias do login", () => {
     const res = await lib.entrarNoPainel("dono@a.test", "senha");
 
     expect(cliente.auth.signInWithPassword).toHaveBeenCalledWith({ email: "dono@a.test", password: "senha" });
-    expect(res).toMatchObject({ sucesso: true, academias: [{ slug: "alpha" }, { slug: "zen" }] });
+    expect(res).toMatchObject({ sucesso: true, usuarioId: "user-1", academias: [{ slug: "alpha" }, { slug: "zen" }] });
     expect(cliente.auth.signOut).not.toHaveBeenCalled();
   });
 

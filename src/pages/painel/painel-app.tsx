@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
   AcademiaDoMembro,
+  ResultadoEntrada,
   SecaoPainel,
   caminhoPainel,
   entrarNoPainel,
@@ -141,6 +142,23 @@ export const PainelApp: React.FC = () => {
     setEstado(saiu ? { fase: "login" } : { fase: "falha_ao_sair" });
   };
 
+  // Login pelo formulário. O resultado só vale se nada mudou enquanto ele
+  // corria: nenhuma carga mais nova (saída, troca de usuário, outra tentativa)
+  // e a sessão observada ainda é de quem entrou. Senão é descartado, e as
+  // academias de um login não reaparecem depois de outro.
+  const entrar = async (email: string, senha: string): Promise<ResultadoEntrada | null> => {
+    const minha = ++geracao.current;
+    const res = await entrarNoPainel(email, senha);
+    // Recusa só mostra a mensagem, sem dados; e o signOut da própria recusa
+    // já mexe no contador.
+    if (!res.sucesso) return res;
+    if (minha !== geracao.current) return null;
+    const observado = usuarioAtual.current;
+    if (observado !== undefined && observado !== res.usuarioId) return null;
+    setEstado({ fase: "pronto", academias: res.academias });
+    return res;
+  };
+
   if (estado.fase === "carregando") {
     return <p className="py-16 text-center text-sm text-zinc-500" role="status">Carregando o painel...</p>;
   }
@@ -163,10 +181,7 @@ export const PainelApp: React.FC = () => {
 
   if (estado.fase === "login") {
     return (
-      <LoginPainel
-        aviso={estado.aviso}
-        aoEntrar={(academias) => setEstado({ fase: "pronto", academias })}
-      />
+      <LoginPainel aviso={estado.aviso} entrar={entrar} />
     );
   }
 
@@ -335,8 +350,9 @@ const EscolhaDeAcademia: React.FC<{
 
 const LoginPainel: React.FC<{
   aviso?: string;
-  aoEntrar: (academias: AcademiaDoMembro[]) => void;
-}> = ({ aviso, aoEntrar }) => {
+  // `null`: tentativa descartada porque a sessão mudou no meio.
+  entrar: (email: string, senha: string) => Promise<ResultadoEntrada | null>;
+}> = ({ aviso, entrar }) => {
   const [email, setEmail] = useState("");
   const [senha, setSenha] = useState("");
   const [erro, setErro] = useState<string | null>(aviso ?? null);
@@ -346,10 +362,9 @@ const LoginPainel: React.FC<{
     e.preventDefault();
     setErro(null);
     setEntrando(true);
-    const res = await entrarNoPainel(email.trim(), senha);
+    const res = await entrar(email.trim(), senha);
     setEntrando(false);
-    if (res.sucesso) aoEntrar(res.academias);
-    else setErro(res.mensagem);
+    if (res && !res.sucesso) setErro(res.mensagem);
   };
 
   return (
