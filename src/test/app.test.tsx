@@ -36,6 +36,19 @@ describe("Carregamento sob demanda das telas", () => {
     expect(carregados.has("qrcode.react")).toBe(false);
   });
 
+  it("/painel abre o painel da equipe, sem bibliotecas de QR nem telas públicas", async () => {
+    abrir("/painel");
+    const { App } = await import("../App");
+    render(<App />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Painel da equipe")).toBeInTheDocument();
+    });
+    expect(screen.queryByText(/Ficha de Matrícula|Matrícula Online/i)).not.toBeInTheDocument();
+    expect(carregados.has("html5-qrcode")).toBe(false);
+    expect(carregados.has("qrcode.react")).toBe(false);
+  });
+
   it("o check-in carrega o leitor de QR, e não o gerador do totem", async () => {
     abrir("/honor-demo-a/checkin");
     const { App } = await import("../App");

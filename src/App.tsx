@@ -15,6 +15,15 @@ const TotemPage = lazy(() =>
 const CheckinPage = lazy(() =>
   import("./pages/checkin/checkin-page").then((m) => ({ default: m.CheckinPage }))
 );
+const PainelApp = lazy(() =>
+  import("./pages/painel/painel-app").then((m) => ({ default: m.PainelApp }))
+);
+
+// "painel" é o primeiro segmento reservado: /painel/... é o painel da equipe,
+// não o slug de uma academia.
+function ehCaminhoDoPainel(pathname: string): boolean {
+  return pathname.split("/").filter(Boolean)[0] === "painel";
+}
 
 function CarregandoTela() {
   return (
@@ -42,6 +51,19 @@ function AcademiaNaoEncontrada() {
 }
 
 export function App() {
+  if (ehCaminhoDoPainel(window.location.pathname)) {
+    return (
+      <FalhaAoCarregar>
+        <Suspense fallback={<CarregandoTela />}>
+          <PainelApp />
+        </Suspense>
+      </FalhaAoCarregar>
+    );
+  }
+  return <AppPublico />;
+}
+
+function AppPublico() {
   // Slug de demo existe estritamente em ambiente de desenvolvimento local (DEV)
   const [slug, setSlug] = useState<string | null>(import.meta.env.DEV ? "honor-demo-a" : null);
   const [activeTab, setActiveTab] = useState<"matricula" | "totem" | "checkin">("matricula");

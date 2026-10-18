@@ -1,0 +1,210 @@
+import { supabase } from "./supabase";
+import { MembroEquipePapel } from "../types/app";
+
+/**
+ * Painel da equipe: quem entra, em quais academias e o que vê.
+ *
+ * O banco protege tudo por RLS; aqui o front decide só o que mostrar. As
+ * regras de papel seguem a tabela "Papéis e permissões" do AGENTS.md.
+ */
+
+export type PapelPainel = Exclude<MembroEquipePapel, "totem">;
+
+export interface AcademiaDoMembro {
+  academia_id: string;
+  nome: string;
+  slug: string;
+  papel: PapelPainel;
+  // Assinatura ativa ou trial válido (academia_ativa). Sem isso, a academia
+  // lê, mas não altera.
+  ativa: boolean;
+}
+
+export type SecaoPainel = "inicio" | "alunos" | "turmas" | "matriculas" | "cobrancas" | "graduacoes";
+
+export interface ItemMenu {
+  secao: SecaoPainel;
+  rotulo: string;
+}
+
+const PAPEIS_PAINEL: PapelPainel[] = ["dono", "admin", "professor", "recepcao"];
+
+// Quem vê cada seção (leitura), conforme a tabela de papéis do AGENTS.md.
+const MENU: Array<ItemMenu & { papeis: PapelPainel[] }> = [
+  { secao: "inicio", rotulo: "Início", papeis: PAPEIS_PAINEL },
+  { secao: "alunos", rotulo: "Alunos", papeis: ["dono", "admin", "professor", "recepcao"] },
+  { secao: "turmas", rotulo: "Turmas", papeis: ["dono", "admin", "professor", "recepcao"] },
+  { secao: "matriculas", rotulo: "Matrículas", papeis: ["dono", "admin", "recepcao"] },
+  { secao: "cobrancas", rotulo: "Cobranças", papeis: ["dono", "admin", "recepcao"] },
+  { secao: "graduacoes", rotulo: "Graduações", papeis: ["dono", "admin", "professor", "recepcao"] },
+];
+
+export function itensDoMenu(papel: PapelPainel): ItemMenu[] {
+  return MENU.filter((m) => m.papeis.includes(papel)).map(({ secao, rotulo }) => ({ secao, rotulo }));
+}
+
+export function papelPodeVer(papel: PapelPainel, secao: SecaoPainel): boolean {
+  return itensDoMenu(papel).some((m) => m.secao === secao);
+}
+
+function ehPapelPainel(papel: unknown): papel is PapelPainel {
+  return typeof papel === "string" && (PAPEIS_PAINEL as string[]).includes(papel);
+}
+
+// ------------------------------------------------------------------ dados
+
+const ACADEMIAS_DEMO: AcademiaDoMembro[] = [
+  { academia_id: "demo-a", nome: "Honor Team Demo A", slug: "honor-demo-a", papel: "dono", ativa: true },
+  { academia_id: "demo-b", nome: "Honor Team Demo B", slug: "honor-demo-b", papel: "professor", ativa: false },
+];
+let sessaoDemo = false;
+
+/**
+ * Academias em que o login atual é membro ativo da equipe, sem o papel
+ * `totem` (o aparelho do totem não entra no painel).
+ *
+ * O filtro por `user_id` é obrigatório: a política de leitura de
+ * `membros_academia` deixa dono e admin verem os vínculos de outras
+ * pessoas da academia, e esses não são academias deste login.
+ */
+export async function listarMinhasAcademias(): Promise<AcademiaDoMembro[]> {
+  if (supabase) {
+    const { data: auth } = await supabase.auth.getUser();
+    const usuario = auth?.user;
+    if (!usuario) return [];
+
+    const { data, error } = await supabase
+      .from("membros_academia")
+      .select("academia_id, papel, academias(nome, slug)")
+      .eq("user_id", usuario.id)
+      .eq("ativo", true);
+    if (error) throw error;
+
+    const vinculos = (data ?? []).filter((v) => ehPapelPainel(v.papel) && v.academias);
+    return Promise.all(
+      vinculos.map(async (v) => {
+        const { data: ativa, error: erroAtiva } = await supabase!.rpc("academia_ativa", {
+          p_academia_id: v.academia_id,
+        });
+        if (erroAtiva) throw erroAtiva;
+        return {
+          academia_id: v.academia_id,
+          nome: v.academias!.nome,
+          slug: v.academias!.slug,
+          papel: v.papel as PapelPainel,
+          ativa: ativa === true,
+        };
+      })
+    ).then((lista) => lista.sort((a, b) => a.nome.localeCompare(b.nome, "pt-BR")));
+  }
+
+  if (import.meta.env.DEV) return sessaoDemo ? ACADEMIAS_DEMO : [];
+  return [];
+}
+
+export type ResultadoEntrada =
+  | { sucesso: true; academias: AcademiaDoMembro[] }
+  | { sucesso: false; mensagem: string };
+
+/** Login da equipe no painel. Sem vínculo em nenhuma academia, recusa. */
+export async function entrarNoPainel(email: string, senha: string): Promise<ResultadoEntrada> {
+  if (supabase) {
+    const { error } = await supabase.auth.signInWithPassword({ email, password: senha });
+    if (error) {
+      return { sucesso: false, mensagem: "E-mail ou senha incorretos." };
+    }
+  } else if (import.meta.env.DEV) {
+    sessaoDemo = true;
+  } else {
+    return { sucesso: false, mensagem: "O painel precisa de conexão com o servidor." };
+  }
+
+  let academias: AcademiaDoMembro[];
+  try {
+    academias = await listarMinhasAcademias();
+  } catch {
+    await sairDoPainel();
+    return { sucesso: false, mensagem: "Não foi possível carregar suas academias. Verifique a conexão e tente de novo." };
+  }
+
+  if (academias.length === 0) {
+    await sairDoPainel();
+    return { sucesso: false, mensagem: "Este login não faz parte da equipe de nenhuma academia." };
+  }
+  return { sucesso: true, academias };
+}
+
+/** Sai só neste aparelho: não derruba a sessão do mesmo login em outro lugar (um totem, por exemplo). */
+export async function sairDoPainel(): Promise<void> {
+  if (supabase) {
+    await supabase.auth.signOut({ scope: "local" });
+  }
+  sessaoDemo = false;
+}
+
+// ------------------------------------------------------------------ escolha da academia
+
+const CHAVE_ESCOLHA = "honorteam.painel.academia";
+
+export function lerAcademiaGuardada(): string | null {
+  try {
+    return localStorage.getItem(CHAVE_ESCOLHA);
+  } catch {
+    return null;
+  }
+}
+
+export function guardarAcademia(slug: string | null): void {
+  try {
+    if (slug) localStorage.setItem(CHAVE_ESCOLHA, slug);
+    else localStorage.removeItem(CHAVE_ESCOLHA);
+  } catch {
+    /* sem armazenamento: só não lembra a escolha */
+  }
+}
+
+export type Escolha =
+  | { tipo: "academia"; academia: AcademiaDoMembro }
+  | { tipo: "escolher" }
+  | { tipo: "sem_acesso"; slug: string };
+
+/**
+ * Qual academia abrir. O slug da URL manda; ele só vale se for de uma
+ * academia deste login. Sem slug: com uma academia só, ela; com várias, a
+ * guardada da última vez, se ainda for do login; senão, perguntar.
+ */
+export function escolherAcademia(
+  academias: AcademiaDoMembro[],
+  slugDaUrl: string | null,
+  slugGuardado: string | null
+): Escolha {
+  if (slugDaUrl) {
+    const daUrl = academias.find((a) => a.slug === slugDaUrl);
+    return daUrl ? { tipo: "academia", academia: daUrl } : { tipo: "sem_acesso", slug: slugDaUrl };
+  }
+  if (academias.length === 1) return { tipo: "academia", academia: academias[0] };
+  const guardada = academias.find((a) => a.slug === slugGuardado);
+  return guardada ? { tipo: "academia", academia: guardada } : { tipo: "escolher" };
+}
+
+// ------------------------------------------------------------------ caminho
+
+export interface CaminhoPainel {
+  slug: string | null;
+  secao: SecaoPainel;
+}
+
+const SECOES: SecaoPainel[] = ["inicio", "alunos", "turmas", "matriculas", "cobrancas", "graduacoes"];
+
+/** Lê `/painel`, `/painel/<slug>` e `/painel/<slug>/<seção>`. */
+export function lerCaminhoPainel(pathname: string): CaminhoPainel {
+  const partes = pathname.split("/").filter(Boolean);
+  const slug = partes[1] ?? null;
+  const secao = SECOES.find((s) => s === partes[2]) ?? "inicio";
+  return { slug, secao };
+}
+
+export function caminhoPainel(slug: string | null, secao: SecaoPainel = "inicio"): string {
+  if (!slug) return "/painel";
+  return secao === "inicio" ? `/painel/${slug}` : `/painel/${slug}/${secao}`;
+}

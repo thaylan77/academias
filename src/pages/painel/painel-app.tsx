@@ -1,0 +1,316 @@
+import React, { useCallback, useEffect, useState } from "react";
+import {
+  AcademiaDoMembro,
+  SecaoPainel,
+  caminhoPainel,
+  entrarNoPainel,
+  escolherAcademia,
+  guardarAcademia,
+  itensDoMenu,
+  lerAcademiaGuardada,
+  lerCaminhoPainel,
+  listarMinhasAcademias,
+  papelPodeVer,
+  sairDoPainel,
+} from "../../lib/painel";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../components/ui/card";
+import { Button } from "../../components/ui/button";
+import { Input } from "../../components/ui/input";
+import { Label } from "../../components/ui/label";
+import { Alert, AlertDescription } from "../../components/ui/alert";
+import { Badge } from "../../components/ui/badge";
+import { Shield, LogOut, Building2 } from "lucide-react";
+
+const ROTULO_PAPEL: Record<AcademiaDoMembro["papel"], string> = {
+  dono: "Dono",
+  admin: "Administração",
+  professor: "Professor",
+  recepcao: "Recepção",
+};
+
+/** Contexto que as telas do painel usam: academia selecionada e papel nela. */
+export interface PainelContextoValor {
+  academia: AcademiaDoMembro;
+}
+export const PainelContexto = React.createContext<PainelContextoValor | null>(null);
+
+// Caminho atual do navegador, atualizado por navegação do painel e pelo voltar/avançar.
+function usarCaminho(): [string, (novo: string) => void] {
+  const [caminho, setCaminho] = useState(window.location.pathname);
+  useEffect(() => {
+    const aoVoltar = () => setCaminho(window.location.pathname);
+    window.addEventListener("popstate", aoVoltar);
+    return () => window.removeEventListener("popstate", aoVoltar);
+  }, []);
+  const navegar = useCallback((novo: string) => {
+    if (novo !== window.location.pathname) window.history.pushState({}, "", novo);
+    setCaminho(novo);
+  }, []);
+  return [caminho, navegar];
+}
+
+type Estado =
+  | { fase: "carregando" }
+  | { fase: "login"; aviso?: string }
+  | { fase: "pronto"; academias: AcademiaDoMembro[] };
+
+export const PainelApp: React.FC = () => {
+  const [estado, setEstado] = useState<Estado>({ fase: "carregando" });
+  const [caminho, navegar] = usarCaminho();
+
+  useEffect(() => {
+    let vivo = true;
+    listarMinhasAcademias()
+      .then((academias) => {
+        if (!vivo) return;
+        setEstado(academias.length ? { fase: "pronto", academias } : { fase: "login" });
+      })
+      .catch(() => vivo && setEstado({ fase: "login", aviso: "Não foi possível carregar suas academias. Entre de novo." }));
+    return () => {
+      vivo = false;
+    };
+  }, []);
+
+  // Sem slug na URL (uma academia só, ou a guardada): mostra o endereço completo.
+  useEffect(() => {
+    if (estado.fase !== "pronto") return;
+    const { slug, secao } = lerCaminhoPainel(caminho);
+    if (slug) return;
+    const escolha = escolherAcademia(estado.academias, null, lerAcademiaGuardada());
+    if (escolha.tipo === "academia") {
+      window.history.replaceState({}, "", caminhoPainel(escolha.academia.slug, secao));
+    }
+  }, [estado, caminho]);
+
+  const sair = async () => {
+    await sairDoPainel();
+    guardarAcademia(null);
+    navegar("/painel");
+    setEstado({ fase: "login" });
+  };
+
+  if (estado.fase === "carregando") {
+    return <p className="py-16 text-center text-sm text-zinc-500" role="status">Carregando o painel...</p>;
+  }
+
+  if (estado.fase === "login") {
+    return (
+      <LoginPainel
+        aviso={estado.aviso}
+        aoEntrar={(academias) => setEstado({ fase: "pronto", academias })}
+      />
+    );
+  }
+
+  const { slug, secao } = lerCaminhoPainel(caminho);
+  const escolha = escolherAcademia(estado.academias, slug, lerAcademiaGuardada());
+
+  if (escolha.tipo === "sem_acesso") {
+    return (
+      <Moldura aoSair={sair}>
+        <Alert variant="destructive" role="alert" className="max-w-lg mx-auto">
+          <AlertDescription>
+            Você não faz parte da equipe da academia <strong>{escolha.slug}</strong>.
+          </AlertDescription>
+        </Alert>
+        <div className="text-center mt-6">
+          <Button variant="outline" onClick={() => navegar("/painel")}>Ver minhas academias</Button>
+        </div>
+      </Moldura>
+    );
+  }
+
+  if (escolha.tipo === "escolher") {
+    return (
+      <Moldura aoSair={sair}>
+        <EscolhaDeAcademia
+          academias={estado.academias}
+          aoEscolher={(a) => {
+            guardarAcademia(a.slug);
+            navegar(caminhoPainel(a.slug));
+          }}
+        />
+      </Moldura>
+    );
+  }
+
+  const academia = escolha.academia;
+  const secaoVisivel: SecaoPainel = papelPodeVer(academia.papel, secao) ? secao : "inicio";
+
+  return (
+    <PainelContexto.Provider value={{ academia }}>
+      <Moldura aoSair={sair}>
+        <div className="flex flex-wrap items-center justify-between gap-3 mb-6">
+          <div>
+            <h1 className="text-2xl font-extrabold text-white">{academia.nome}</h1>
+            <p className="text-xs text-zinc-400">
+              Você entrou como <strong>{ROTULO_PAPEL[academia.papel]}</strong>
+            </p>
+          </div>
+          {estado.academias.length > 1 && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                guardarAcademia(null);
+                navegar("/painel");
+              }}
+            >
+              <Building2 className="w-4 h-4 mr-1.5" /> Trocar de academia
+            </Button>
+          )}
+        </div>
+
+        {!academia.ativa && (
+          <Alert variant="warning" role="alert" className="mb-6">
+            <AlertDescription>
+              A assinatura desta academia está suspensa ou o período de teste acabou. Você pode consultar os
+              dados, mas não alterar.
+            </AlertDescription>
+          </Alert>
+        )}
+
+        <div className="grid gap-6 md:grid-cols-[200px_1fr]">
+          <nav aria-label="Menu do painel">
+            <ul className="space-y-1">
+              {itensDoMenu(academia.papel).map((item) => (
+                <li key={item.secao}>
+                  <a
+                    href={caminhoPainel(academia.slug, item.secao)}
+                    aria-current={item.secao === secaoVisivel ? "page" : undefined}
+                    onClick={(e) => {
+                      e.preventDefault();
+                      navegar(caminhoPainel(academia.slug, item.secao));
+                    }}
+                    className={`block rounded-lg px-3 py-2 text-sm ${
+                      item.secao === secaoVisivel
+                        ? "bg-red-950/40 text-white border border-red-900/60"
+                        : "text-zinc-400 hover:text-white hover:bg-zinc-900"
+                    }`}
+                  >
+                    {item.rotulo}
+                  </a>
+                </li>
+              ))}
+            </ul>
+          </nav>
+          <section>
+            <SecaoEmConstrucao secao={secaoVisivel} />
+          </section>
+        </div>
+      </Moldura>
+    </PainelContexto.Provider>
+  );
+};
+
+const Moldura: React.FC<{ aoSair: () => void; children: React.ReactNode }> = ({ aoSair, children }) => (
+  <div className="min-h-screen bg-zinc-950 text-zinc-100">
+    <header className="border-b border-zinc-800">
+      <div className="container mx-auto px-4 h-14 flex items-center justify-between">
+        <span className="flex items-center gap-2 font-extrabold text-white">
+          <Shield className="w-5 h-5 text-red-500" /> HONOR TEAM <Badge variant="secondary">Painel</Badge>
+        </span>
+        <Button variant="ghost" size="sm" onClick={aoSair}>
+          <LogOut className="w-4 h-4 mr-1.5" /> Sair
+        </Button>
+      </div>
+    </header>
+    <main className="container mx-auto px-4 py-8">{children}</main>
+  </div>
+);
+
+const ISSUE_DA_SECAO: Partial<Record<SecaoPainel, number>> = {
+  alunos: 26,
+  turmas: 27,
+  matriculas: 28,
+  cobrancas: 29,
+  graduacoes: 30,
+};
+
+const SecaoEmConstrucao: React.FC<{ secao: SecaoPainel }> = ({ secao }) => {
+  if (secao === "inicio") {
+    return <p className="text-sm text-zinc-400">Escolha uma seção no menu.</p>;
+  }
+  return (
+    <p className="text-sm text-zinc-400">
+      Esta tela ainda não existe. Ela chega com a issue #{ISSUE_DA_SECAO[secao]}.
+    </p>
+  );
+};
+
+const EscolhaDeAcademia: React.FC<{
+  academias: AcademiaDoMembro[];
+  aoEscolher: (a: AcademiaDoMembro) => void;
+}> = ({ academias, aoEscolher }) => (
+  <div className="max-w-lg mx-auto">
+    <h1 className="text-xl font-bold text-white mb-4">Em qual academia você quer entrar?</h1>
+    <ul className="space-y-2">
+      {academias.map((a) => (
+        <li key={a.academia_id}>
+          <button
+            type="button"
+            onClick={() => aoEscolher(a)}
+            className="w-full text-left rounded-xl border border-zinc-800 bg-zinc-900/60 px-4 py-3 hover:border-zinc-600"
+          >
+            <span className="block font-semibold text-white">{a.nome}</span>
+            <span className="block text-xs text-zinc-400">
+              {ROTULO_PAPEL[a.papel]}
+              {!a.ativa && " • assinatura suspensa ou teste vencido"}
+            </span>
+          </button>
+        </li>
+      ))}
+    </ul>
+  </div>
+);
+
+const LoginPainel: React.FC<{
+  aviso?: string;
+  aoEntrar: (academias: AcademiaDoMembro[]) => void;
+}> = ({ aviso, aoEntrar }) => {
+  const [email, setEmail] = useState("");
+  const [senha, setSenha] = useState("");
+  const [erro, setErro] = useState<string | null>(aviso ?? null);
+  const [entrando, setEntrando] = useState(false);
+
+  const enviar = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setErro(null);
+    setEntrando(true);
+    const res = await entrarNoPainel(email.trim(), senha);
+    setEntrando(false);
+    if (res.sucesso) aoEntrar(res.academias);
+    else setErro(res.mensagem);
+  };
+
+  return (
+    <div className="min-h-screen bg-zinc-950 flex items-center justify-center px-4">
+      <Card className="w-full max-w-sm border-zinc-800 bg-zinc-950/90">
+        <CardHeader>
+          <CardTitle className="text-white">Painel da equipe</CardTitle>
+          <CardDescription>Entre com o e-mail e a senha da sua conta da academia.</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <form onSubmit={enviar} className="space-y-4">
+            <div className="space-y-1.5">
+              <Label htmlFor="painel-email">E-mail</Label>
+              <Input id="painel-email" type="email" autoComplete="username" required value={email} onChange={(e) => setEmail(e.target.value)} />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="painel-senha">Senha</Label>
+              <Input id="painel-senha" type="password" autoComplete="current-password" required value={senha} onChange={(e) => setSenha(e.target.value)} />
+            </div>
+            {erro && (
+              <Alert variant="destructive" role="alert">
+                <AlertDescription>{erro}</AlertDescription>
+              </Alert>
+            )}
+            <Button type="submit" className="w-full" disabled={entrando}>
+              {entrando ? "Entrando..." : "Entrar"}
+            </Button>
+          </form>
+        </CardContent>
+      </Card>
+    </div>
+  );
+};
