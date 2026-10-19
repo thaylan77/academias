@@ -556,6 +556,9 @@ isOneToOne: false
 "registrar_emissao_interna":
 { Args: { "p_cobranca_id": string,"p_gateway_conta_id": string,"p_gateway_id": string,"p_link_pagamento": string,"p_tentativa": string }; Returns: undefined
                            },
+"registrar_graduacao":
+{ Args: { "p_academia_id": string,"p_dados": Json }; Returns: string
+                           },
 "reservar_emissao_interna":
 { Args: { "p_cobranca_id": string,"p_gateway_conta_id": string,"p_tentativa_conferida"?: string,"p_user_id": string }; Returns: Json
                            },
