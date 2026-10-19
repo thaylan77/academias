@@ -78,7 +78,7 @@ insert into public.professores (id, academia_id, nome) values
 insert into public.alunos (id, academia_id, nome) values
   ('fa000000-0000-4000-8000-0000000001a1', 'fa000000-0000-4000-8000-00000000000a', 'Aluno A');
 
-select ok(not has_function_privilege('anon', 'public.salvar_turma(uuid, uuid, jsonb)', 'execute'),
+select ok(not has_function_privilege('anon', 'public.salvar_turma(uuid, jsonb, uuid)', 'execute'),
           'anon não executa salvar_turma');
 
 -- ---------------------------------------------------------------------
@@ -92,7 +92,7 @@ create temp table t_ids (nome text primary key, id uuid) on commit drop;
 grant all on t_ids to authenticated;
 
 insert into t_ids values ('turma',
-  public.salvar_turma('fa000000-0000-4000-8000-00000000000a', null, public.__turma()));
+  public.salvar_turma('fa000000-0000-4000-8000-00000000000a', public.__turma()));
 
 select is((select count(*)::int from public.turmas where id = (select id from t_ids where nome = 'turma')
              and academia_id = 'fa000000-0000-4000-8000-00000000000a'), 1,
@@ -104,7 +104,7 @@ select is((select hora_inicio from public.turma_horarios
           'horário gravado como hora local (sem fuso)');
 
 -- Edição troca os horários e os campos.
-select is(public.__hint_de(format($$select public.salvar_turma('fa000000-0000-4000-8000-00000000000a', %L, public.__turma(%L))$$,
+select is(public.__hint_de(format($$select public.salvar_turma('fa000000-0000-4000-8000-00000000000a', public.__turma(%2$L), %1$L)$$,
             (select id from t_ids where nome = 'turma'),
             '{"nome":"Jiu-Jitsu Noite","capacidade":null,"horarios":[{"dia_semana":5,"hora_inicio":"20:00","hora_fim":"21:00"}]}')),
           'sem erro', 'edição aceita');
@@ -116,41 +116,36 @@ select is((select string_agg(dia_semana::text, ',') from public.turma_horarios
           'horários trocados (só sexta)');
 
 -- Erros com código; nenhum deles mexe nos horários já gravados.
-select is(public.__hint_de(format($$select public.salvar_turma('fa000000-0000-4000-8000-00000000000a', %L, public.__turma(%L))$$,
+select is(public.__hint_de(format($$select public.salvar_turma('fa000000-0000-4000-8000-00000000000a', public.__turma(%2$L), %1$L)$$,
             (select id from t_ids where nome = 'turma'),
             '{"horarios":[{"dia_semana":2,"hora_inicio":"10:00","hora_fim":"11:00"},{"dia_semana":2,"hora_inicio":"10:30","hora_fim":"12:00"}]}')),
           'horario_sobreposto', 'horários sobrepostos no mesmo dia: horario_sobreposto');
 select is((select string_agg(dia_semana::text, ',') from public.turma_horarios
             where turma_id = (select id from t_ids where nome = 'turma')), '5',
           'a gravação recusada não apagou os horários antigos (tudo numa transação)');
-select is(public.__hint_de($$select public.salvar_turma('fa000000-0000-4000-8000-00000000000a', null,
-            public.__turma('{"horarios":[{"dia_semana":2,"hora_inicio":"10:00","hora_fim":"11:00"},{"dia_semana":2,"hora_inicio":"11:00","hora_fim":"12:00"}]}'))$$),
+select is(public.__hint_de($$select public.salvar_turma('fa000000-0000-4000-8000-00000000000a', public.__turma('{"horarios":[{"dia_semana":2,"hora_inicio":"10:00","hora_fim":"11:00"},{"dia_semana":2,"hora_inicio":"11:00","hora_fim":"12:00"}]}'))$$),
           'sem erro', 'horários encostados (um termina quando o outro começa) valem');
-select is(public.__hint_de($$select public.salvar_turma('fa000000-0000-4000-8000-00000000000a', null,
-            public.__turma('{"horarios":[{"dia_semana":2,"hora_inicio":"11:00","hora_fim":"10:00"}]}'))$$),
+select is(public.__hint_de($$select public.salvar_turma('fa000000-0000-4000-8000-00000000000a', public.__turma('{"horarios":[{"dia_semana":2,"hora_inicio":"11:00","hora_fim":"10:00"}]}'))$$),
           'horario_invalido', 'fim antes do início: horario_invalido');
-select is(public.__hint_de($$select public.salvar_turma('fa000000-0000-4000-8000-00000000000a', null,
-            public.__turma('{"horarios":[{"dia_semana":7,"hora_inicio":"10:00","hora_fim":"11:00"}]}'))$$),
+select is(public.__hint_de($$select public.salvar_turma('fa000000-0000-4000-8000-00000000000a', public.__turma('{"horarios":[{"dia_semana":7,"hora_inicio":"10:00","hora_fim":"11:00"}]}'))$$),
           'horario_invalido', 'dia da semana 7: horario_invalido');
-select is(public.__hint_de($$select public.salvar_turma('fa000000-0000-4000-8000-00000000000a', null,
-            public.__turma('{"horarios":[{"dia_semana":1,"hora_inicio":"25:00","hora_fim":"26:00"}]}'))$$),
+select is(public.__hint_de($$select public.salvar_turma('fa000000-0000-4000-8000-00000000000a', public.__turma('{"horarios":[{"dia_semana":1,"hora_inicio":"25:00","hora_fim":"26:00"}]}'))$$),
           'horario_invalido', 'hora fora do relógio: horario_invalido');
-select is(public.__hint_de($$select public.salvar_turma('fa000000-0000-4000-8000-00000000000a', null, public.__turma('{"nome":" "}'))$$),
+select is(public.__hint_de($$select public.salvar_turma('fa000000-0000-4000-8000-00000000000a', public.__turma('{"nome":" "}'))$$),
           'dados_invalidos', 'nome vazio: dados_invalidos');
-select is(public.__hint_de($$select public.salvar_turma('fa000000-0000-4000-8000-00000000000a', null, public.__turma('{"capacidade":0}'))$$),
+select is(public.__hint_de($$select public.salvar_turma('fa000000-0000-4000-8000-00000000000a', public.__turma('{"capacidade":0}'))$$),
           'dados_invalidos', 'capacidade 0: dados_invalidos');
-select is(public.__hint_de($$select public.salvar_turma('fa000000-0000-4000-8000-00000000000a', null, public.__turma('{"publico":"x"}'))$$),
+select is(public.__hint_de($$select public.salvar_turma('fa000000-0000-4000-8000-00000000000a', public.__turma('{"publico":"x"}'))$$),
           'dados_invalidos', 'público fora da lista: dados_invalidos');
-select is(public.__hint_de($$select public.salvar_turma('fa000000-0000-4000-8000-00000000000a', null, public.__turma('{"horarios":{}}'))$$),
+select is(public.__hint_de($$select public.salvar_turma('fa000000-0000-4000-8000-00000000000a', public.__turma('{"horarios":{}}'))$$),
           'dados_invalidos', 'horarios que não é lista: dados_invalidos');
 
 -- Turma sem horário é aceita (a tela avisa que não haverá check-in por QR).
-select is(public.__hint_de($$select public.salvar_turma('fa000000-0000-4000-8000-00000000000a', null, public.__turma('{"horarios":[]}'))$$),
+select is(public.__hint_de($$select public.salvar_turma('fa000000-0000-4000-8000-00000000000a', public.__turma('{"horarios":[]}'))$$),
           'sem erro', 'turma sem horário é aceita');
 
 -- Academia suspensa: o mesmo dono não grava lá.
-select is(public.__hint_de($$select public.salvar_turma('fa000000-0000-4000-8000-00000000000c', null,
-            public.__turma('{"modalidade_id":"fa000000-0000-4000-8000-0000000002c1","professor_id":null}'))$$),
+select is(public.__hint_de($$select public.salvar_turma('fa000000-0000-4000-8000-00000000000c', public.__turma('{"modalidade_id":"fa000000-0000-4000-8000-0000000002c1","professor_id":null}'))$$),
           'sem_permissao', 'academia suspensa: sem_permissao');
 
 reset role;
@@ -163,7 +158,7 @@ values ('fa000000-0000-4000-8000-00000000000a', 'fa000000-0000-4000-8000-0000000
 set local role authenticated;
 set local request.jwt.claim.sub = 'fa000000-0000-4000-8000-0000000000a2';
 set local request.jwt.claims = '{"sub":"fa000000-0000-4000-8000-0000000000a2","role":"authenticated"}';
-select is(public.__hint_de(format($$select public.salvar_turma('fa000000-0000-4000-8000-00000000000a', %L, public.__turma('{"ativa":false}'))$$,
+select is(public.__hint_de(format($$select public.salvar_turma('fa000000-0000-4000-8000-00000000000a', public.__turma('{"ativa":false}'), %L)$$,
             (select id from t_ids where nome = 'turma'))),
           'sem erro', 'admin desativa a turma');
 reset role;
@@ -178,14 +173,14 @@ select is((select ativa from public.turmas where id = (select id from t_ids wher
 set local role authenticated;
 set local request.jwt.claim.sub = 'fa000000-0000-4000-8000-0000000000a3';
 set local request.jwt.claims = '{"sub":"fa000000-0000-4000-8000-0000000000a3","role":"authenticated"}';
-select is(public.__hint_de($$select public.salvar_turma('fa000000-0000-4000-8000-00000000000a', null, public.__turma())$$),
+select is(public.__hint_de($$select public.salvar_turma('fa000000-0000-4000-8000-00000000000a', public.__turma())$$),
           'sem_permissao', 'professor: sem_permissao');
 reset role;
 
 set local role authenticated;
 set local request.jwt.claim.sub = 'fa000000-0000-4000-8000-0000000000a4';
 set local request.jwt.claims = '{"sub":"fa000000-0000-4000-8000-0000000000a4","role":"authenticated"}';
-select is(public.__hint_de($$select public.salvar_turma('fa000000-0000-4000-8000-00000000000a', null, public.__turma())$$),
+select is(public.__hint_de($$select public.salvar_turma('fa000000-0000-4000-8000-00000000000a', public.__turma())$$),
           'sem_permissao', 'recepção: sem_permissao');
 reset role;
 
@@ -195,12 +190,11 @@ reset role;
 set local role authenticated;
 set local request.jwt.claim.sub = 'fa000000-0000-4000-8000-0000000000b1';
 set local request.jwt.claims = '{"sub":"fa000000-0000-4000-8000-0000000000b1","role":"authenticated"}';
-select is(public.__hint_de($$select public.salvar_turma('fa000000-0000-4000-8000-00000000000a', null, public.__turma())$$),
+select is(public.__hint_de($$select public.salvar_turma('fa000000-0000-4000-8000-00000000000a', public.__turma())$$),
           'sem_permissao', 'dono de B gravando em A: sem_permissao');
-select is(public.__hint_de($$select public.salvar_turma('fa000000-0000-4000-8000-00000000000b', null, public.__turma())$$),
+select is(public.__hint_de($$select public.salvar_turma('fa000000-0000-4000-8000-00000000000b', public.__turma())$$),
           'dados_invalidos', 'dono de B com a modalidade e o professor de A: dados_invalidos');
-select is(public.__hint_de(format($$select public.salvar_turma('fa000000-0000-4000-8000-00000000000b', %L,
-            public.__turma('{"modalidade_id":"fa000000-0000-4000-8000-0000000002b1","professor_id":"fa000000-0000-4000-8000-0000000003b1"}'))$$,
+select is(public.__hint_de(format($$select public.salvar_turma('fa000000-0000-4000-8000-00000000000b', public.__turma('{"modalidade_id":"fa000000-0000-4000-8000-0000000002b1","professor_id":"fa000000-0000-4000-8000-0000000003b1"}'), %L)$$,
             (select id from t_ids where nome = 'turma'))),
           'turma_nao_encontrada', 'dono de B editando turma de A pela própria academia: turma_nao_encontrada');
 reset role;

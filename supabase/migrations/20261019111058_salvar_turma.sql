@@ -8,6 +8,8 @@
 -- Mesma permissão das políticas do catálogo: dono e admin, com a assinatura
 -- em dia (pode_gerir). Nenhuma política muda.
 --
+-- p_turma_id null (ou omitido) cria; com id, edita aquela turma da academia.
+--
 -- p_dados:
 --   { "nome": text, "modalidade_id": uuid, "professor_id": uuid | null,
 --     "publico": "adulto" | "infantil" | "misto" | "feminino",
@@ -18,7 +20,7 @@
 -- Horários no fuso da academia: são horas de relógio local, sem fuso; quem
 -- as compara com o agora (fazer_checkin, totem_turmas_agora) usa
 -- academias.fuso.
-create or replace function public.salvar_turma(p_academia_id uuid, p_turma_id uuid, p_dados jsonb)
+create or replace function public.salvar_turma(p_academia_id uuid, p_dados jsonb, p_turma_id uuid default null)
 returns uuid
 language plpgsql
 security definer
@@ -141,5 +143,5 @@ begin
 end
 $$;
 
-revoke execute on function public.salvar_turma(uuid, uuid, jsonb) from public, anon;
-grant execute on function public.salvar_turma(uuid, uuid, jsonb) to authenticated;
+revoke execute on function public.salvar_turma(uuid, jsonb, uuid) from public, anon;
+grant execute on function public.salvar_turma(uuid, jsonb, uuid) to authenticated;
