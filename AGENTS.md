@@ -149,6 +149,7 @@ Plano, status e slug da academia só mudam via `service_role` (billing do SaaS).
 | `cancelar_cobranca(cobranca_id)`       | secretaria   | cancela cobrança não emitida; cobrança nunca é apagada     |
 | `gerar_cobrancas_matricula(matricula_id)` | secretaria | gera na hora as cobranças recorrentes da matrícula         |
 | `anonimizar_aluno(aluno_id)`           | dono, admin  | LGPD: substitui o delete de aluno                          |
+| `registrar_graduacao(academia_id, dados)` | dono, admin, professor | graduação com data no dia da academia (nunca no futuro) e grau dentro da faixa |
 | `vw_graduacao_atual`                   | equipe/aluno | faixa e grau atuais por modalidade                         |
 | `vw_progresso_graduacao`               | equipe/aluno | aulas e meses desde a última graduação, campo `apto`       |
 | `vw_inadimplentes`                     | secretaria   | alunos com cobrança pendente vencida                       |
