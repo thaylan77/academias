@@ -19,6 +19,11 @@
 --     "data_fim": "AAAA-MM-DD" | null, "dia_vencimento": 1..28 | null,
 --     "valor": número >= 0 | null (null: valor do plano),
 --     "cobrar_a_partir": "AAAA-MM-01" | null }
+--
+-- Com plano, dia_vencimento é obrigatório: gerar_cobrancas pula matrícula
+-- sem ele, e a matrícula ficaria ativa sem nunca ser cobrada. Sem plano, a
+-- matrícula não é cobrada (gerar_cobrancas só cobra quem tem plano): é o
+-- caso de bolsista ou isento.
 create or replace function public.criar_matricula(p_academia_id uuid, p_dados jsonb)
 returns uuid
 language plpgsql
@@ -94,6 +99,10 @@ begin
     into v_turmas
     from jsonb_array_elements(p_dados -> 'turma_ids') e;
 
+  if v_plano is not null and v_dia is null then
+    raise exception 'Matrícula com plano precisa do dia de vencimento' using hint = 'dados_invalidos';
+  end if;
+
   if v_fim is not null and v_fim < v_inicio then
     raise exception 'A data de fim não pode ser antes do início' using hint = 'dados_invalidos';
   end if;
@@ -128,42 +137,70 @@ begin
   insert into public.matricula_turmas (academia_id, matricula_id, turma_id)
   select p_academia_id, v_id, t from unnest(v_turmas) t;
 
+  -- Matrícula ativa é aluno ativo (sem isso, gerar_cobrancas pula o aluno).
+  update public.alunos
+     set status = 'ativo'
+   where academia_id = p_academia_id and id = v_aluno and status in ('pendente', 'inativo')
+     and anonimizado_em is null;
+
   return v_id;
 end
 $$;
 
--- Aprova a matrícula pendente (da matrícula online). O aluno que veio junto,
--- ainda pendente, passa a ativo.
-create or replace function public.aprovar_matricula(p_matricula_id uuid)
+-- Aprova a matrícula pendente (da matrícula online). O aluno que veio junto
+-- (pendente, ou inativo) passa a ativo.
+--
+-- A cobrança começa na aprovação, não no pedido: se a aprovação vem depois,
+-- data_inicio vira hoje e cobrar_a_partir vira o mês atual. Sem isso, a
+-- primeira cobrança seria calculada a partir do mês do pedido (vencimento
+-- que pode nascer vencido; período trimestral, semestral ou anual contado
+-- do mês errado). A matrícula online nasce sem dia de vencimento:
+-- p_dia_vencimento (1 a 28) o define na aprovação; sem ele, a matrícula com
+-- plano fica sem ser cobrada até alguém informar o dia.
+create or replace function public.aprovar_matricula(p_matricula_id uuid, p_dia_vencimento smallint default null)
 returns void
 language plpgsql
 security definer
 set search_path = ''
 as $$
 declare
-  v_mat public.matriculas;
+  v_academia uuid;
+  v_mat      public.matriculas;
+  v_hoje     date;
 begin
-  select * into v_mat from public.matriculas where id = p_matricula_id for update;
-  -- Inexistente ou de academia em que o login não gere: a mesma resposta,
-  -- para não revelar matrícula de outra academia.
-  if not found
-     or not public.pode_gerir(v_mat.academia_id, array['dono', 'admin', 'recepcao']) then
+  -- Permissão antes da trava: quem não gere a academia não espera nem trava
+  -- a linha. Inexistente ou de outra academia: a mesma resposta.
+  select academia_id into v_academia from public.matriculas where id = p_matricula_id;
+  if v_academia is null
+     or not public.pode_gerir(v_academia, array['dono', 'admin', 'recepcao']) then
     raise exception 'Matrícula não encontrada ou sem permissão'
       using hint = 'sem_permissao';
   end if;
 
+  if p_dia_vencimento is not null and p_dia_vencimento not between 1 and 28 then
+    raise exception 'O dia de vencimento vai de 1 a 28' using hint = 'dados_invalidos';
+  end if;
+
+  select * into v_mat from public.matriculas where id = p_matricula_id for update;
   if v_mat.status <> 'pendente' then
     raise exception 'Só matrícula pendente pode ser aprovada'
       using hint = 'matricula_nao_pendente';
   end if;
 
-  update public.matriculas set status = 'ativa' where id = v_mat.id;
+  v_hoje := public.hoje_academia(v_academia);
+  update public.matriculas
+     set status          = 'ativa',
+         data_inicio     = greatest(data_inicio, v_hoje),
+         cobrar_a_partir = greatest(cobrar_a_partir, date_trunc('month', v_hoje::timestamp)::date),
+         dia_vencimento  = coalesce(p_dia_vencimento, dia_vencimento)
+   where id = v_mat.id;
 
   update public.alunos
      set status = 'ativo'
-   where academia_id = v_mat.academia_id and id = v_mat.aluno_id and status = 'pendente';
+   where academia_id = v_academia and id = v_mat.aluno_id and status in ('pendente', 'inativo')
+     and anonimizado_em is null;
 end
 $$;
 
-revoke execute on function public.criar_matricula(uuid, jsonb), public.aprovar_matricula(uuid) from public, anon;
-grant execute on function public.criar_matricula(uuid, jsonb), public.aprovar_matricula(uuid) to authenticated;
+revoke execute on function public.criar_matricula(uuid, jsonb), public.aprovar_matricula(uuid, smallint) from public, anon;
+grant execute on function public.criar_matricula(uuid, jsonb), public.aprovar_matricula(uuid, smallint) to authenticated;
