@@ -153,6 +153,13 @@ grant execute on function public.salvar_turma(uuid, jsonb, uuid) to authenticate
 -- nova e desativa-se a antiga. Vale para salvar_turma e para update direto.
 -- security definer: a conferência olha presenças da própria turma, sem
 -- depender do RLS de quem grava.
+--
+-- Concorrência: a FK de presencas trava a turma em KEY SHARE, que não
+-- conflita com o NO KEY UPDATE deste update; sem mais nada, uma primeira
+-- presença ainda não confirmada passaria despercebida. O FOR UPDATE na turma
+-- conflita com KEY SHARE: a troca espera a presença terminar, e a consulta
+-- seguinte (snapshot novo, em read committed) já a enxerga. Na ordem
+-- inversa, a presença espera a troca e entra já na modalidade nova.
 create or replace function public.turmas_modalidade_com_presencas()
 returns trigger
 language plpgsql
@@ -160,6 +167,9 @@ security definer
 set search_path = ''
 as $$
 begin
+  if new.modalidade_id is distinct from old.modalidade_id then
+    perform 1 from public.turmas where id = old.id for update;
+  end if;
   if new.modalidade_id is distinct from old.modalidade_id and exists (
     select 1 from public.presencas
      where academia_id = old.academia_id and turma_id = old.id
