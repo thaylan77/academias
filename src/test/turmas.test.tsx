@@ -3,6 +3,7 @@ import { render, screen, fireEvent, waitFor, within } from "@testing-library/rea
 import { TurmasSecao } from "../pages/painel/turmas";
 import { PainelContexto } from "../pages/painel/contexto";
 import * as lib from "../lib/turmas";
+import * as checkins from "../lib/checkins-da-aula";
 import { AcademiaDoMembro, PapelPainel } from "../lib/painel";
 
 const T1 = "fa000000-0000-4000-8000-0000000004a1";
@@ -108,6 +109,24 @@ describe("Painel: turmas", () => {
       fireEvent.click(within(alunos).getByRole("button", { name: /Ana/ }));
       expect(abrir).toHaveBeenCalledWith("alunos", "a1");
       expect(screen.queryByRole("button", { name: "Editar" })).not.toBeInTheDocument();
+    });
+
+    it("mostra os check-ins de hoje da turma aberta", async () => {
+      vi.spyOn(lib, "lerTurma").mockResolvedValue({ turma: turma(), matriculados: [] });
+      const listar = vi.spyOn(checkins, "listarCheckinsDaAula").mockResolvedValue([
+        { id: "p1", aluno_id: "a1", aluno: "Ana", checkin_em: "2026-10-19T22:10:00Z", origem: "qrcode" },
+      ]);
+      // 01:30 UTC de 20/10 ainda é 19/10 em Fortaleza.
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(new Date("2026-10-20T01:30:00Z"));
+      try {
+        montar("professor", T1);
+        const lista = await screen.findByRole("list", { name: "Check-ins da aula" });
+        expect(lista).toHaveTextContent("Ana");
+        expect(listar).toHaveBeenCalledWith("acad-a", T1, "2026-10-19");
+      } finally {
+        vi.useRealTimers();
+      }
     });
 
     it("turma sem horário avisa que o check-in por QR não abre", async () => {
