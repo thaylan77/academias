@@ -296,19 +296,25 @@ export function escolherAcademia(
 export interface CaminhoPainel {
   slug: string | null;
   secao: SecaoPainel;
+  // Registro aberto dentro da seção: um id (uuid) ou "novo". Null na lista.
+  item: string | null;
 }
 
 const SECOES: SecaoPainel[] = ["inicio", "alunos", "turmas", "matriculas", "cobrancas", "graduacoes"];
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-/** Lê `/painel`, `/painel/<slug>` e `/painel/<slug>/<seção>`. */
+/** Lê `/painel`, `/painel/<slug>`, `/painel/<slug>/<seção>` e `/painel/<slug>/<seção>/<id ou novo>`. */
 export function lerCaminhoPainel(pathname: string): CaminhoPainel {
   const partes = pathname.split("/").filter(Boolean);
   const slug = partes[1] ?? null;
   const secao = SECOES.find((s) => s === partes[2]) ?? "inicio";
-  return { slug, secao };
+  const bruto = secao === "inicio" ? undefined : partes[3];
+  const item = bruto === "novo" || (bruto && UUID.test(bruto)) ? bruto.toLowerCase() : null;
+  return { slug, secao, item };
 }
 
-export function caminhoPainel(slug: string | null, secao: SecaoPainel = "inicio"): string {
+export function caminhoPainel(slug: string | null, secao: SecaoPainel = "inicio", item: string | null = null): string {
   if (!slug) return "/painel";
-  return secao === "inicio" ? `/painel/${slug}` : `/painel/${slug}/${secao}`;
+  if (secao === "inicio") return `/painel/${slug}`;
+  return item ? `/painel/${slug}/${secao}/${item}` : `/painel/${slug}/${secao}`;
 }

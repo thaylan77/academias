@@ -150,7 +150,7 @@ describe("Painel da equipe: entrada e escolha de academia", () => {
 
     window.history.pushState({}, "", "/painel/alpha/alunos");
     fireEvent(window, new PopStateEvent("popstate"));
-    await waitFor(() => expect(screen.getByText(/issue #26/)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByRole("heading", { name: "Alunos" })).toBeInTheDocument());
   });
 
   it("Ctrl+clique no menu fica com o navegador (nova aba), sem navegar aqui", async () => {

@@ -53,13 +53,24 @@ describe("Qual academia abrir", () => {
 
 describe("Caminhos do painel", () => {
   it("lê e monta /painel, /painel/<slug> e /painel/<slug>/<seção>", () => {
-    expect(lerCaminhoPainel("/painel")).toEqual({ slug: null, secao: "inicio" });
-    expect(lerCaminhoPainel("/painel/academia-a")).toEqual({ slug: "academia-a", secao: "inicio" });
-    expect(lerCaminhoPainel("/painel/academia-a/cobrancas")).toEqual({ slug: "academia-a", secao: "cobrancas" });
-    expect(lerCaminhoPainel("/painel/academia-a/inexistente")).toEqual({ slug: "academia-a", secao: "inicio" });
+    expect(lerCaminhoPainel("/painel")).toEqual({ slug: null, secao: "inicio", item: null });
+    expect(lerCaminhoPainel("/painel/academia-a")).toEqual({ slug: "academia-a", secao: "inicio", item: null });
+    expect(lerCaminhoPainel("/painel/academia-a/cobrancas")).toEqual({ slug: "academia-a", secao: "cobrancas", item: null });
+    expect(lerCaminhoPainel("/painel/academia-a/inexistente")).toEqual({ slug: "academia-a", secao: "inicio", item: null });
     expect(caminhoPainel("academia-a", "turmas")).toBe("/painel/academia-a/turmas");
     expect(caminhoPainel("academia-a")).toBe("/painel/academia-a");
     expect(caminhoPainel(null)).toBe("/painel");
+  });
+
+  it("lê e monta o registro aberto na seção (id ou novo); qualquer outra coisa é ignorada", () => {
+    const id = "f9000000-0000-4000-8000-0000000001a1";
+    expect(lerCaminhoPainel(`/painel/academia-a/alunos/${id}`)).toEqual({ slug: "academia-a", secao: "alunos", item: id });
+    expect(lerCaminhoPainel(`/painel/academia-a/alunos/${id.toUpperCase()}`).item).toBe(id);
+    expect(lerCaminhoPainel("/painel/academia-a/alunos/novo")).toEqual({ slug: "academia-a", secao: "alunos", item: "novo" });
+    expect(lerCaminhoPainel("/painel/academia-a/alunos/<script>")).toEqual({ slug: "academia-a", secao: "alunos", item: null });
+    expect(lerCaminhoPainel(`/painel/academia-a/inexistente/${id}`).item).toBeNull();
+    expect(caminhoPainel("academia-a", "alunos", id)).toBe(`/painel/academia-a/alunos/${id}`);
+    expect(caminhoPainel("academia-a", "inicio", id)).toBe("/painel/academia-a");
   });
 });
 
