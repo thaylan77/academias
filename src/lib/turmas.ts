@@ -102,11 +102,14 @@ export function conferirHorarios(horarios: Horario[]): Record<number, string> | 
     else if (!formato.test(h.hora_inicio) || !formato.test(h.hora_fim)) erros[i] = "Informe início e fim.";
     else if (minutos(h.hora_fim) <= minutos(h.hora_inicio)) erros[i] = "O fim precisa ser depois do início.";
   });
+  // Só os erros de formato tiram a linha da comparação: uma linha marcada por
+  // sobreposição continua sendo comparada com as seguintes.
+  const comFormatoRuim = new Set(Object.keys(erros).map(Number));
   horarios.forEach((a, i) => {
     horarios.forEach((b, j) => {
-      if (j <= i || erros[i] || erros[j] || a.dia_semana !== b.dia_semana) return;
+      if (j <= i || comFormatoRuim.has(i) || comFormatoRuim.has(j) || a.dia_semana !== b.dia_semana) return;
       if (minutos(a.hora_inicio) < minutos(b.hora_fim) && minutos(b.hora_inicio) < minutos(a.hora_fim)) {
-        erros[j] = `Sobrepõe o horário de ${DIAS_SEMANA[a.dia_semana].toLowerCase()} das ${a.hora_inicio}.`;
+        erros[j] ??= `Sobrepõe o horário de ${DIAS_SEMANA[a.dia_semana].toLowerCase()} das ${a.hora_inicio}.`;
       }
     });
   });
@@ -245,6 +248,11 @@ export interface DadosTurma {
 
 const MSG_REDE = "Não foi possível salvar. Verifique a conexão e tente de novo.";
 const MSG_SEM_PERMISSAO = "Só o dono e a administração alteram turmas, e só com a assinatura da academia em dia.";
+const MSG_CATALOGO_SEM_PERMISSAO = "Só o dono e a administração alteram o catálogo, e só com a assinatura da academia em dia.";
+// Edição sem linha devolvida: o registro não é desta academia, ou o RLS o
+// escondeu da gravação. O banco não diz qual dos dois.
+const MSG_CATALOGO_SEM_LINHA =
+  "Não foi possível salvar: o registro não está nesta academia, ou seu papel (ou a assinatura) não permite alterar o catálogo.";
 
 export async function salvarTurma(academiaId: string, dados: DadosTurma, turmaId?: string): Promise<Resultado> {
   if (!supabase) return { sucesso: false, mensagem: "O painel precisa de conexão com o servidor." };
@@ -280,7 +288,7 @@ export async function salvarTurma(academiaId: string, dados: DadosTurma, turmaId
 
 function mensagemCatalogo(erro: { code?: string | null }, duplicado: string): string {
   if (erro.code === "23505") return duplicado;
-  if (erro.code === "42501") return MSG_SEM_PERMISSAO.replace("turmas", "o catálogo");
+  if (erro.code === "42501") return MSG_CATALOGO_SEM_PERMISSAO;
   return MSG_REDE;
 }
 
@@ -297,7 +305,7 @@ export async function salvarModalidade(
     : supabase.from("modalidades").insert({ academia_id: academiaId, nome, ativa: dados.ativa });
   const { data, error } = await consulta.select("id").maybeSingle();
   if (error) return { sucesso: false, mensagem: mensagemCatalogo(error, "Já existe uma modalidade com esse nome.") };
-  if (!data) return { sucesso: false, mensagem: MSG_SEM_PERMISSAO.replace("turmas", "o catálogo") };
+  if (!data) return { sucesso: false, mensagem: MSG_CATALOGO_SEM_LINHA };
   return { sucesso: true, id: data.id };
 }
 
@@ -323,6 +331,6 @@ export async function salvarProfessor(
     : supabase.from("professores").insert({ ...linha, academia_id: academiaId });
   const { data, error } = await consulta.select("id").maybeSingle();
   if (error) return { sucesso: false, mensagem: mensagemCatalogo(error, MSG_REDE) };
-  if (!data) return { sucesso: false, mensagem: MSG_SEM_PERMISSAO.replace("turmas", "o catálogo") };
+  if (!data) return { sucesso: false, mensagem: MSG_CATALOGO_SEM_LINHA };
   return { sucesso: true, id: data.id };
 }

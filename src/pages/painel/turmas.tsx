@@ -208,6 +208,9 @@ const FichaTurma: React.FC<{ turmaId: string }> = ({ turmaId }) => {
 
   const hoje = hojeNoFuso(academia.fuso);
   const vigentes = matriculados.filter((m) => matriculaVigente(m, hoje));
+  // Contra a capacidade só contam as ativas: pendente ainda espera aprovação
+  // e trancada não frequenta. As duas aparecem na lista, com o rótulo.
+  const ativas = vigentes.filter((m) => m.status === "ativa").length;
 
   return (
     <div className="space-y-6">
@@ -254,7 +257,7 @@ const FichaTurma: React.FC<{ turmaId: string }> = ({ turmaId }) => {
 
       <section aria-label="Alunos matriculados" className="space-y-2">
         <h3 className="text-sm font-semibold uppercase tracking-wide text-zinc-400">
-          Alunos matriculados ({vigentes.length}{turma.capacidade ? ` de ${turma.capacidade}` : ""})
+          Alunos matriculados ({ativas} {ativas === 1 ? "ativo" : "ativos"}{turma.capacidade ? ` de ${turma.capacidade}` : ""})
         </h3>
         {vigentes.length === 0 ? (
           <p className="text-sm text-zinc-400">Nenhuma matrícula vigente nesta turma.</p>
@@ -300,7 +303,26 @@ type FormTurma = {
   horarios: Horario[];
 };
 
-const EdicaoDaTurma: React.FC<{ turma?: Turma; aoTerminar?: (salvou: boolean) => void }> = ({ turma, aoTerminar }) => {
+type PropsEdicao = { turma?: Turma; aoTerminar?: (salvou: boolean) => void };
+
+/** Confere a permissão antes de montar o formulário (e de buscar o catálogo). */
+const EdicaoDaTurma: React.FC<PropsEdicao> = (props) => {
+  const { academia } = usarPainel();
+  if (!podeGerirTurmas(academia.papel, academia.ativa)) {
+    return (
+      <Alert variant="warning" role="alert">
+        <AlertDescription>
+          {academia.ativa
+            ? "Só o dono e a administração cadastram e editam turmas."
+            : "A assinatura desta academia está suspensa: as turmas podem ser consultadas, mas não alteradas."}
+        </AlertDescription>
+      </Alert>
+    );
+  }
+  return <FormularioDaTurma {...props} />;
+};
+
+const FormularioDaTurma: React.FC<PropsEdicao> = ({ turma, aoTerminar }) => {
   const { academia, abrir } = usarPainel();
   const [catalogo] = usarCarga(() => lerCatalogo(academia.academia_id), [academia.academia_id]);
   const [form, setForm] = useState<FormTurma>(() => ({
@@ -322,18 +344,6 @@ const EdicaoDaTurma: React.FC<{ turma?: Turma; aoTerminar?: (salvou: boolean) =>
       montado.current = false;
     };
   }, []);
-
-  if (!podeGerirTurmas(academia.papel, academia.ativa)) {
-    return (
-      <Alert variant="warning" role="alert">
-        <AlertDescription>
-          {academia.ativa
-            ? "Só o dono e a administração cadastram e editam turmas."
-            : "A assinatura desta academia está suspensa: as turmas podem ser consultadas, mas não alteradas."}
-        </AlertDescription>
-      </Alert>
-    );
-  }
 
   const cancelar = () => (aoTerminar ? aoTerminar(false) : abrir("turmas"));
   const mudarHorario = (i: number, campo: keyof Horario, valor: string) =>

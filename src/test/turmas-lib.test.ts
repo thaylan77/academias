@@ -248,3 +248,102 @@ describe("Dados (sempre filtrados pela academia selecionada)", () => {
       .toEqual({ sucesso: false, mensagem: "E-mail inválido." });
   });
 });
+
+describe("Cobertura pedida na primeira revisão", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("horários: fronteiras e sobreposições fora de ordem, contidas e em cadeia", () => {
+    expect(conferirHorarios([{ dia_semana: 1, hora_inicio: "10:00", hora_fim: "10:00" }]))
+      .toEqual({ 0: "O fim precisa ser depois do início." });
+    expect(conferirHorarios([{ dia_semana: -1, hora_inicio: "10:00", hora_fim: "11:00" }])).toEqual({ 0: "Escolha o dia." });
+    expect(conferirHorarios([{ dia_semana: Number.NaN, hora_inicio: "10:00", hora_fim: "11:00" }])).toEqual({ 0: "Escolha o dia." });
+    // A primeira linha começa depois da segunda.
+    expect(conferirHorarios([
+      { dia_semana: 2, hora_inicio: "10:30", hora_fim: "12:00" },
+      { dia_semana: 2, hora_inicio: "10:00", hora_fim: "11:00" },
+    ])).toEqual({ 1: "Sobrepõe o horário de terça das 10:30." });
+    // Uma contém a outra.
+    expect(conferirHorarios([
+      { dia_semana: 2, hora_inicio: "09:00", hora_fim: "12:00" },
+      { dia_semana: 2, hora_inicio: "10:00", hora_fim: "11:00" },
+    ])).toEqual({ 1: "Sobrepõe o horário de terça das 09:00." });
+    // Em cadeia: a terceira sobrepõe a segunda, mesmo depois de a segunda já ter erro.
+    expect(conferirHorarios([
+      { dia_semana: 4, hora_inicio: "08:00", hora_fim: "10:00" },
+      { dia_semana: 4, hora_inicio: "09:00", hora_fim: "12:00" },
+      { dia_semana: 4, hora_inicio: "11:00", hora_fim: "13:00" },
+    ])).toEqual({
+      1: "Sobrepõe o horário de quinta das 08:00.",
+      2: "Sobrepõe o horário de quinta das 09:00.",
+    });
+  });
+
+  it("admin com a assinatura suspensa também não gere", () => {
+    expect(podeGerirTurmas("admin", false)).toBe(false);
+  });
+
+  it("catálogo: devolve as duas listas no lugar certo e propaga erro de qualquer uma", async () => {
+    const m = [{ id: "m", nome: "Judô", ativa: false }];
+    const p = [{ id: "p", nome: "Mestre", telefone: "5585999991234", email: "m@a.test", ativo: true }];
+    let lib = await carregarComCliente(clienteFalso({ modalidades: { data: m, error: null }, professores: { data: p, error: null } }));
+    expect(await lib.lerCatalogo(ACADEMIA)).toEqual({ modalidades: m, professores: p });
+
+    lib = await carregarComCliente(clienteFalso({ modalidades: { data: m, error: null }, professores: { data: null, error: { message: "rede" } } }));
+    await expect(lib.lerCatalogo(ACADEMIA)).rejects.toMatchObject({ message: "rede" });
+  });
+
+  it("turma sem professor e sem horário não quebra a leitura", async () => {
+    const semNada = { ...LINHA_TURMA, professor_id: null, professores: null, turma_horarios: [] };
+    const lib = await carregarComCliente(clienteFalso({ turmas: { data: [semNada], error: null } }));
+    const [t] = await lib.listarTurmas(ACADEMIA);
+    expect(t).toMatchObject({ professor_id: null, professor: null, horarios: [] });
+  });
+
+  it("modalidade: edição manda update com nome limpo e ativa, e devolve o id", async () => {
+    const cliente = clienteFalso({ modalidades: { data: { id: "m1" }, error: null } });
+    const lib = await carregarComCliente(cliente);
+
+    expect(await lib.salvarModalidade(ACADEMIA, { nome: "  Judô   Kids ", ativa: false }, "m1")).toEqual({ sucesso: true, id: "m1" });
+    const update = cliente.chamadas.find((c) => c.metodo === "update");
+    expect(update?.args[0]).toEqual({ nome: "Judô Kids", ativa: false });
+    expect(cliente.chamadas.some((c) => c.metodo === "insert")).toBe(false);
+  });
+
+  it("modalidade: mensagens de permissão e de edição sem linha", async () => {
+    let lib = await carregarComCliente(clienteFalso({ modalidades: { data: null, error: { code: "42501" } } }));
+    expect(await lib.salvarModalidade(ACADEMIA, { nome: "Judô", ativa: true })).toEqual({
+      sucesso: false, mensagem: "Só o dono e a administração alteram o catálogo, e só com a assinatura da academia em dia.",
+    });
+    lib = await carregarComCliente(clienteFalso({ modalidades: { data: null, error: null } }));
+    expect(await lib.salvarModalidade(ACADEMIA, { nome: "Judô", ativa: true }, "m1")).toEqual({
+      sucesso: false,
+      mensagem: "Não foi possível salvar: o registro não está nesta academia, ou seu papel (ou a assinatura) não permite alterar o catálogo.",
+    });
+  });
+
+  it("professor: edição filtra por academia e id, manda só as colunas do formulário", async () => {
+    const cliente = clienteFalso({ professores: { data: { id: "p1" }, error: null } });
+    const lib = await carregarComCliente(cliente);
+
+    expect(await lib.salvarProfessor(ACADEMIA, { nome: "Mestre", telefone: "", email: "m@a.test", ativo: false }, "p1"))
+      .toEqual({ sucesso: true, id: "p1" });
+    expect(filtros(cliente.chamadas, "professores")).toEqual([["academia_id", ACADEMIA], ["id", "p1"]]);
+    expect(cliente.chamadas.find((c) => c.metodo === "update")?.args[0]).toEqual({
+      nome: "Mestre", telefone: null, email: "m@a.test", ativo: false,
+    });
+  });
+
+  it("professor: nome vazio, permissão e falha genérica", async () => {
+    let lib = await carregarComCliente(clienteFalso({}));
+    expect(await lib.salvarProfessor(ACADEMIA, { nome: "  ", telefone: "", email: "", ativo: true }))
+      .toEqual({ sucesso: false, mensagem: "Informe o nome do professor." });
+    lib = await carregarComCliente(clienteFalso({ professores: { data: null, error: { code: "42501" } } }));
+    expect(await lib.salvarProfessor(ACADEMIA, { nome: "Mestre", telefone: "", email: "", ativo: true }))
+      .toEqual({ sucesso: false, mensagem: "Só o dono e a administração alteram o catálogo, e só com a assinatura da academia em dia." });
+    lib = await carregarComCliente(clienteFalso({ professores: { data: null, error: { code: "XX000", message: "texto do banco" } } }));
+    expect(await lib.salvarProfessor(ACADEMIA, { nome: "Mestre", telefone: "", email: "", ativo: true }))
+      .toEqual({ sucesso: false, mensagem: "Não foi possível salvar. Verifique a conexão e tente de novo." });
+  });
+});
