@@ -14,8 +14,9 @@ O que já existe em `main`:
   tabelas, papéis da equipe (dono, admin, professor, recepção, totem),
   matrícula online, check-in por QR com token rotativo, graduações e
   financeiro (cobranças, recorrência, baixa manual, inadimplência).
-  Matrícula duplicada na mesma turma é recusada pelo banco, e turma e
-  horários são gravados numa transação só.
+  Duas matrículas não canceladas do mesmo aluno, na mesma turma e com
+  períodos sobrepostos, são recusadas pelo banco; turma e horários são
+  gravados numa transação só.
 - **Testes pgTAP** de RLS, check-in, matrícula, turmas e financeiro,
   incluindo cenários de isolamento entre academias e de concorrência.
 - **Front** (React + Vite + TypeScript + Tailwind):
@@ -48,7 +49,9 @@ chega à recepção como matrícula pendente.
 ### Painel da equipe
 
 Login com e-mail e senha. Quem é da equipe de mais de uma academia escolhe
-em qual entrar; academia com assinatura suspensa abre só para consulta.
+em qual entrar. Academia com assinatura suspensa abre só para consulta; a
+única alteração que continua valendo é a anonimização de aluno (LGPD), que
+não depende de pagamento.
 
 ![Login do painel da equipe](docs/imagens/painel-login.png)
 
@@ -63,14 +66,17 @@ editam; professor só consulta; anonimização (LGPD) só para dono e admin.
 **Turmas**: agrupadas por modalidade, com professor, público, capacidade e
 horários no fuso da academia. Turma sem horário avisa que não aceita
 check-in por QR. A ficha mostra os horários e os alunos com matrícula
-vigente.
+vigente. Modalidades e professores (o catálogo que as turmas usam) ficam na
+mesma seção. Só dono e admin cadastram e editam; professor e recepção
+consultam.
 
 ![Ficha da turma com horários e alunos matriculados](docs/imagens/painel-turma-ficha.png)
 
 ### Totem de presença
 
 Tela do aparelho que fica na academia e projeta o QR de check-in da turma.
-Exige o login de alguém da equipe.
+Exige o login de alguém da equipe ou de um usuário com o papel `totem`,
+criado só para o aparelho (ele não altera nada; só gera o QR).
 
 ![Acesso ao totem de presença](docs/imagens/totem.png)
 
@@ -106,7 +112,7 @@ Rotas:
 |------------------------------|--------------------------------------------|
 | `/{slug}/matricula`          | matrícula online (visitante anônimo)       |
 | `/{slug}/checkin`            | check-in do aluno pelo QR da turma         |
-| `/{slug}/totem`              | totem da academia (login da equipe)        |
+| `/{slug}/totem`              | totem da academia (login da equipe ou do papel `totem`) |
 | `/painel`                    | painel da equipe: login e escolha de academia |
 | `/painel/{slug}/{seção}`     | seções do painel (`alunos`, `turmas`...)   |
 | `/painel/{slug}/{seção}/{id}`| registro aberto na seção (ou `novo`)       |
@@ -163,7 +169,8 @@ docs/imagens/          capturas de tela do README
   check-in com token rotativo, papel totem e a lista de códigos de erro
   (`hint`) das RPCs.
 - [docs/specs/matricula-duplicada.md](docs/specs/matricula-duplicada.md):
-  regra que impede duas matrículas do mesmo aluno na mesma turma.
+  regra que impede duas matrículas não canceladas do mesmo aluno na mesma
+  turma com períodos sobrepostos.
 - [docs/specs/financeiro-gateway-webhook.md](docs/specs/financeiro-gateway-webhook.md):
   gateway de pagamento e webhook (ainda não implementado).
 
