@@ -135,7 +135,9 @@ describe("Painel da equipe: entrada e escolha de academia", () => {
     const itens = within(menu).getAllByRole("link").map((l) => l.textContent);
     expect(itens).toEqual(["Início", "Alunos", "Turmas", "Graduações"]);
     expect(within(menu).getByRole("link", { name: "Início" })).toHaveAttribute("aria-current", "page");
-    expect(screen.queryByText(/issue #29/)).not.toBeInTheDocument();
+    // A seção de cobranças não chega a montar (a URL cai no início).
+    expect(await screen.findByText("Escolha uma seção no menu.")).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Cobranças" })).not.toBeInTheDocument();
     await waitFor(() => expect(window.location.pathname).toBe("/painel/beta"));
   });
 
