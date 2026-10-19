@@ -371,11 +371,26 @@ describe("Painel: alunos (cobertura pedida na primeira revisão)", () => {
     const dialogo = screen.getByRole("alertdialog");
     expect(dialogo).toHaveAccessibleDescription(/Não dá para desfazer/);
     expect(within(dialogo).getByRole("button", { name: "Cancelar" })).toHaveFocus();
-    expect(screen.queryByRole("button", { name: "Editar" })).not.toBeInTheDocument();
+    // Fora do DOM, não só escondido (o hidden perde para a classe flex no navegador).
+    expect(screen.queryByText("Editar")).toBeNull();
 
     fireEvent.keyDown(dialogo, { key: "Escape" });
     expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Editar" })).toBeInTheDocument();
+  });
+
+  it("durante a anonimização em andamento, Editar não existe na tela", async () => {
+    vi.spyOn(lib, "lerFichaDoAluno").mockResolvedValue(ficha());
+    let terminar: (r: { sucesso: true }) => void = () => {};
+    vi.spyOn(lib, "anonimizarAluno").mockImplementation(() => new Promise((r) => (terminar = r)));
+    montar("dono", ALUNO);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Anonimizar" }));
+    fireEvent.click(screen.getByRole("button", { name: "Confirmar anonimização" }));
+    await screen.findByRole("button", { name: "Anonimizando..." });
+    expect(screen.queryByText("Editar")).toBeNull();
+    expect(screen.getByRole("button", { name: /Alunos/ })).toBeDisabled();
+    await act(async () => terminar({ sucesso: true }));
   });
 
   it("falha ao carregar a ficha: aviso com nova tentativa", async () => {

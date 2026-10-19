@@ -230,7 +230,7 @@ const FichaAluno: React.FC<{ alunoId: string }> = ({ alunoId }) => {
   const anonimizado = aluno.situacao === "anonimizado";
   const podeEditar = podeEditarAlunos(academia.papel, academia.ativa) && !anonimizado;
 
-  if (editando && podeEditar) {
+  if (editando && podeEditar && !confirmando && !anonimizando) {
     return (
       <EdicaoDoAluno
         alunoId={aluno.id}
@@ -269,8 +269,10 @@ const FichaAluno: React.FC<{ alunoId: string }> = ({ alunoId }) => {
           <h2 className="text-xl font-bold text-white">{aluno.nome}</h2>
           <Badge variant={VARIANTE_SITUACAO[aluno.situacao]}>{ROTULO_SITUACAO[aluno.situacao]}</Badge>
         </div>
-        {/* Durante a confirmação e a anonimização, nada de editar nem pedir de novo. */}
-        <div className="flex gap-2" hidden={confirmando || anonimizando}>
+        {/* Durante a confirmação e a anonimização, nada de editar nem pedir de novo.
+            Fora do DOM, não só escondido: o hidden perde para a classe flex. */}
+        {!confirmando && !anonimizando && (
+        <div className="flex gap-2">
           {podeEditar && (
             <Button size="sm" variant="outline" onClick={() => { setAviso(null); setEditando(true); }}>
               Editar
@@ -282,6 +284,7 @@ const FichaAluno: React.FC<{ alunoId: string }> = ({ alunoId }) => {
             </Button>
           )}
         </div>
+        )}
       </div>
 
       {aviso && (
