@@ -106,10 +106,14 @@ src/types/database.ts  tipos gerados do banco (não editar à mão)
 |-----------|--------------------------------------------|----------------------------------------------|
 | dono      | tudo da academia                           | tudo; único que cria/altera outro dono       |
 | admin     | tudo da academia                           | catálogo, equipe, alunos, matrículas, financeiro |
-| professor | alunos, turmas, presenças, graduações      | presenças, graduações (sem financeiro)       |
-| recepcao  | alunos, matrículas, presenças, cobranças   | alunos, matrículas, presenças, cobranças     |
+| professor | alunos, matrículas, presenças, graduações, catálogo | presenças, graduações (sem financeiro) |
+| recepcao  | alunos, matrículas, presenças, cobranças, graduações, catálogo | alunos, matrículas, presenças, cobranças |
 | aluno     | próprio cadastro (ou dos filhos), catálogo | só via RPC (check-in)                        |
 | totem     | só o próprio vínculo                       | nada; só as RPCs do QR de check-in           |
+
+A coluna "Lê" é o que o RLS deixa ler (catálogo = modalidades, faixas,
+professores, turmas, horários e planos, que qualquer membro lê). A tela pode
+mostrar menos: o menu do painel esconde Matrículas do professor.
 
 Helpers SQL:
 - `tem_papel(academia_id, papeis[])`: leitura. Sem lista de papéis vale para
@@ -133,7 +137,7 @@ Plano, status e slug da academia só mudam via `service_role` (billing do SaaS).
 
 | Nome                                   | Quem chama   | Faz                                                        |
 |----------------------------------------|--------------|------------------------------------------------------------|
-| `criar_academia(nome, slug)`           | logado       | onboarding: cria academia em trial e vira dono             |
+| `criar_academia(nome, slug)`           | logado       | onboarding: cria academia em trial e vira dono; recusa slug reservado (`painel`, `portal`, `api`, `admin`, `entrar`, `assets`) |
 | `academia_publica(slug)`               | anon         | dados públicos para a página de matrícula                  |
 | `matricula_online(slug, dados)`        | anon         | cria aluno + matrícula `pendente` (recepção aprova)        |
 | `vincular_meu_cadastro_aluno()`        | logado       | liga login (e-mail confirmado) aos alunos ativos           |
