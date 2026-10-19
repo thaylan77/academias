@@ -142,6 +142,7 @@ describe("Dados (sempre filtrados pela academia selecionada)", () => {
       ["g1", null, { sucesso: true, id: "g1" }],
       [null, { hint: "grau_invalido" }, { sucesso: false, mensagem: "Esse grau passa do máximo da faixa." }],
       [null, { hint: "sem_permissao" }, { sucesso: false, mensagem: "Só o dono, a administração e os professores registram graduações, e só com a assinatura em dia." }],
+      [null, { hint: "graduacao_repetida" }, { sucesso: false, mensagem: "Esta graduação já foi registrada para o aluno nesta data." }],
       [null, { hint: "dados_invalidos" }, { sucesso: false, mensagem: "Confira o aluno (ativo), a faixa, o professor e a data (não pode ser no futuro)." }],
       [null, { hint: null, message: "texto do banco" }, { sucesso: false, mensagem: "Não foi possível salvar. Verifique a conexão e tente de novo." }],
     ];
@@ -161,12 +162,13 @@ describe("Dados (sempre filtrados pela academia selecionada)", () => {
     expect(await lib.salvarFaixa(ACADEMIA, "jj", dados)).toEqual({ sucesso: true, id: "f2" });
     expect(cliente.chamadas.find((c) => c.metodo === "insert")?.args[0]).toEqual({ ...dados, academia_id: ACADEMIA, modalidade_id: "jj" });
     await lib.salvarFaixa(ACADEMIA, "jj", dados, "f2");
-    expect(filtros(cliente.chamadas, "faixas")).toEqual([["academia_id", ACADEMIA], ["id", "f2"]]);
+    expect(filtros(cliente.chamadas, "faixas")).toEqual([["academia_id", ACADEMIA], ["modalidade_id", "jj"], ["id", "f2"]]);
     expect(cliente.chamadas.find((c) => c.metodo === "update")?.args[0]).toEqual(dados);
 
     for (const [erro, mensagem] of [
       [{ code: "23505" }, "Já existe uma faixa nessa ordem nesta modalidade."],
       [{ code: "23514" }, "Confira os números da faixa."],
+      [{ code: "23503" }, "A modalidade da faixa não está mais disponível nesta academia."],
       [{ code: "XX000" }, "Não foi possível salvar. Verifique a conexão e tente de novo."],
     ] as const) {
       lib = await carregarComCliente(clienteFalso({ faixas: { data: null, error: erro } }));
@@ -174,5 +176,60 @@ describe("Dados (sempre filtrados pela academia selecionada)", () => {
     }
     lib = await carregarComCliente(clienteFalso({ faixas: { data: null, error: null } }));
     expect(await lib.salvarFaixa(ACADEMIA, "jj", dados, "f2")).toMatchObject({ sucesso: false });
+  });
+});
+
+describe("Cobertura pedida na primeira revisão", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("permissões: todos os papéis, com e sem a assinatura em dia", () => {
+    expect(podeEditarFaixas("dono", true)).toBe(true);
+    expect(podeEditarFaixas("recepcao", true)).toBe(false);
+    expect(podeEditarFaixas("admin", false)).toBe(false);
+    expect(podeRegistrarGraduacao("admin", false)).toBe(false);
+    expect(podeRegistrarGraduacao("dono", false)).toBe(false);
+  });
+
+  it("vw_graduacao_atual e faixas também em páginas; erro em vw_graduacao_atual propaga", async () => {
+    const mil = (tabela: string) => Array.from({ length: 1000 }, (_, i) => ({ aluno_id: `a${i}`, modalidade_id: "jj", id: `${tabela}${i}` }));
+    const cliente = clienteFalso({});
+    cliente.from.mockImplementation((tabela: string) => {
+      const q: Record<string, unknown> = {};
+      let inicio = 0;
+      for (const metodo of ["select", "eq", "order", "range"]) {
+        q[metodo] = (...args: unknown[]) => {
+          cliente.chamadas.push({ tabela, metodo, args });
+          if (metodo === "range") inicio = args[0] as number;
+          return q;
+        };
+      }
+      q.then = (ok: (r: Resposta) => unknown) =>
+        Promise.resolve({ data: inicio === 0 ? mil(tabela) : [], error: null }).then(ok);
+      return q;
+    });
+    const lib = await carregarComCliente(cliente);
+    await lib.listarProgresso(ACADEMIA);
+    expect(await lib.lerFaixas(ACADEMIA)).toHaveLength(1000);
+    const paginas = (t: string) => cliente.chamadas.filter((c) => c.tabela === t && c.metodo === "range").length;
+    expect(paginas("vw_graduacao_atual")).toBe(2);
+    expect(paginas("faixas")).toBe(2);
+
+    const comErro = await carregarComCliente(clienteFalso({ vw_graduacao_atual: { data: null, error: { message: "rede" } } }));
+    await expect(comErro.listarProgresso(ACADEMIA)).rejects.toMatchObject({ message: "rede" });
+  });
+
+  it("faixa: a sequência de métodos de cada gravação", async () => {
+    const dados = { nome: "Azul", cor: null, ordem: 2, max_graus: 4, min_meses: 24, min_aulas: 200 };
+    let cliente = clienteFalso({ faixas: { data: { id: "f2" }, error: null } });
+    let lib = await carregarComCliente(cliente);
+    await lib.salvarFaixa(ACADEMIA, "jj", dados);
+    expect(cliente.chamadas.map((c) => c.metodo)).toEqual(["insert", "select", "maybeSingle"]);
+
+    cliente = clienteFalso({ faixas: { data: { id: "f2" }, error: null } });
+    lib = await carregarComCliente(cliente);
+    await lib.salvarFaixa(ACADEMIA, "jj", dados, "f2");
+    expect(cliente.chamadas.map((c) => c.metodo)).toEqual(["update", "eq", "eq", "eq", "select", "maybeSingle"]);
   });
 });

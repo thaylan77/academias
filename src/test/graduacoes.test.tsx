@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
+import { act, render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import { GraduacoesSecao } from "../pages/painel/graduacoes";
 import { PainelContexto } from "../pages/painel/contexto";
 import * as lib from "../lib/graduacoes";
@@ -213,5 +213,150 @@ describe("Painel: graduações", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Tentar de novo" }));
     await screen.findByRole("list", { name: "Progresso dos alunos" });
     expect(listar).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("Painel: graduações (cobertura pedida na primeira revisão)", () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+    vi.spyOn(lib, "lerFaixas").mockResolvedValue(FAIXAS);
+    vi.spyOn(turmas, "lerCatalogo").mockResolvedValue({
+      modalidades: [{ id: "jj", nome: "Jiu-Jitsu", ativa: true }, { id: "mt", nome: "Muay Thai", ativa: false }],
+      professores: [],
+    });
+    vi.spyOn(turmas, "listarTurmas").mockResolvedValue([
+      { id: "t1", nome: "Adulto Noite", modalidade_id: "jj", modalidade: "Jiu-Jitsu", professor_id: null, professor: null,
+        publico: "adulto", capacidade: null, ativa: true, horarios: [] },
+      { id: "t2", nome: "Muay Thai Adulto", modalidade_id: "mt", modalidade: "Muay Thai", professor_id: null, professor: null,
+        publico: "misto", capacidade: null, ativa: true, horarios: [] },
+    ]);
+    vi.spyOn(alunos, "listarAlunos").mockResolvedValue([
+      { id: "a1", nome: "Ana Souza", cpf: null, telefone: null, data_nascimento: null, situacao: "ativo" },
+    ]);
+  });
+
+  it("data padrão e limite de futuro são o dia da academia, não o do relógio em UTC", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    // 01:30 em UTC do dia 20 ainda é dia 19 em Fortaleza (UTC-3).
+    vi.setSystemTime(new Date("2026-10-20T01:30:00Z"));
+    vi.spyOn(lib, "listarProgresso").mockResolvedValue([progresso()]);
+    const registrar = vi.spyOn(lib, "registrarGraduacao");
+    montar("professor");
+
+    fireEvent.click(await screen.findByRole("button", { name: "Registrar graduação de Ana Souza" }));
+    const form = screen.getByRole("form", { name: "Registrar graduação" });
+    expect(within(form).getByLabelText("Data")).toHaveValue("2026-10-19");
+    fireEvent.change(within(form).getByLabelText("Faixa"), { target: { value: "f-branca" } });
+    fireEvent.change(within(form).getByLabelText("Data"), { target: { value: "2026-10-20" } });
+    fireEvent.click(within(form).getByRole("button", { name: "Salvar graduação" }));
+    expect(await within(form).findByRole("alert")).toHaveTextContent("A data não pode ser no futuro.");
+    expect(registrar).not.toHaveBeenCalled();
+  });
+
+  it("grau vazio não vira 0, e data vazia pede a data", async () => {
+    vi.spyOn(lib, "listarProgresso").mockResolvedValue([progresso()]);
+    const registrar = vi.spyOn(lib, "registrarGraduacao");
+    montar("professor");
+    fireEvent.click(await screen.findByRole("button", { name: "Registrar graduação de Ana Souza" }));
+    const form = screen.getByRole("form", { name: "Registrar graduação" });
+    fireEvent.change(within(form).getByLabelText("Faixa"), { target: { value: "f-branca" } });
+    fireEvent.change(within(form).getByLabelText("Grau"), { target: { value: "" } });
+    fireEvent.click(within(form).getByRole("button", { name: "Salvar graduação" }));
+    expect(await within(form).findByRole("alert")).toHaveTextContent("O grau vai de 0 a 4 nesta faixa.");
+    fireEvent.change(within(form).getByLabelText("Grau"), { target: { value: "1" } });
+    fireEvent.change(within(form).getByLabelText("Data"), { target: { value: "" } });
+    fireEvent.click(within(form).getByRole("button", { name: "Salvar graduação" }));
+    expect(await within(form).findByRole("alert")).toHaveTextContent("Informe a data da graduação.");
+    expect(registrar).not.toHaveBeenCalled();
+  });
+
+  it("modalidade inativa: sem atalho de registro na linha", async () => {
+    vi.spyOn(lib, "listarProgresso").mockResolvedValue([progresso({ modalidade_id: "mt", aluno: "Ana Souza" })]);
+    montar("professor");
+    await screen.findByRole("list", { name: "Progresso dos alunos" });
+    expect(screen.queryByRole("button", { name: "Registrar graduação de Ana Souza" })).not.toBeInTheDocument();
+  });
+
+  it("filtro de modalidade restringe a lista e as turmas, e limpa a turma escolhida", async () => {
+    vi.spyOn(lib, "listarProgresso").mockResolvedValue([
+      progresso(),
+      progresso({ aluno_id: "a2", aluno: "Bruno Lima", modalidade_id: "mt" }),
+    ]);
+    vi.spyOn(turmas, "lerTurma").mockResolvedValue({ turma: (await turmas.listarTurmas("acad-a"))[0], matriculados: [] });
+    montar("recepcao");
+    await screen.findByRole("list", { name: "Progresso dos alunos" });
+
+    fireEvent.change(screen.getByLabelText("Modalidade"), { target: { value: "jj" } });
+    expect(within(screen.getByRole("list", { name: "Progresso dos alunos" })).getAllByRole("listitem")).toHaveLength(1);
+    expect(within(screen.getByLabelText("Turma")).queryByRole("option", { name: "Muay Thai Adulto" })).not.toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText("Turma"), { target: { value: "t1" } });
+    await screen.findByText("Nenhum aluno com esses filtros.");
+    fireEvent.change(screen.getByLabelText("Modalidade"), { target: { value: "" } });
+    expect(screen.getByLabelText("Turma")).toHaveValue("");
+    await waitFor(() => expect(within(screen.getByRole("list", { name: "Progresso dos alunos" })).getAllByRole("listitem")).toHaveLength(2));
+  });
+
+  it("turma carregando mostra aviso; falha não esconde a lista", async () => {
+    vi.spyOn(lib, "listarProgresso").mockResolvedValue([progresso()]);
+    let falhar: (e: Error) => void = () => {};
+    vi.spyOn(turmas, "lerTurma").mockImplementation(() => new Promise((_, rej) => (falhar = rej)));
+    montar("recepcao");
+    await screen.findByRole("list", { name: "Progresso dos alunos" });
+
+    fireEvent.change(screen.getByLabelText("Turma"), { target: { value: "t1" } });
+    expect(await screen.findByText("Carregando os alunos da turma...")).toBeInTheDocument();
+    await act(async () => falhar(new Error("rede")));
+    expect(screen.getByRole("alert")).toHaveTextContent("a lista abaixo não está filtrada por ela");
+    expect(within(screen.getByRole("list", { name: "Progresso dos alunos" })).getAllByRole("listitem")).toHaveLength(1);
+  });
+
+  it("recarga que falha depois de gravar mantém a tela e avisa", async () => {
+    vi.spyOn(lib, "listarProgresso").mockResolvedValueOnce([progresso()]).mockRejectedValueOnce(new Error("rede"));
+    vi.spyOn(lib, "registrarGraduacao").mockResolvedValue({ sucesso: true, id: "g1" });
+    montar("professor");
+    fireEvent.click(await screen.findByRole("button", { name: "Registrar graduação de Ana Souza" }));
+    const form = screen.getByRole("form", { name: "Registrar graduação" });
+    fireEvent.change(within(form).getByLabelText("Faixa"), { target: { value: "f-branca" } });
+    fireEvent.click(within(form).getByRole("button", { name: "Salvar graduação" }));
+
+    expect(await screen.findByText(/Salvo, mas não foi possível atualizar a lista/)).toBeInTheDocument();
+    expect(screen.getByText(/Graduação registrada/)).toBeInTheDocument();
+    expect(screen.getByRole("list", { name: "Progresso dos alunos" })).toBeInTheDocument();
+  });
+
+  it("depois de salvar faixa, o formulário fecha e as faixas recarregam", async () => {
+    vi.spyOn(lib, "listarProgresso").mockResolvedValue([]);
+    vi.spyOn(lib, "salvarFaixa").mockResolvedValue({ sucesso: true, id: "f-roxa" });
+    montar("admin");
+    const grupo = await screen.findByRole("group", { name: "Faixas de Jiu-Jitsu" });
+    fireEvent.click(within(grupo).getByRole("button", { name: "Nova faixa em Jiu-Jitsu" }));
+    fireEvent.change(screen.getByLabelText("Nome da faixa"), { target: { value: "Roxa" } });
+    fireEvent.click(screen.getByRole("button", { name: "Salvar faixa" }));
+    await waitFor(() => expect(screen.queryByLabelText("Nome da faixa")).not.toBeInTheDocument());
+    expect(lib.lerFaixas).toHaveBeenCalledTimes(2);
+    expect(lib.lerFaixas).toHaveBeenLastCalledWith("acad-a");
+  });
+
+  it("trocar a academia do contexto recarrega tudo da academia nova", async () => {
+    const listar = vi.spyOn(lib, "listarProgresso").mockResolvedValue([progresso()]);
+    const academia = (id: string): AcademiaDoMembro => ({ academia_id: id, nome: id, slug: id, papel: "admin", ativa: true, fuso: "America/Fortaleza" });
+    const { rerender } = render(
+      <PainelContexto.Provider value={{ academia: academia("acad-a"), item: null, abrir: vi.fn() }}>
+        <GraduacoesSecao />
+      </PainelContexto.Provider>
+    );
+    await screen.findByRole("list", { name: "Progresso dos alunos" });
+    rerender(
+      <PainelContexto.Provider value={{ academia: academia("acad-b"), item: null, abrir: vi.fn() }}>
+        <GraduacoesSecao />
+      </PainelContexto.Provider>
+    );
+    await waitFor(() => expect(listar).toHaveBeenLastCalledWith("acad-b"));
+    expect(lib.lerFaixas).toHaveBeenLastCalledWith("acad-b");
+    expect(turmas.lerCatalogo).toHaveBeenLastCalledWith("acad-b");
+    expect(turmas.listarTurmas).toHaveBeenLastCalledWith("acad-b");
+    expect(alunos.listarAlunos).toHaveBeenLastCalledWith("acad-b");
   });
 });

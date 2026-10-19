@@ -2,7 +2,7 @@
 -- em dia; data no dia da academia; grau dentro da faixa; progresso zera.
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(24);
+select plan(29);
 
 create function public.__erro_de(p_sql text)
 returns jsonb
@@ -171,6 +171,26 @@ select is((select observacao from public.graduacoes where faixa_id = 'fd000000-0
           'observação gravada sem espaços nas pontas');
 select is((select faixa from public.vw_graduacao_atual where aluno_id = 'fd000000-0000-4000-8000-0000000001a1'), 'Azul',
           'a faixa nova vira a atual');
+
+-- Clique duplo: a mesma faixa, grau e data não se repetem.
+set local role authenticated;
+select public.__como('fd000000-0000-4000-8000-0000000000a1');
+select is(public.__hint_de($$select public.registrar_graduacao('fd000000-0000-4000-8000-00000000000a', public.__grad())$$),
+          'graduacao_repetida', 'mesma faixa, grau e data de novo: graduacao_repetida');
+
+-- Gravação direta na tabela (a política permite) também respeita as regras.
+select is(public.__hint_de($$insert into public.graduacoes (academia_id, aluno_id, faixa_id, grau, data)
+            values ('fd000000-0000-4000-8000-00000000000a', 'fd000000-0000-4000-8000-0000000001a1', 'fd000000-0000-4000-8000-0000000006a1', 9, public.__dia(-1)::date)$$),
+          'grau_invalido', 'insert direto com grau acima da faixa: grau_invalido');
+select is(public.__hint_de($$insert into public.graduacoes (academia_id, aluno_id, faixa_id, grau, data)
+            values ('fd000000-0000-4000-8000-00000000000a', 'fd000000-0000-4000-8000-0000000001a1', 'fd000000-0000-4000-8000-0000000006a1', 1, public.__dia(2)::date)$$),
+          'dados_invalidos', 'insert direto com data no futuro: dados_invalidos');
+select is(public.__hint_de($$update public.graduacoes set grau = 9 where aluno_id = 'fd000000-0000-4000-8000-0000000001a1'$$),
+          'grau_invalido', 'update direto com grau acima da faixa: grau_invalido');
+select is(public.__hint_de($$insert into public.graduacoes (academia_id, aluno_id, faixa_id, grau, data)
+            values ('fd000000-0000-4000-8000-00000000000a', 'fd000000-0000-4000-8000-0000000001a1', 'fd000000-0000-4000-8000-0000000006a1', 3, public.__dia(-2)::date)$$),
+          'sem erro', 'insert direto válido continua passando');
+reset role;
 
 -- ---------------------------------------------------------------------
 -- Quem não registra

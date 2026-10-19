@@ -91,7 +91,8 @@ O código vai no `hint` do erro (`raise exception '<mensagem em português>' usi
 | `slug_reservado` | `criar_academia` | slug é caminho do app (`painel`, `portal`, `api`, `admin`, `entrar`, `assets`). O check `academias_slug_nao_reservado` vale também para a troca de slug pelo billing |
 | `slug_em_uso` | `criar_academia` | outra academia já usa o slug |
 | `slug_invalido` | `criar_academia` | slug fora do formato: 3 a 40 caracteres, letras minúsculas, números e hífen, sem hífen nas pontas |
-| `grau_invalido` | `registrar_graduacao` | grau acima do máximo da faixa |
+| `grau_invalido` | `registrar_graduacao` e gravação em `graduacoes` | grau acima do máximo da faixa |
+| `graduacao_repetida` | `registrar_graduacao` | mesma faixa, grau e data já registrados para o aluno |
 | `matricula_duplicada` | gravação em `matricula_turmas` e em `matriculas` | o aluno já tem matrícula não cancelada na turma em período sobreposto. O `detail` traz `matricula_id` e `turma_id` em conflito. Regra em `docs/specs/matricula-duplicada.md` |
 
 

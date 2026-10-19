@@ -66,14 +66,17 @@ async function emPaginas<T>(pagina: (inicio: number, fim: number) => PromiseLike
 
 export async function lerFaixas(academiaId: string): Promise<Faixa[]> {
   if (!supabase) return [];
-  const { data, error } = await supabase
-    .from("faixas")
-    .select("id, modalidade_id, nome, cor, ordem, max_graus, min_meses, min_aulas")
-    .eq("academia_id", academiaId)
-    .order("modalidade_id")
-    .order("ordem");
-  if (error) throw error;
-  return data ?? [];
+  const cliente = supabase;
+  return emPaginas((inicio, fim) =>
+    cliente
+      .from("faixas")
+      .select("id, modalidade_id, nome, cor, ordem, max_graus, min_meses, min_aulas")
+      .eq("academia_id", academiaId)
+      .order("modalidade_id")
+      .order("ordem")
+      .order("id")
+      .range(inicio, fim)
+  );
 }
 
 /**
@@ -174,6 +177,8 @@ export async function registrarGraduacao(academiaId: string, dados: DadosGraduac
       return { sucesso: false, mensagem: "Só o dono, a administração e os professores registram graduações, e só com a assinatura em dia." };
     case "grau_invalido":
       return { sucesso: false, mensagem: "Esse grau passa do máximo da faixa." };
+    case "graduacao_repetida":
+      return { sucesso: false, mensagem: "Esta graduação já foi registrada para o aluno nesta data." };
     case "dados_invalidos":
       return { sucesso: false, mensagem: "Confira o aluno (ativo), a faixa, o professor e a data (não pode ser no futuro)." };
     default:
@@ -220,13 +225,16 @@ export async function salvarFaixa(
   id?: string
 ): Promise<Resultado> {
   if (!supabase) return { sucesso: false, mensagem: "O painel precisa de conexão com o servidor." };
+  // Na edição, a faixa precisa ser da academia e da modalidade em que a tela
+  // está: um id defasado não altera faixa de outra modalidade.
   const consulta = id
-    ? supabase.from("faixas").update(dados).eq("academia_id", academiaId).eq("id", id)
+    ? supabase.from("faixas").update(dados).eq("academia_id", academiaId).eq("modalidade_id", modalidadeId).eq("id", id)
     : supabase.from("faixas").insert({ ...dados, academia_id: academiaId, modalidade_id: modalidadeId });
   const { data, error } = await consulta.select("id").maybeSingle();
   if (error) {
     if (error.code === "23505") return { sucesso: false, mensagem: "Já existe uma faixa nessa ordem nesta modalidade." };
     if (error.code === "23514") return { sucesso: false, mensagem: "Confira os números da faixa." };
+    if (error.code === "23503") return { sucesso: false, mensagem: "A modalidade da faixa não está mais disponível nesta academia." };
     if (error.code === "42501") return { sucesso: false, mensagem: MSG_FAIXA_SEM_LINHA };
     return { sucesso: false, mensagem: MSG_REDE };
   }

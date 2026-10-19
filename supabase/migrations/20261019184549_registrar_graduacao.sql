@@ -92,6 +92,16 @@ begin
       using hint = 'grau_invalido';
   end if;
 
+  -- Clique duplo ou nova tentativa não repete a graduação. A trava por aluno
+  -- serializa duas chamadas simultâneas para o mesmo aluno.
+  perform pg_advisory_xact_lock(hashtextextended('graduacao:' || v_aluno::text, 0));
+  if exists (select 1 from public.graduacoes
+              where academia_id = p_academia_id and aluno_id = v_aluno
+                and faixa_id = v_faixa.id and grau = v_grau and data = v_data) then
+    raise exception 'Esta graduação já foi registrada para o aluno nesta data'
+      using hint = 'graduacao_repetida';
+  end if;
+
   insert into public.graduacoes (academia_id, aluno_id, faixa_id, grau, data, professor_id, observacao)
   values (p_academia_id, v_aluno, v_faixa.id, v_grau, v_data, v_professor, v_obs)
   returning id into v_id;
@@ -102,3 +112,34 @@ $$;
 
 revoke execute on function public.registrar_graduacao(uuid, jsonb) from public, anon;
 grant execute on function public.registrar_graduacao(uuid, jsonb) to authenticated;
+
+-- As regras de dado valem também para a gravação direta na tabela (a
+-- política graduacoes_insert continua permitindo; só a RPC conferia):
+-- grau dentro do máximo da faixa e data nunca depois de hoje na academia.
+-- security definer: lê faixas e academias sem depender do RLS de quem grava.
+create or replace function public.graduacoes_valida()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_max smallint;
+begin
+  select max_graus into v_max from public.faixas
+   where academia_id = new.academia_id and id = new.faixa_id;
+  if v_max is not null and new.grau > v_max then
+    raise exception 'O grau passa do máximo da faixa' using hint = 'grau_invalido';
+  end if;
+  if new.data > public.hoje_academia(new.academia_id) then
+    raise exception 'A data da graduação não pode ser no futuro' using hint = 'dados_invalidos';
+  end if;
+  return new;
+end
+$$;
+
+create trigger graduacoes_valida
+  before insert or update of grau, faixa_id, data on public.graduacoes
+  for each row execute function public.graduacoes_valida();
+
+revoke execute on function public.graduacoes_valida() from public, anon, authenticated;

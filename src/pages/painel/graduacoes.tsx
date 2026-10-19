@@ -38,12 +38,14 @@ type Dados = {
 export const GraduacoesSecao: React.FC = () => {
   const { academia } = usarPainel();
   const [estado, setEstado] = useState<{ fase: "carregando" } | { fase: "erro" } | { fase: "pronto"; dados: Dados }>({ fase: "carregando" });
+  const [falhaRecarga, setFalhaRecarga] = useState(false);
   const geracao = useRef(0);
 
   // Depois de gravar, recarrega sem tirar a tela do lugar: o aviso de sucesso
   // e os filtros escolhidos continuam.
   const carregar = useCallback((emSegundoPlano = false) => {
     const minha = ++geracao.current;
+    setFalhaRecarga(false);
     if (!emSegundoPlano) setEstado({ fase: "carregando" });
     Promise.all([
       listarProgresso(academia.academia_id),
@@ -55,7 +57,12 @@ export const GraduacoesSecao: React.FC = () => {
       .then(([progresso, faixas, catalogo, turmas, alunos]) => {
         if (minha === geracao.current) setEstado({ fase: "pronto", dados: { progresso, faixas, catalogo, turmas, alunos } });
       })
-      .catch(() => minha === geracao.current && setEstado({ fase: "erro" }));
+      .catch(() => {
+        if (minha !== geracao.current) return;
+        // Em segundo plano, a gravação já deu certo: mantém a tela e avisa.
+        if (emSegundoPlano) setFalhaRecarga(true);
+        else setEstado({ fase: "erro" });
+      });
   }, [academia.academia_id]);
   useEffect(() => {
     carregar();
@@ -78,6 +85,14 @@ export const GraduacoesSecao: React.FC = () => {
   }
   return (
     <div className="space-y-10">
+      {falhaRecarga && (
+        <Alert variant="warning" role="alert">
+          <AlertDescription>
+            Salvo, mas não foi possível atualizar a lista.{" "}
+            <button type="button" className="underline" onClick={recarregar}>Atualizar</button>
+          </AlertDescription>
+        </Alert>
+      )}
       <Progressos dados={estado.dados} aoMudar={recarregar} />
       <CatalogoDeFaixas dados={estado.dados} aoMudar={recarregar} />
     </div>
@@ -94,6 +109,7 @@ const Progressos: React.FC<{ dados: Dados; aoMudar: () => void }> = ({ dados, ao
   const [turmaId, setTurmaId] = useState("");
   const [soAptos, setSoAptos] = useState(false);
   const [alunosDaTurma, setAlunosDaTurma] = useState<Set<string> | null>(null);
+  const [turmaCarregando, setTurmaCarregando] = useState(false);
   const [falhaTurma, setFalhaTurma] = useState(false);
   const [alvo, setAlvo] = useState<Alvo | null>(null);
   const [aviso, setAviso] = useState<string | null>(null);
@@ -103,14 +119,23 @@ const Progressos: React.FC<{ dados: Dados; aoMudar: () => void }> = ({ dados, ao
   useEffect(() => {
     let vivo = true;
     setFalhaTurma(false);
+    setAlunosDaTurma(null);
     if (!turmaId) {
-      setAlunosDaTurma(null);
+      setTurmaCarregando(false);
       return;
     }
-    setAlunosDaTurma(new Set());
+    setTurmaCarregando(true);
     lerTurma(academia.academia_id, turmaId, hojeNoFuso(academia.fuso))
-      .then(({ matriculados }) => vivo && setAlunosDaTurma(new Set(matriculados.map((m) => m.aluno_id))))
-      .catch(() => vivo && setFalhaTurma(true));
+      .then(({ matriculados }) => {
+        if (!vivo) return;
+        setAlunosDaTurma(new Set(matriculados.map((m) => m.aluno_id)));
+        setTurmaCarregando(false);
+      })
+      .catch(() => {
+        if (!vivo) return;
+        setFalhaTurma(true);
+        setTurmaCarregando(false);
+      });
     return () => {
       vivo = false;
     };
@@ -118,6 +143,11 @@ const Progressos: React.FC<{ dados: Dados; aoMudar: () => void }> = ({ dados, ao
 
   const nomeModalidade = useMemo(
     () => new Map(dados.catalogo.modalidades.map((m) => [m.id, m.nome])),
+    [dados.catalogo.modalidades]
+  );
+  // Como no registro novo, graduação nova só em modalidade ativa.
+  const modalidadeAtiva = useMemo(
+    () => new Set(dados.catalogo.modalidades.filter((m) => m.ativa).map((m) => m.id)),
     [dados.catalogo.modalidades]
   );
   const visiveis = filtrarProgresso(dados.progresso, { modalidadeId: modalidadeId || null, alunosDaTurma, soAptos });
@@ -177,11 +207,13 @@ const Progressos: React.FC<{ dados: Dados; aoMudar: () => void }> = ({ dados, ao
       </div>
       {falhaTurma && (
         <Alert variant="destructive" role="alert">
-          <AlertDescription>Não foi possível carregar os alunos da turma.</AlertDescription>
+          <AlertDescription>Não foi possível carregar os alunos da turma: a lista abaixo não está filtrada por ela.</AlertDescription>
         </Alert>
       )}
 
-      {visiveis.length === 0 ? (
+      {turmaCarregando ? (
+        <p role="status" className="text-sm text-zinc-500">Carregando os alunos da turma...</p>
+      ) : visiveis.length === 0 ? (
         <p className="text-sm text-zinc-400">
           {dados.progresso.length === 0
             ? "Nenhum aluno graduado ainda. Registre a primeira graduação de cada aluno para acompanhar o progresso."
@@ -204,7 +236,7 @@ const Progressos: React.FC<{ dados: Dados; aoMudar: () => void }> = ({ dados, ao
               </span>
               <span className="flex items-center gap-2">
                 {p.apto && <Badge variant="success">Apto</Badge>}
-                {registrar && alvo === null && (
+                {registrar && alvo === null && modalidadeAtiva.has(p.modalidade_id) && (
                   <Button size="sm" variant="outline" aria-label={`Registrar graduação de ${p.aluno}`}
                     onClick={() => { setAviso(null); setAlvo({ aluno_id: p.aluno_id, modalidade_id: p.modalidade_id }); }}>
                     Registrar
@@ -248,11 +280,12 @@ const RegistroDeGraduacao: React.FC<{ dados: Dados; alvo: Alvo; aoTerminar: (sal
   const enviar = async (e: React.FormEvent) => {
     e.preventDefault();
     setErro(null);
-    const g = Number(grau);
+    const g = grau.trim() === "" ? Number.NaN : Number(grau);
     if (!alunoId) return setErro("Escolha o aluno.");
     if (!faixa) return setErro("Escolha a faixa.");
     if (!Number.isInteger(g) || g < 0 || g > faixa.max_graus) return setErro(`O grau vai de 0 a ${faixa.max_graus} nesta faixa.`);
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(data) || data > hoje) return setErro("A data não pode ser no futuro.");
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(data)) return setErro("Informe a data da graduação.");
+    if (data > hoje) return setErro("A data não pode ser no futuro.");
     setSalvando(true);
     const res = await registrarGraduacao(academia.academia_id, {
       aluno_id: alunoId,
