@@ -135,7 +135,7 @@ describe("Painel da equipe: entrada e escolha de academia", () => {
     const itens = within(menu).getAllByRole("link").map((l) => l.textContent);
     expect(itens).toEqual(["Início", "Alunos", "Turmas", "Graduações"]);
     expect(within(menu).getByRole("link", { name: "Início" })).toHaveAttribute("aria-current", "page");
-    expect(screen.queryByText(/issue #29/)).not.toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "Inadimplentes" })).not.toBeInTheDocument();
     await waitFor(() => expect(window.location.pathname).toBe("/painel/beta"));
   });
 
