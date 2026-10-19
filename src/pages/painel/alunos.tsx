@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   AlunoNaoEncontrado,
   AlunoResumo,
@@ -12,7 +12,7 @@ import {
   formatarTelefone,
   formularioDoAluno,
   formularioVazio,
-  hojeLocal,
+  hojeNoFuso,
   idadeEm,
   lerFichaDoAluno,
   listarAlunos,
@@ -71,18 +71,23 @@ const ListaDeAlunos: React.FC = () => {
   const [busca, setBusca] = useState("");
   const [situacao, setSituacao] = useState<SituacaoAluno | "todas">("todas");
 
+  // Cada carga tem um número; resposta de carga antiga é descartada (inclusive
+  // as disparadas por "Tentar de novo").
+  const geracao = useRef(0);
   const carregar = useCallback(() => {
-    let vivo = true;
+    const minha = ++geracao.current;
     setFalhou(false);
     setAlunos(null);
     listarAlunos(academia.academia_id)
-      .then((lista) => vivo && setAlunos(lista))
-      .catch(() => vivo && setFalhou(true));
-    return () => {
-      vivo = false;
-    };
+      .then((lista) => minha === geracao.current && setAlunos(lista))
+      .catch(() => minha === geracao.current && setFalhou(true));
   }, [academia.academia_id]);
-  useEffect(carregar, [carregar]);
+  useEffect(() => {
+    carregar();
+    return () => {
+      geracao.current++;
+    };
+  }, [carregar]);
 
   const visiveis = useMemo(() => (alunos ? filtrarAlunos(alunos, busca, situacao) : []), [alunos, busca, situacao]);
 
@@ -175,20 +180,25 @@ const FichaAluno: React.FC<{ alunoId: string }> = ({ alunoId }) => {
   const [aviso, setAviso] = useState<{ tipo: "erro" | "ok"; texto: string } | null>(null);
   const verFinanceiro = podeVerFinanceiro(academia.papel);
 
+  const geracao = useRef(0);
   const carregar = useCallback(() => {
-    let vivo = true;
+    const minha = ++geracao.current;
     setEstado({ fase: "carregando" });
     lerFichaDoAluno(academia.academia_id, alunoId, verFinanceiro)
-      .then((ficha) => vivo && setEstado({ fase: "pronta", ficha }))
-      .catch((e) => vivo && setEstado({ fase: e instanceof AlunoNaoEncontrado ? "nao_encontrado" : "erro" }));
-    return () => {
-      vivo = false;
-    };
+      .then((ficha) => minha === geracao.current && setEstado({ fase: "pronta", ficha }))
+      .catch((e) => {
+        if (minha === geracao.current) setEstado({ fase: e instanceof AlunoNaoEncontrado ? "nao_encontrado" : "erro" });
+      });
   }, [academia.academia_id, alunoId, verFinanceiro]);
-  useEffect(carregar, [carregar]);
+  useEffect(() => {
+    carregar();
+    return () => {
+      geracao.current++;
+    };
+  }, [carregar]);
 
   const voltar = (
-    <Button variant="ghost" size="sm" onClick={() => abrir("alunos")}>
+    <Button variant="ghost" size="sm" disabled={anonimizando} onClick={() => abrir("alunos")}>
       <ArrowLeft className="w-4 h-4 mr-1.5" /> Alunos
     </Button>
   );
@@ -200,9 +210,16 @@ const FichaAluno: React.FC<{ alunoId: string }> = ({ alunoId }) => {
         {voltar}
         <Alert variant="destructive" role="alert">
           <AlertDescription>
-            {estado.fase === "nao_encontrado"
-              ? "Aluno não encontrado nesta academia."
-              : "Não foi possível carregar o aluno. Verifique a conexão e tente de novo."}
+            {estado.fase === "nao_encontrado" ? (
+              "Aluno não encontrado nesta academia."
+            ) : (
+              <>
+                Não foi possível carregar o aluno.{" "}
+                <button type="button" className="underline" onClick={carregar}>
+                  Tentar de novo
+                </button>
+              </>
+            )}
           </AlertDescription>
         </Alert>
       </div>
@@ -242,7 +259,7 @@ const FichaAluno: React.FC<{ alunoId: string }> = ({ alunoId }) => {
     }
   };
 
-  const idade = idadeEm(aluno.data_nascimento, hojeLocal());
+  const idade = idadeEm(aluno.data_nascimento, hojeNoFuso(academia.fuso));
 
   return (
     <div className="space-y-6">
@@ -252,7 +269,8 @@ const FichaAluno: React.FC<{ alunoId: string }> = ({ alunoId }) => {
           <h2 className="text-xl font-bold text-white">{aluno.nome}</h2>
           <Badge variant={VARIANTE_SITUACAO[aluno.situacao]}>{ROTULO_SITUACAO[aluno.situacao]}</Badge>
         </div>
-        <div className="flex gap-2">
+        {/* Durante a confirmação e a anonimização, nada de editar nem pedir de novo. */}
+        <div className="flex gap-2" hidden={confirmando || anonimizando}>
           {podeEditar && (
             <Button size="sm" variant="outline" onClick={() => { setAviso(null); setEditando(true); }}>
               Editar
@@ -273,22 +291,12 @@ const FichaAluno: React.FC<{ alunoId: string }> = ({ alunoId }) => {
       )}
 
       {confirmando && (
-        <div role="alertdialog" aria-labelledby="anonimizar-titulo" className="rounded-xl border border-red-900/60 bg-red-950/30 p-4 space-y-3">
-          <p id="anonimizar-titulo" className="font-semibold text-white">Anonimizar {aluno.nome}?</p>
-          <p className="text-sm text-zinc-300">
-            Os dados pessoais saem do cadastro de vez (nome, CPF, contatos, responsável, observações), as matrículas
-            são canceladas e o login do aluno perde o acesso. O histórico de presenças e cobranças fica, sem
-            identificar a pessoa. Não dá para desfazer.
-          </p>
-          <div className="flex gap-2">
-            <Button size="sm" variant="destructive" disabled={anonimizando} onClick={anonimizar}>
-              {anonimizando ? "Anonimizando..." : "Confirmar anonimização"}
-            </Button>
-            <Button size="sm" variant="outline" disabled={anonimizando} onClick={() => setConfirmando(false)}>
-              Cancelar
-            </Button>
-          </div>
-        </div>
+        <ConfirmacaoAnonimizar
+          nome={aluno.nome}
+          anonimizando={anonimizando}
+          aoConfirmar={anonimizar}
+          aoCancelar={() => setConfirmando(false)}
+        />
       )}
 
       {anonimizado ? (
@@ -354,6 +362,48 @@ const FichaAluno: React.FC<{ alunoId: string }> = ({ alunoId }) => {
   );
 };
 
+/**
+ * Confirmação da anonimização. O foco vai para "Cancelar" ao abrir (a ação
+ * que não destrói nada), Esc cancela, e o texto explica o que acontece.
+ */
+const ConfirmacaoAnonimizar: React.FC<{
+  nome: string;
+  anonimizando: boolean;
+  aoConfirmar: () => void;
+  aoCancelar: () => void;
+}> = ({ nome, anonimizando, aoConfirmar, aoCancelar }) => {
+  const cancelar = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    cancelar.current?.focus();
+  }, []);
+  return (
+    <div
+      role="alertdialog"
+      aria-labelledby="anonimizar-titulo"
+      aria-describedby="anonimizar-texto"
+      onKeyDown={(e) => {
+        if (e.key === "Escape" && !anonimizando) aoCancelar();
+      }}
+      className="rounded-xl border border-red-900/60 bg-red-950/30 p-4 space-y-3"
+    >
+      <p id="anonimizar-titulo" className="font-semibold text-white">Anonimizar {nome}?</p>
+      <p id="anonimizar-texto" className="text-sm text-zinc-300">
+        Os dados pessoais saem do cadastro de vez (nome, CPF, contatos, responsável, observações), as matrículas
+        são canceladas e o login do aluno perde o acesso. O histórico de presenças e cobranças fica, sem
+        identificar a pessoa. Não dá para desfazer.
+      </p>
+      <div className="flex gap-2">
+        <Button size="sm" variant="destructive" disabled={anonimizando} onClick={aoConfirmar}>
+          {anonimizando ? "Anonimizando..." : "Confirmar anonimização"}
+        </Button>
+        <Button ref={cancelar} size="sm" variant="outline" disabled={anonimizando} onClick={aoCancelar}>
+          Cancelar
+        </Button>
+      </div>
+    </div>
+  );
+};
+
 const Bloco: React.FC<{ titulo: string; children: React.ReactNode }> = ({ titulo, children }) => (
   <section aria-label={titulo} className="space-y-2">
     <h3 className="text-sm font-semibold uppercase tracking-wide text-zinc-400">{titulo}</h3>
@@ -396,6 +446,15 @@ const EdicaoDoAluno: React.FC<{
   const [erros, setErros] = useState<ErrosAluno>({});
   const [falha, setFalha] = useState<string | null>(null);
   const [salvando, setSalvando] = useState(false);
+  // Navegar ou mexer no estado depois de sair da tela (outra seção, outra
+  // academia) levaria a pessoa de volta para cá sem ela pedir.
+  const montado = useRef(true);
+  useEffect(() => {
+    montado.current = true;
+    return () => {
+      montado.current = false;
+    };
+  }, []);
 
   if (!podeEditarAlunos(academia.papel, academia.ativa)) {
     return (
@@ -417,7 +476,7 @@ const EdicaoDoAluno: React.FC<{
   const enviar = async (e: React.FormEvent) => {
     e.preventDefault();
     setFalha(null);
-    const v = validarAluno(form, hojeLocal());
+    const v = validarAluno(form, hojeNoFuso(academia.fuso));
     if (!v.ok) {
       setErros(v.erros);
       return;
@@ -425,6 +484,7 @@ const EdicaoDoAluno: React.FC<{
     setErros({});
     setSalvando(true);
     const res = await salvarAluno(academia.academia_id, v.dados, alunoId);
+    if (!montado.current) return;
     setSalvando(false);
     if (!res.sucesso) {
       setFalha(res.mensagem);

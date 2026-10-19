@@ -63,6 +63,10 @@ begin
 end
 $$;
 
+-- Já revogada de public, anon e authenticated em 20261005120000 (o create or
+-- replace mantém); repetido aqui porque agora a função é definer.
+revoke execute on function public.alunos_bloqueia_anonimizado() from public, anon, authenticated;
+
 -- 3. anonimizar_aluno: corpo idêntico ao de 20261005120000, com os códigos
 --    sem_permissao e anonimizar_cobranca_pendente. Continua usando tem_papel
 --    (dono, admin) sem checar a assinatura: é a única exceção do AGENTS.md.

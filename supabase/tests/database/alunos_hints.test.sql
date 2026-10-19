@@ -4,7 +4,7 @@
 -- Duas academias: nada de uma conta como duplicata na outra.
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(14);
+select plan(19);
 
 create function public.__erro_de(p_sql text)
 returns jsonb
@@ -37,18 +37,21 @@ insert into auth.users (id, email) values
 
 insert into public.academias (id, nome, slug, status) values
   ('f9000000-0000-4000-8000-00000000000a', 'Alunos A', 'alunos-hints-a', 'ativa'),
-  ('f9000000-0000-4000-8000-00000000000b', 'Alunos B', 'alunos-hints-b', 'ativa');
+  ('f9000000-0000-4000-8000-00000000000b', 'Alunos B', 'alunos-hints-b', 'ativa'),
+  ('f9000000-0000-4000-8000-00000000000c', 'Alunos C (suspensa)', 'alunos-hints-c', 'suspensa');
 
 insert into public.membros_academia (academia_id, user_id, papel) values
   ('f9000000-0000-4000-8000-00000000000a', 'f9000000-0000-4000-8000-0000000000a1', 'recepcao'),
   ('f9000000-0000-4000-8000-00000000000a', 'f9000000-0000-4000-8000-0000000000a2', 'professor'),
   ('f9000000-0000-4000-8000-00000000000a', 'f9000000-0000-4000-8000-0000000000a3', 'dono'),
-  ('f9000000-0000-4000-8000-00000000000b', 'f9000000-0000-4000-8000-0000000000b1', 'recepcao');
+  ('f9000000-0000-4000-8000-00000000000b', 'f9000000-0000-4000-8000-0000000000b1', 'recepcao'),
+  ('f9000000-0000-4000-8000-00000000000c', 'f9000000-0000-4000-8000-0000000000a3', 'dono');
 
 insert into public.alunos (id, academia_id, nome, cpf) values
   ('f9000000-0000-4000-8000-0000000001a1', 'f9000000-0000-4000-8000-00000000000a', 'Aluno Um', '11111111111'),
   ('f9000000-0000-4000-8000-0000000001a2', 'f9000000-0000-4000-8000-00000000000a', 'Aluno Dois', '22222222222'),
-  ('f9000000-0000-4000-8000-0000000001a3', 'f9000000-0000-4000-8000-00000000000a', 'Aluno Com Cobrança', null);
+  ('f9000000-0000-4000-8000-0000000001a3', 'f9000000-0000-4000-8000-00000000000a', 'Aluno Com Cobrança', null),
+  ('f9000000-0000-4000-8000-0000000001c1', 'f9000000-0000-4000-8000-00000000000c', 'Aluno da Suspensa', null);
 
 insert into public.cobrancas (academia_id, aluno_id, valor, vencimento) values
   ('f9000000-0000-4000-8000-00000000000a', 'f9000000-0000-4000-8000-0000000001a3', 150, current_date + 10);
@@ -145,6 +148,33 @@ select is(
                      where id = 'f9000000-0000-4000-8000-0000000001a2'$$),
   'aluno_anonimizado', 'editar aluno anonimizado: aluno_anonimizado');
 
+select is(
+  public.__hint_de($$select public.anonimizar_aluno('f9000000-0000-4000-8000-0000000009ff')$$),
+  'sem_permissao', 'aluno inexistente: sem_permissao (não diz se existe)');
+
+-- Academia suspensa: dono anonimiza mesmo assim (exceção LGPD), mas não edita.
+select is(
+  public.__hint_de($$update public.alunos set nome = 'Editado na suspensa'
+                     where id = 'f9000000-0000-4000-8000-0000000001c1'$$),
+  'sem erro', 'update na academia suspensa não dá erro (o RLS só filtra a linha)');
+select is(
+  (select nome from public.alunos where id = 'f9000000-0000-4000-8000-0000000001c1'),
+  'Aluno da Suspensa', 'mas a academia suspensa não altera o aluno');
+select is(
+  public.__hint_de($$select public.anonimizar_aluno('f9000000-0000-4000-8000-0000000001c1')$$),
+  'sem erro', 'academia suspensa: o dono anonimiza (exceção LGPD)');
+
+reset role;
+
+-- Recepção tentando editar o anonimizado: o gatilho avalia aluno_sem_dados_pessoais
+-- com o papel dela (o caminho que falhava por permissão antes desta migration).
+set local role authenticated;
+set local request.jwt.claim.sub = 'f9000000-0000-4000-8000-0000000000a1';
+set local request.jwt.claims = '{"sub":"f9000000-0000-4000-8000-0000000000a1","role":"authenticated"}';
+select is(
+  public.__hint_de($$update public.alunos set nome = 'Voltou'
+                     where id = 'f9000000-0000-4000-8000-0000000001a2'$$),
+  'aluno_anonimizado', 'recepção editando anonimizado: aluno_anonimizado (não permission denied)');
 reset role;
 
 select is(

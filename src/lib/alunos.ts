@@ -124,10 +124,27 @@ export function idadeEm(dataNascimento: string | null, hoje: string): number | n
   return ah - an - (mh < mn || (mh === mn && dh < dn) ? 1 : 0);
 }
 
-/** Hoje no fuso local, como AAAA-MM-DD. */
-export function hojeLocal(agora: Date = new Date()): string {
-  const p = (n: number) => String(n).padStart(2, "0");
-  return `${agora.getFullYear()}-${p(agora.getMonth() + 1)}-${p(agora.getDate())}`;
+/**
+ * Hoje no fuso da academia (academias.fuso), como AAAA-MM-DD: maioridade e
+ * "data no futuro" seguem o dia de lá, não o do navegador. Fuso inválido
+ * cai no relógio local.
+ */
+export function hojeNoFuso(fuso: string, agora: Date = new Date()): string {
+  try {
+    return new Intl.DateTimeFormat("en-CA", { timeZone: fuso, year: "numeric", month: "2-digit", day: "2-digit" }).format(agora);
+  } catch {
+    const p = (n: number) => String(n).padStart(2, "0");
+    return `${agora.getFullYear()}-${p(agora.getMonth() + 1)}-${p(agora.getDate())}`;
+  }
+}
+
+// AAAA-MM-DD que existe no calendário (sem 31/02, mês 13...), de 1900 em diante.
+function dataExiste(data: string): boolean {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(data);
+  if (!m) return false;
+  const [a, me, d] = [Number(m[1]), Number(m[2]), Number(m[3])];
+  const dt = new Date(Date.UTC(a, me - 1, d));
+  return a >= 1900 && dt.getUTCFullYear() === a && dt.getUTCMonth() === me - 1 && dt.getUTCDate() === d;
 }
 
 function semAcento(texto: string): string {
@@ -182,7 +199,7 @@ export function validarAluno(
   if (cpf && !cpfValido(cpf)) erros.cpf = "CPF inválido.";
 
   const data = f.data_nascimento.trim() || null;
-  if (data && (!/^\d{4}-\d{2}-\d{2}$/.test(data) || data > hoje)) {
+  if (data && (!dataExiste(data) || data > hoje)) {
     erros.data_nascimento = "Data de nascimento inválida.";
   }
 
@@ -239,15 +256,28 @@ function situacaoDe(a: { status: string; anonimizado_em: string | null }): Situa
   return a.status === "pendente" || a.status === "inativo" ? a.status : "ativo";
 }
 
+// O PostgREST devolve no máximo 1.000 linhas por consulta: a lista vem em
+// páginas, para a busca no aparelho não perder os alunos do fim.
+const PAGINA = 1000;
+
 export async function listarAlunos(academiaId: string): Promise<AlunoResumo[]> {
   if (!supabase) return [];
-  const { data, error } = await supabase
-    .from("alunos")
-    .select("id, nome, cpf, telefone, data_nascimento, status, anonimizado_em")
-    .eq("academia_id", academiaId)
-    .order("nome");
-  if (error) throw error;
-  return (data ?? []).map((a) => ({
+  type Linha = { id: string; nome: string; cpf: string | null; telefone: string | null;
+                 data_nascimento: string | null; status: string; anonimizado_em: string | null };
+  const linhas: Linha[] = [];
+  for (let inicio = 0; ; inicio += PAGINA) {
+    const { data, error } = await supabase
+      .from("alunos")
+      .select("id, nome, cpf, telefone, data_nascimento, status, anonimizado_em")
+      .eq("academia_id", academiaId)
+      .order("nome")
+      .order("id")
+      .range(inicio, inicio + PAGINA - 1);
+    if (error) throw error;
+    linhas.push(...(data ?? []));
+    if (!data || data.length < PAGINA) break;
+  }
+  return linhas.map((a) => ({
     id: a.id,
     nome: a.nome,
     cpf: a.cpf,
@@ -402,8 +432,14 @@ export async function salvarAluno(academiaId: string, dados: DadosAluno, alunoId
     .select("id")
     .maybeSingle();
   if (error) return { sucesso: false, mensagem: mensagemDeErroAoSalvar(error) };
-  // Sem linha devolvida: o RLS escondeu o aluno da gravação (papel ou assinatura).
-  if (!data) return { sucesso: false, mensagem: MSG_SEM_PERMISSAO };
+  // Sem linha devolvida: o aluno não é desta academia, ou o RLS o escondeu da
+  // gravação (papel ou assinatura). O banco não diz qual dos dois.
+  if (!data) {
+    return {
+      sucesso: false,
+      mensagem: "Não foi possível salvar: o aluno não está nesta academia, seu papel não altera alunos, ou a assinatura está suspensa.",
+    };
+  }
   return { sucesso: true, id: data.id };
 }
 

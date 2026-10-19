@@ -10,8 +10,8 @@ import {
 
 vi.mock("@supabase/supabase-js", () => ({ createClient: vi.fn() }));
 
-const A: AcademiaDoMembro = { academia_id: "a", nome: "Academia A", slug: "academia-a", papel: "dono", ativa: true };
-const B: AcademiaDoMembro = { academia_id: "b", nome: "Academia B", slug: "academia-b", papel: "professor", ativa: false };
+const A: AcademiaDoMembro = { academia_id: "a", nome: "Academia A", slug: "academia-a", papel: "dono", ativa: true, fuso: "America/Fortaleza" };
+const B: AcademiaDoMembro = { academia_id: "b", nome: "Academia B", slug: "academia-b", papel: "professor", ativa: false, fuso: "America/Fortaleza" };
 
 describe("Menu por papel (tabela do AGENTS.md)", () => {
   it("professor não vê matrículas nem cobranças", () => {
@@ -70,6 +70,8 @@ describe("Caminhos do painel", () => {
     expect(lerCaminhoPainel("/painel/academia-a/alunos/<script>")).toEqual({ slug: "academia-a", secao: "alunos", item: null });
     expect(lerCaminhoPainel(`/painel/academia-a/inexistente/${id}`).item).toBeNull();
     expect(caminhoPainel("academia-a", "alunos", id)).toBe(`/painel/academia-a/alunos/${id}`);
+    expect(caminhoPainel("academia-a", "alunos", "novo")).toBe("/painel/academia-a/alunos/novo");
+    expect(lerCaminhoPainel(`/painel/academia-a/alunos/${id}/extra`)).toEqual({ slug: "academia-a", secao: "alunos", item: id });
     expect(caminhoPainel("academia-a", "inicio", id)).toBe("/painel/academia-a");
   });
 });
@@ -136,7 +138,7 @@ describe("Academias do login", () => {
     await lib.listarMinhasAcademias();
 
     expect(cliente.from).toHaveBeenCalledWith("membros_academia");
-    expect(cliente.select).toHaveBeenCalledWith("academia_id, papel, academias(nome, slug)");
+    expect(cliente.select).toHaveBeenCalledWith("academia_id, papel, academias(nome, slug, fuso)");
     expect(cliente.eqUsuario).toHaveBeenCalledWith("user_id", "user-1");
     expect(cliente.eqAtivo).toHaveBeenCalledWith("ativo", true);
   });
@@ -148,11 +150,23 @@ describe("Academias do login", () => {
     const lista = await lib.listarMinhasAcademias();
 
     expect(lista).toEqual([
-      { academia_id: "a", nome: "Alpha", slug: "alpha", papel: "dono", ativa: true },
-      { academia_id: "b", nome: "Zen Dojo", slug: "zen", papel: "professor", ativa: false },
+      { academia_id: "a", nome: "Alpha", slug: "alpha", papel: "dono", ativa: true, fuso: "America/Fortaleza" },
+      { academia_id: "b", nome: "Zen Dojo", slug: "zen", papel: "professor", ativa: false, fuso: "America/Fortaleza" },
     ]);
     expect(cliente.rpc).toHaveBeenCalledWith("academia_ativa", { p_academia_id: "a" });
     expect(cliente.rpc).not.toHaveBeenCalledWith("academia_ativa", { p_academia_id: "t" });
+  });
+
+  it("leva o fuso de cada academia (sem fuso, o padrão)", async () => {
+    const cliente = clienteFalso(
+      [
+        { academia_id: "a", papel: "dono", academias: { nome: "Alpha", slug: "alpha", fuso: "America/Manaus" } },
+        { academia_id: "b", papel: "dono", academias: { nome: "Beta", slug: "beta", fuso: null } },
+      ],
+      { a: true, b: true }
+    );
+    const lib = await carregarComCliente(cliente);
+    expect((await lib.listarMinhasAcademias()).map((a) => a.fuso)).toEqual(["America/Manaus", "America/Fortaleza"]);
   });
 
   it("sem sessão, nenhuma academia", async () => {
