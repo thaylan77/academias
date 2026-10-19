@@ -2,7 +2,7 @@
 -- a assinatura em dia; professor, aluno, totem e outra academia não alcançam.
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(53);
+select plan(57);
 
 create function public.__erro_de(p_sql text)
 returns jsonb
@@ -207,7 +207,13 @@ select is(public.__hint_de($$select public.criar_matricula('fc000000-0000-4000-8
 select is(public.__hint_de($$select public.criar_matricula('fc000000-0000-4000-8000-00000000000a', public.__mat('{"turma_ids":[],"plano_id":"fc000000-0000-4000-8000-0000000004b1","dia_vencimento":5}'))$$),
           'dados_invalidos', 'plano de outra academia: dados_invalidos');
 select is(public.__hint_de($$select public.criar_matricula('fc000000-0000-4000-8000-00000000000a', public.__mat('{"turma_ids":[],"plano_id":"fc000000-0000-4000-8000-0000000004a1"}'))$$),
-          'dados_invalidos', 'plano sem dia de vencimento (nunca seria cobrada): dados_invalidos');
+          'dia_vencimento_obrigatorio', 'plano sem dia de vencimento (nunca seria cobrada): dia_vencimento_obrigatorio');
+select is(public.__hint_de($$select public.criar_matricula('fc000000-0000-4000-8000-00000000000a',
+            public.__mat(jsonb_build_object('turma_ids', '[]'::jsonb, 'data_inicio', public.__mes(2, 4), 'cobrar_a_partir', public.__mes(1))))$$),
+          'cobrar_a_partir_invalido', 'cobrar_a_partir antes do mês em que as aulas começam: cobrar_a_partir_invalido');
+select is(public.__hint_de($$select public.criar_matricula('fc000000-0000-4000-8000-00000000000a',
+            public.__mat(jsonb_build_object('turma_ids', '[]'::jsonb, 'data_inicio', public.__mes(2, 4), 'cobrar_a_partir', public.__mes(2))))$$),
+          'sem erro', 'cobrar_a_partir no mês do início futuro é aceito');
 select is(public.__hint_de($$select public.criar_matricula('fc000000-0000-4000-8000-00000000000a', public.__mat('{"turma_ids":[],"aluno_id":"fc000000-0000-4000-8000-0000000001a3"}'))$$),
           'dados_invalidos', 'aluno anonimizado: dados_invalidos');
 select is(public.__hint_de($$select public.criar_matricula('fc000000-0000-4000-8000-00000000000a', public.__mat('{"turma_ids":[],"aluno_id":"fc000000-0000-4000-8000-0000000001b1"}'))$$),
@@ -237,6 +243,13 @@ set local role authenticated;
 select public.__como('fc000000-0000-4000-8000-0000000000a1');
 select is(public.__hint_de($$select public.aprovar_matricula('fc000000-0000-4000-8000-0000000005a1', 29::smallint)$$),
           'dados_invalidos', 'dia de vencimento 29 na aprovação: dados_invalidos');
+select is(public.__hint_de($$select public.aprovar_matricula('fc000000-0000-4000-8000-0000000005a1')$$),
+          'dia_vencimento_obrigatorio', 'matrícula com plano aprovada sem dia de vencimento: dia_vencimento_obrigatorio');
+reset role;
+select is((select status from public.matriculas where id = 'fc000000-0000-4000-8000-0000000005a1'), 'pendente',
+          'e continua pendente');
+set local role authenticated;
+select public.__como('fc000000-0000-4000-8000-0000000000a1');
 select is(public.__hint_de($$select public.aprovar_matricula('fc000000-0000-4000-8000-0000000005a1', 10::smallint)$$),
           'sem erro', 'recepção aprova a matrícula online pedida há 40 dias');
 reset role;

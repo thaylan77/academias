@@ -91,7 +91,8 @@ O código vai no `hint` do erro (`raise exception '<mensagem em português>' usi
 | `slug_reservado` | `criar_academia` | slug é caminho do app (`painel`, `portal`, `api`, `admin`, `entrar`, `assets`). O check `academias_slug_nao_reservado` vale também para a troca de slug pelo billing |
 | `slug_em_uso` | `criar_academia` | outra academia já usa o slug |
 | `slug_invalido` | `criar_academia` | slug fora do formato: 3 a 40 caracteres, letras minúsculas, números e hífen, sem hífen nas pontas |
-| `cobrar_a_partir_invalido` | `criar_matricula` | mês inicial de cobrança fora do dia 1 ou antes do mês atual |
+| `cobrar_a_partir_invalido` | `criar_matricula` | mês inicial de cobrança fora do dia 1, antes do mês atual ou antes do mês de início das aulas |
+| `dia_vencimento_obrigatorio` | `criar_matricula`, `aprovar_matricula` | matrícula com plano sem dia de vencimento (`gerar_cobrancas` nunca a cobraria) |
 | `matricula_nao_pendente` | `aprovar_matricula` | a matrícula não está pendente (já aprovada, ativa ou cancelada) |
 | `horario_invalido` | `salvar_turma` | dia fora de domingo a sábado, hora fora de `HH:MM` ou fim não depois do início |
 | `horario_sobreposto` | `salvar_turma` | dois horários da turma se sobrepõem no mesmo dia |

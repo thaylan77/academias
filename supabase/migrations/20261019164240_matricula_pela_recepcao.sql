@@ -100,18 +100,22 @@ begin
     from jsonb_array_elements(p_dados -> 'turma_ids') e;
 
   if v_plano is not null and v_dia is null then
-    raise exception 'Matrícula com plano precisa do dia de vencimento' using hint = 'dados_invalidos';
+    raise exception 'Matrícula com plano precisa do dia de vencimento'
+      using hint = 'dia_vencimento_obrigatorio';
   end if;
 
   if v_fim is not null and v_fim < v_inicio then
     raise exception 'A data de fim não pode ser antes do início' using hint = 'dados_invalidos';
   end if;
 
-  -- Mês inicial de cobrança: dia 1 e não antes do mês do cadastro (hoje). O
-  -- gatilho confere de novo; aqui o erro sai com código.
+  -- Mês inicial de cobrança: dia 1, não antes do mês do cadastro (hoje; o
+  -- gatilho confere de novo) e não antes do mês em que as aulas começam (senão
+  -- cobraria meses sem aula, numa matrícula com início futuro).
   if v_cobrar is not null
-     and (extract(day from v_cobrar) <> 1 or v_cobrar < date_trunc('month', v_hoje::timestamp)::date) then
-    raise exception 'O mês inicial de cobrança é o dia 1 de um mês, a partir do mês atual'
+     and (extract(day from v_cobrar) <> 1
+          or v_cobrar < date_trunc('month', v_hoje::timestamp)::date
+          or v_cobrar < date_trunc('month', v_inicio::timestamp)::date) then
+    raise exception 'O mês inicial de cobrança é o dia 1 de um mês, a partir do mês atual e do mês de início'
       using hint = 'cobrar_a_partir_invalido';
   end if;
 
@@ -155,8 +159,8 @@ $$;
 -- primeira cobrança seria calculada a partir do mês do pedido (vencimento
 -- que pode nascer vencido; período trimestral, semestral ou anual contado
 -- do mês errado). A matrícula online nasce sem dia de vencimento:
--- p_dia_vencimento (1 a 28) o define na aprovação; sem ele, a matrícula com
--- plano fica sem ser cobrada até alguém informar o dia.
+-- p_dia_vencimento (1 a 28) o define na aprovação; com plano, ele é
+-- obrigatório quando a matrícula ainda não tem dia (dia_vencimento_obrigatorio).
 create or replace function public.aprovar_matricula(p_matricula_id uuid, p_dia_vencimento smallint default null)
 returns void
 language plpgsql
@@ -185,6 +189,13 @@ begin
   if v_mat.status <> 'pendente' then
     raise exception 'Só matrícula pendente pode ser aprovada'
       using hint = 'matricula_nao_pendente';
+  end if;
+
+  -- Com plano, aprovar sem dia de vencimento deixaria a matrícula ativa sem
+  -- nunca ser cobrada (gerar_cobrancas pula). A tela pede o dia.
+  if v_mat.plano_id is not null and coalesce(p_dia_vencimento, v_mat.dia_vencimento) is null then
+    raise exception 'Informe o dia de vencimento para aprovar a matrícula com plano'
+      using hint = 'dia_vencimento_obrigatorio';
   end if;
 
   v_hoje := public.hoje_academia(v_academia);
