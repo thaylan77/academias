@@ -22,6 +22,8 @@ import { Label } from "../../components/ui/label";
 import { Alert, AlertDescription } from "../../components/ui/alert";
 import { Badge } from "../../components/ui/badge";
 import { Shield, LogOut, Building2 } from "lucide-react";
+import { AlunosSecao } from "./alunos";
+import { PainelContexto, PainelContextoValor } from "./contexto";
 
 const ROTULO_PAPEL: Record<AcademiaDoMembro["papel"], string> = {
   dono: "Dono",
@@ -30,11 +32,6 @@ const ROTULO_PAPEL: Record<AcademiaDoMembro["papel"], string> = {
   recepcao: "Recepção",
 };
 
-/** Contexto que as telas do painel usam: academia selecionada e papel nela. */
-export interface PainelContextoValor {
-  academia: AcademiaDoMembro;
-}
-export const PainelContexto = React.createContext<PainelContextoValor | null>(null);
 
 // Caminho atual do navegador, atualizado por navegação do painel e pelo voltar/avançar.
 // `substituir` corrige o endereço sem criar entrada no histórico; o estado acompanha
@@ -129,11 +126,12 @@ export const PainelApp: React.FC = () => {
   // ganha o slug; seção que o papel não vê volta para o início.
   useEffect(() => {
     if (estado.fase !== "pronto") return;
-    const { slug, secao } = lerCaminhoPainel(caminho);
+    const { slug, secao, item } = lerCaminhoPainel(caminho);
     const escolha = escolherAcademia(estado.academias, slug, lerAcademiaGuardada());
     if (escolha.tipo !== "academia") return;
     const { academia } = escolha;
-    const correto = caminhoPainel(academia.slug, papelPodeVer(academia.papel, secao) ? secao : "inicio");
+    const pode = papelPodeVer(academia.papel, secao);
+    const correto = caminhoPainel(academia.slug, pode ? secao : "inicio", pode ? item : null);
     if (correto !== caminho) substituir(correto);
   }, [estado, caminho, substituir]);
 
@@ -236,7 +234,7 @@ export const PainelApp: React.FC = () => {
     );
   }
 
-  const { slug, secao } = lerCaminhoPainel(caminho);
+  const { slug, secao, item } = lerCaminhoPainel(caminho);
   const escolha = escolherAcademia(estado.academias, slug, lerAcademiaGuardada());
 
   if (escolha.tipo === "sem_acesso") {
@@ -270,9 +268,14 @@ export const PainelApp: React.FC = () => {
 
   const academia = escolha.academia;
   const secaoVisivel: SecaoPainel = papelPodeVer(academia.papel, secao) ? secao : "inicio";
+  const contexto: PainelContextoValor = {
+    academia,
+    item: secaoVisivel === secao ? item : null,
+    abrir: (novaSecao, novoItem = null) => navegar(caminhoPainel(academia.slug, novaSecao, novoItem)),
+  };
 
   return (
-    <PainelContexto.Provider value={{ academia }}>
+    <PainelContexto.Provider value={contexto}>
       <Moldura aoSair={sair}>
         <div className="flex flex-wrap items-center justify-between gap-3 mb-6">
           <div>
@@ -330,7 +333,12 @@ export const PainelApp: React.FC = () => {
             </ul>
           </nav>
           <section>
-            <SecaoEmConstrucao secao={secaoVisivel} />
+            {secaoVisivel === "alunos" ? (
+              // A chave zera o estado da tela ao trocar de academia.
+              <AlunosSecao key={academia.academia_id} />
+            ) : (
+              <SecaoEmConstrucao secao={secaoVisivel} />
+            )}
           </section>
         </div>
       </Moldura>

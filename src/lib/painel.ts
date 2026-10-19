@@ -18,7 +18,11 @@ export interface AcademiaDoMembro {
   // Assinatura ativa ou trial válido (academia_ativa). Sem isso, a academia
   // lê, mas não altera.
   ativa: boolean;
+  // Fuso da academia (academias.fuso): datas de negócio usam o dia de lá.
+  fuso: string;
 }
+
+const FUSO_PADRAO = "America/Fortaleza";
 
 export type SecaoPainel = "inicio" | "alunos" | "turmas" | "matriculas" | "cobrancas" | "graduacoes";
 
@@ -54,8 +58,8 @@ function ehPapelPainel(papel: unknown): papel is PapelPainel {
 // ------------------------------------------------------------------ dados
 
 const ACADEMIAS_DEMO: AcademiaDoMembro[] = [
-  { academia_id: "demo-a", nome: "Honor Team Demo A", slug: "honor-demo-a", papel: "dono", ativa: true },
-  { academia_id: "demo-b", nome: "Honor Team Demo B", slug: "honor-demo-b", papel: "professor", ativa: false },
+  { academia_id: "demo-a", nome: "Honor Team Demo A", slug: "honor-demo-a", papel: "dono", ativa: true, fuso: FUSO_PADRAO },
+  { academia_id: "demo-b", nome: "Honor Team Demo B", slug: "honor-demo-b", papel: "professor", ativa: false, fuso: FUSO_PADRAO },
 ];
 let sessaoDemo = false;
 
@@ -72,7 +76,7 @@ type ClienteSupabase = NonNullable<typeof supabase>;
 async function academiasDoUsuario(cliente: ClienteSupabase, usuarioId: string): Promise<AcademiaDoMembro[]> {
   const { data, error } = await cliente
     .from("membros_academia")
-    .select("academia_id, papel, academias(nome, slug)")
+    .select("academia_id, papel, academias(nome, slug, fuso)")
     .eq("user_id", usuarioId)
     .eq("ativo", true);
   if (error) throw error;
@@ -88,6 +92,7 @@ async function academiasDoUsuario(cliente: ClienteSupabase, usuarioId: string): 
         academia_id: v.academia_id,
         nome: v.academias!.nome,
         slug: v.academias!.slug,
+        fuso: v.academias!.fuso || FUSO_PADRAO,
         papel: v.papel as PapelPainel,
         ativa: ativa === true,
       };
@@ -296,19 +301,25 @@ export function escolherAcademia(
 export interface CaminhoPainel {
   slug: string | null;
   secao: SecaoPainel;
+  // Registro aberto dentro da seção: um id (uuid) ou "novo". Null na lista.
+  item: string | null;
 }
 
 const SECOES: SecaoPainel[] = ["inicio", "alunos", "turmas", "matriculas", "cobrancas", "graduacoes"];
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-/** Lê `/painel`, `/painel/<slug>` e `/painel/<slug>/<seção>`. */
+/** Lê `/painel`, `/painel/<slug>`, `/painel/<slug>/<seção>` e `/painel/<slug>/<seção>/<id ou novo>`. */
 export function lerCaminhoPainel(pathname: string): CaminhoPainel {
   const partes = pathname.split("/").filter(Boolean);
   const slug = partes[1] ?? null;
   const secao = SECOES.find((s) => s === partes[2]) ?? "inicio";
-  return { slug, secao };
+  const bruto = secao === "inicio" ? undefined : partes[3];
+  const item = bruto === "novo" || (bruto && UUID.test(bruto)) ? bruto.toLowerCase() : null;
+  return { slug, secao, item };
 }
 
-export function caminhoPainel(slug: string | null, secao: SecaoPainel = "inicio"): string {
+export function caminhoPainel(slug: string | null, secao: SecaoPainel = "inicio", item: string | null = null): string {
   if (!slug) return "/painel";
-  return secao === "inicio" ? `/painel/${slug}` : `/painel/${slug}/${secao}`;
+  if (secao === "inicio") return `/painel/${slug}`;
+  return item ? `/painel/${slug}/${secao}/${item}` : `/painel/${slug}/${secao}`;
 }

@@ -4,8 +4,8 @@ import { PainelApp } from "../pages/painel/painel-app";
 import * as painel from "../lib/painel";
 import { AcademiaDoMembro } from "../lib/painel";
 
-const A: AcademiaDoMembro = { academia_id: "a", nome: "Academia Alpha", slug: "alpha", papel: "dono", ativa: true };
-const B: AcademiaDoMembro = { academia_id: "b", nome: "Academia Beta", slug: "beta", papel: "professor", ativa: false };
+const A: AcademiaDoMembro = { academia_id: "a", nome: "Academia Alpha", slug: "alpha", papel: "dono", ativa: true, fuso: "America/Fortaleza" };
+const B: AcademiaDoMembro = { academia_id: "b", nome: "Academia Beta", slug: "beta", papel: "professor", ativa: false, fuso: "America/Fortaleza" };
 
 function abrir(caminho: string) {
   window.history.pushState({}, "", caminho);
@@ -150,7 +150,7 @@ describe("Painel da equipe: entrada e escolha de academia", () => {
 
     window.history.pushState({}, "", "/painel/alpha/alunos");
     fireEvent(window, new PopStateEvent("popstate"));
-    await waitFor(() => expect(screen.getByText(/issue #26/)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByRole("heading", { name: "Alunos" })).toBeInTheDocument());
   });
 
   it("Ctrl+clique no menu fica com o navegador (nova aba), sem navegar aqui", async () => {
