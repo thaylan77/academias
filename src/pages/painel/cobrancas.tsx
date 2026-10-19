@@ -22,6 +22,7 @@ import {
   validarBaixa,
 } from "../../lib/cobrancas";
 import { formatarTelefone, hojeNoFuso } from "../../lib/alunos";
+import { diaNoFuso } from "../../lib/cobrancas";
 import { usarPainel } from "./contexto";
 import { Button } from "../../components/ui/button";
 import { Input } from "../../components/ui/input";
@@ -38,6 +39,7 @@ const ROTULO_STATUS: Record<Cobranca["status"], string> = {
   paga: "Paga",
   cancelada: "Cancelada",
   estornada: "Estornada",
+  desconhecido: "Outra situação",
 };
 
 type Dados = { cobrancas: Cobranca[]; inadimplentes: Inadimplente[]; matriculas: MatriculaCobravel[] };
@@ -224,7 +226,7 @@ const ListaDeCobrancas: React.FC<{ cobrancas: Cobranca[]; aoMudar: () => void }>
                     <span className="block font-medium text-white">{c.aluno}</span>
                     <span className="block text-xs text-zinc-400">
                       {c.descricao ?? "Cobrança"} · vence {dataBr(c.vencimento)}
-                      {c.status === "paga" && c.pago_em ? ` · paga em ${dataBr(c.pago_em)}` : ""}
+                      {c.status === "paga" && c.pago_em ? ` · paga em ${dataBr(diaNoFuso(c.pago_em, academia.fuso))}` : ""}
                       {c.forma_pagamento && c.status === "paga" ? ` (${ROTULO_FORMA[c.forma_pagamento as FormaPagamento] ?? c.forma_pagamento})` : ""}
                     </span>
                     {c.divergencia && (
@@ -278,14 +280,20 @@ const FormularioBaixa: React.FC<{ cobranca: Cobranca; aoTerminar: Fim }> = ({ co
   const [valor, setValor] = useState("");
   const [erro, setErro] = useState<string | null>(null);
   const [salvando, setSalvando] = useState(false);
+  // O botão desabilitado só vale no próximo render: a trava síncrona impede
+  // um segundo envio por clique duplo ou Enter repetido.
+  const emAndamento = useRef(false);
 
   const enviar = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (emAndamento.current) return;
     const v = validarBaixa({ forma, data, valor }, hoje);
     if (!v.ok) return setErro(v.mensagem);
     setErro(null);
+    emAndamento.current = true;
     setSalvando(true);
     const res = await baixarCobranca(cobranca.id, v.dados, academia.fuso);
+    emAndamento.current = false;
     setSalvando(false);
     aoTerminar(res);
   };
@@ -318,11 +326,15 @@ const FormularioBaixa: React.FC<{ cobranca: Cobranca; aoTerminar: Fim }> = ({ co
 
 const ConfirmacaoCancelamento: React.FC<{ cobranca: Cobranca; aoTerminar: Fim }> = ({ cobranca, aoTerminar }) => {
   const [salvando, setSalvando] = useState(false);
+  const emAndamento = useRef(false);
   const voltar = useRef<HTMLButtonElement>(null);
   useEffect(() => voltar.current?.focus(), []);
   const confirmar = async () => {
+    if (emAndamento.current) return;
+    emAndamento.current = true;
     setSalvando(true);
     const res = await cancelarCobranca(cobranca.id);
+    emAndamento.current = false;
     setSalvando(false);
     aoTerminar(res);
   };
@@ -348,15 +360,23 @@ const GerarAgora: React.FC<{ matriculas: MatriculaCobravel[]; aoMudar: () => voi
   const [matriculaId, setMatriculaId] = useState("");
   const [aviso, setAviso] = useState<{ tipo: "ok" | "erro"; texto: string } | null>(null);
   const [gerando, setGerando] = useState(false);
+  const emAndamento = useRef(false);
   const escolhida = matriculas.find((m) => m.id === matriculaId);
 
   const gerar = async () => {
-    if (!escolhida) return;
+    if (!escolhida || emAndamento.current) return;
+    emAndamento.current = true;
     setGerando(true);
     setAviso(null);
     const res = await gerarCobrancasAgora(escolhida.id);
+    emAndamento.current = false;
     setGerando(false);
-    if (!res.sucesso) return setAviso({ tipo: "erro", texto: res.mensagem });
+    if (!res.sucesso) {
+      setAviso({ tipo: "erro", texto: res.mensagem });
+      // A recusa quase sempre é porque a matrícula mudou: a lista recarrega.
+      aoMudar();
+      return;
+    }
     setAviso({
       tipo: "ok",
       texto: res.geradas

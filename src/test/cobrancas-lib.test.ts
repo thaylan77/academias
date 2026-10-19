@@ -2,6 +2,7 @@ import { describe, it, expect, afterEach, vi } from "vitest";
 import {
   Cobranca,
   aceitaAcaoManual,
+  diaNoFuso,
   estaVencida,
   filtrarCobrancas,
   lerValor,
@@ -185,5 +186,96 @@ describe("Dados (sempre filtrados pela academia selecionada)", () => {
     expect(cliente.rpc).toHaveBeenLastCalledWith("cancelar_cobranca", { p_cobranca_id: "c1" });
     expect(await lib.gerarCobrancasAgora("m1")).toEqual({ sucesso: true, geradas: 2 });
     expect(cliente.rpc).toHaveBeenLastCalledWith("gerar_cobrancas_matricula", { p_matricula_id: "m1" });
+  });
+});
+
+describe("Cobertura pedida na primeira revisão", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("valor com ponto decimal não vira cem vezes maior", () => {
+    expect(lerValor("150.50")).toBe(150.5);
+    expect(lerValor("150.00")).toBe(150);
+    expect(lerValor("99.99")).toBe(99.99);
+    expect(lerValor("1.234")).toBe(1234);
+    expect(lerValor("1.234.567")).toBe(1234567);
+    expect(lerValor(" 150,00 ")).toBe(150);
+    expect(lerValor("0,01")).toBe(0.01);
+    expect(lerValor("0,00")).toBeNull();
+    expect(lerValor("12.34,56")).toBeNull();
+    expect(lerValor("1,234.56")).toBeNull();
+  });
+
+  it("dia do pagamento no fuso da academia, não em UTC", () => {
+    // 01:30 de 13/09 em UTC ainda é 22:30 de 12/09 em Fortaleza.
+    expect(diaNoFuso("2026-09-13T01:30:00+00:00", "America/Fortaleza")).toBe("2026-09-12");
+    expect(diaNoFuso("2026-09-13T01:30:00+00:00", "UTC")).toBe("2026-09-13");
+  });
+
+  it("data de pagamento que não existe no calendário é recusada antes de enviar", () => {
+    expect(validarBaixa({ forma: "pix", data: "2026-02-31", valor: "" }, "2026-10-19"))
+      .toEqual({ ok: false, mensagem: "Informe a data do pagamento." });
+  });
+
+  it("status que a tela não conhece nunca aceita ação manual", async () => {
+    const linha = { id: "c1", aluno_id: "a1", matricula_id: null, competencia: null, descricao: null, valor: "150.00",
+      vencimento: "2026-10-10", status: "em_disputa", pago_em: null, valor_pago: "145.50", forma_pagamento: null, baixa_em: null,
+      gateway_id: null, emissao_iniciada_em: null, divergencia: null, alunos: null };
+    const lib = await carregarComCliente(clienteFalso({ cobrancas: { data: [linha], error: null } }));
+    const [c] = await lib.listarCobrancas(ACADEMIA);
+    expect(c.status).toBe("desconhecido");
+    expect(lib.aceitaAcaoManual(c)).toBe(false);
+    expect(c.valor_pago).toBe(145.5);
+  });
+
+  it("inadimplentes: números da view convertidos; inadimplentes e matrículas em páginas", async () => {
+    let lib = await carregarComCliente(clienteFalso({
+      vw_inadimplentes: { data: [{ aluno_id: "a1", nome: "Ana", telefone: null, cobrancas_atrasadas: "2", total_atrasado: "299.90", vencimento_mais_antigo: "2026-08-10" }], error: null },
+    }));
+    expect(await lib.listarInadimplentes(ACADEMIA)).toEqual([
+      { aluno_id: "a1", nome: "Ana", telefone: null, cobrancas_atrasadas: 2, total_atrasado: 299.9, vencimento_mais_antigo: "2026-08-10" },
+    ]);
+
+    const cliente = clienteFalso({});
+    cliente.from.mockImplementation((tabela: string) => {
+      const q: Record<string, unknown> = {};
+      let inicio = 0;
+      for (const metodo of ["select", "eq", "order", "range"]) {
+        q[metodo] = (...args: unknown[]) => {
+          cliente.chamadas.push({ tabela, metodo, args });
+          if (metodo === "range") inicio = args[0] as number;
+          return q;
+        };
+      }
+      q.then = (ok: (r: Resposta) => unknown) =>
+        Promise.resolve({ data: inicio === 0 ? Array.from({ length: 1000 }, (_, i) => ({ id: `m${i}`, aluno_id: `a${i}` })) : [], error: null }).then(ok);
+      return q;
+    });
+    lib = await carregarComCliente(cliente);
+    await lib.listarInadimplentes(ACADEMIA);
+    await lib.listarMatriculasAtivas(ACADEMIA);
+    const paginas = (t: string) => cliente.chamadas.filter((c) => c.tabela === t && c.metodo === "range").length;
+    expect(paginas("vw_inadimplentes")).toBe(2);
+    expect(paginas("matriculas")).toBe(2);
+  });
+
+  it("recusa de cancelar e de gerar vira mensagem genérica", async () => {
+    const cliente = clienteFalso({});
+    cliente.rpc.mockResolvedValue({ data: null, error: { message: "texto do banco" } });
+    const lib = await carregarComCliente(cliente);
+    const cancelar = await lib.cancelarCobranca("c1");
+    expect(cancelar.sucesso).toBe(false);
+    if (!cancelar.sucesso) expect(cancelar.mensagem).not.toContain("texto do banco");
+    const gerar = await lib.gerarCobrancasAgora("m1");
+    expect(gerar.sucesso).toBe(false);
+    if (!gerar.sucesso) expect(gerar.mensagem).not.toContain("texto do banco");
+  });
+
+  it("gerir: admin e recepção só com a assinatura em dia", () => {
+    expect(podeGerirCobrancas("admin", true)).toBe(true);
+    expect(podeGerirCobrancas("admin", false)).toBe(false);
+    expect(podeGerirCobrancas("recepcao", false)).toBe(false);
+    expect(estaVencida(cob({ status: "cancelada", vencimento: "2020-01-01" }), "2026-10-19")).toBe(false);
   });
 });

@@ -13,7 +13,9 @@ import { PapelPainel } from "./painel";
  * qualquer recusa vira uma mensagem genérica com a lista recarregada.
  */
 
-export type StatusCobranca = "pendente" | "paga" | "cancelada" | "estornada";
+// "desconhecido": status que o banco passou a usar e a tela ainda não conhece.
+// Nunca aceita ação manual.
+export type StatusCobranca = "pendente" | "paga" | "cancelada" | "estornada" | "desconhecido";
 export type FormaPagamento = "pix" | "boleto" | "cartao" | "dinheiro" | "outro";
 
 export const ROTULO_FORMA: Record<FormaPagamento, string> = {
@@ -105,12 +107,49 @@ export function filtrarCobrancas(
 
 export const reais = (v: number) => v.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 
-/** Valor digitado ("150", "150,5", "1.234,56") em número com 2 casas, ou null. */
+/**
+ * Valor digitado em número com 2 casas, ou null. Aceita o jeito brasileiro
+ * ("150", "150,5", "1.234,56") e o ponto decimal ("150.50"). Ponto só conta
+ * como milhar quando separa grupos de 3 ("1.234"); senão, "150.50" viraria
+ * 15050.
+ */
 export function lerValor(texto: string): number | null {
-  const limpo = texto.trim().replace(/\./g, "").replace(",", ".");
-  if (!/^\d{1,8}(\.\d{1,2})?$/.test(limpo)) return null;
-  const n = Number(limpo);
+  const t = texto.trim();
+  let normal: string;
+  if (t.includes(",")) {
+    if (!/^(\d{1,3}(\.\d{3})+|\d+),\d{1,2}$/.test(t)) return null;
+    normal = t.replace(/\./g, "").replace(",", ".");
+  } else if (/^\d+\.\d{1,2}$/.test(t)) {
+    normal = t;
+  } else if (/^\d{1,3}(\.\d{3})+$/.test(t)) {
+    normal = t.replace(/\./g, "");
+  } else if (/^\d+$/.test(t)) {
+    normal = t;
+  } else {
+    return null;
+  }
+  if (!/^\d{1,8}(\.\d{1,2})?$/.test(normal)) return null;
+  const n = Number(normal);
   return n > 0 ? Math.round(n * 100) / 100 : null;
+}
+
+// AAAA-MM-DD que existe no calendário (sem 31/02).
+function dataExiste(data: string): boolean {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(data);
+  if (!m) return false;
+  const dt = new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3])));
+  return dt.getUTCFullYear() === Number(m[1]) && dt.getUTCMonth() === Number(m[2]) - 1 && dt.getUTCDate() === Number(m[3]);
+}
+
+/** Dia (AAAA-MM-DD) de um instante no fuso da academia: pago_em vem em UTC. */
+export function diaNoFuso(instante: string, fuso: string): string {
+  const d = new Date(instante);
+  if (Number.isNaN(d.getTime())) return instante.slice(0, 10);
+  try {
+    return new Intl.DateTimeFormat("en-CA", { timeZone: fuso, year: "numeric", month: "2-digit", day: "2-digit" }).format(d);
+  } catch {
+    return instante.slice(0, 10);
+  }
 }
 
 /**
@@ -167,7 +206,7 @@ export async function listarCobrancas(academiaId: string): Promise<Cobranca[]> {
     descricao: c.descricao,
     valor: Number(c.valor),
     vencimento: c.vencimento,
-    status: (["pendente", "paga", "cancelada", "estornada"] as const).find((s) => s === c.status) ?? "pendente",
+    status: (["pendente", "paga", "cancelada", "estornada"] as const).find((s) => s === c.status) ?? "desconhecido",
     pago_em: c.pago_em,
     valor_pago: c.valor_pago === null ? null : Number(c.valor_pago),
     forma_pagamento: c.forma_pagamento,
@@ -180,13 +219,22 @@ export async function listarCobrancas(academiaId: string): Promise<Cobranca[]> {
 /** Atraso calculado no servidor, no fuso da academia (vw_inadimplentes). */
 export async function listarInadimplentes(academiaId: string): Promise<Inadimplente[]> {
   if (!supabase) return [];
-  const { data, error } = await supabase
-    .from("vw_inadimplentes")
-    .select("aluno_id, nome, telefone, cobrancas_atrasadas, total_atrasado, vencimento_mais_antigo")
-    .eq("academia_id", academiaId)
-    .order("vencimento_mais_antigo");
-  if (error) throw error;
-  return (data ?? []).map((i) => ({
+  type Linha = { aluno_id: string | null; nome: string | null; telefone: string | null; cobrancas_atrasadas: number | null;
+                 total_atrasado: number | null; vencimento_mais_antigo: string | null };
+  const linhas: Linha[] = [];
+  for (let inicio = 0; ; inicio += PAGINA) {
+    const { data, error } = await supabase
+      .from("vw_inadimplentes")
+      .select("aluno_id, nome, telefone, cobrancas_atrasadas, total_atrasado, vencimento_mais_antigo")
+      .eq("academia_id", academiaId)
+      .order("vencimento_mais_antigo")
+      .order("aluno_id")
+      .range(inicio, inicio + PAGINA - 1);
+    if (error) throw error;
+    linhas.push(...(data ?? []));
+    if (!data || data.length < PAGINA) break;
+  }
+  return linhas.map((i) => ({
     aluno_id: i.aluno_id ?? "",
     nome: i.nome ?? "",
     telefone: i.telefone,
@@ -206,13 +254,21 @@ export interface MatriculaCobravel {
 /** Matrículas ativas da academia, para "gerar agora". */
 export async function listarMatriculasAtivas(academiaId: string): Promise<MatriculaCobravel[]> {
   if (!supabase) return [];
-  const { data, error } = await supabase
-    .from("matriculas")
-    .select("id, dia_vencimento, alunos(nome), planos(nome)")
-    .eq("academia_id", academiaId)
-    .eq("status", "ativa");
-  if (error) throw error;
-  return (data ?? [])
+  type Linha = { id: string; dia_vencimento: number | null; alunos: { nome: string } | null; planos: { nome: string } | null };
+  const linhas: Linha[] = [];
+  for (let inicio = 0; ; inicio += PAGINA) {
+    const { data, error } = await supabase
+      .from("matriculas")
+      .select("id, dia_vencimento, alunos(nome), planos(nome)")
+      .eq("academia_id", academiaId)
+      .eq("status", "ativa")
+      .order("id")
+      .range(inicio, inicio + PAGINA - 1);
+    if (error) throw error;
+    linhas.push(...(data ?? []));
+    if (!data || data.length < PAGINA) break;
+  }
+  return linhas
     .map((m) => ({ id: m.id, aluno: m.alunos?.nome ?? "", plano: m.planos?.nome ?? null, dia_vencimento: m.dia_vencimento }))
     .sort((a, b) => a.aluno.localeCompare(b.aluno, "pt-BR"));
 }
@@ -236,7 +292,7 @@ export function validarBaixa(
 ): { ok: true; dados: DadosBaixa } | { ok: false; mensagem: string } {
   const forma = (Object.keys(ROTULO_FORMA) as FormaPagamento[]).find((f) => f === form.forma);
   if (!forma) return { ok: false, mensagem: "Escolha a forma de pagamento." };
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(form.data)) return { ok: false, mensagem: "Informe a data do pagamento." };
+  if (!dataExiste(form.data)) return { ok: false, mensagem: "Informe a data do pagamento." };
   if (form.data > hoje) return { ok: false, mensagem: "A data do pagamento não pode ser no futuro." };
   let valorPago: number | null = null;
   if (form.valor.trim()) {

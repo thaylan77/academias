@@ -4,7 +4,7 @@
 -- gera; cobrança emitida no gateway não tem baixa nem cancelamento manual.
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(20);
+select plan(26);
 
 create function public.__erro_de(p_sql text)
 returns jsonb
@@ -103,6 +103,10 @@ select ok(public.__falha($$select public.baixar_cobranca_manual('fe000000-0000-4
           'dono de B não dá baixa em cobrança de A');
 select ok(public.__falha($$select public.cancelar_cobranca('fe000000-0000-4000-8000-0000000006a1')$$),
           'dono de B não cancela cobrança de A');
+select is((select count(*)::int from public.vw_inadimplentes where academia_id = 'fe000000-0000-4000-8000-00000000000a'), 0,
+          'dono de B não vê inadimplentes de A');
+select ok(public.__falha($$select public.gerar_cobrancas_matricula('fe000000-0000-4000-8000-0000000005a1')$$),
+          'dono de B não gera cobrança de matrícula de A');
 reset role;
 
 -- ---------------------------------------------------------------------
@@ -131,6 +135,19 @@ select is((select (pago_em at time zone 'America/Fortaleza')::date from public.c
           public.hoje_academia('fe000000-0000-4000-8000-00000000000a'), 'pago_em cai no dia da academia');
 select isnt((select baixa_em from public.cobrancas where id = 'fe000000-0000-4000-8000-0000000006a1'), null, 'baixa_em registrado');
 
+-- Cancelar a cobrança pendente nunca emitida e gerar as da matrícula.
+insert into public.cobrancas (id, academia_id, aluno_id, valor, vencimento) values
+  ('fe000000-0000-4000-8000-0000000006a4', 'fe000000-0000-4000-8000-00000000000a', 'fe000000-0000-4000-8000-0000000001a1', 90, current_date + 20);
+set local role authenticated;
+select public.__como('fe000000-0000-4000-8000-0000000000a2');
+select is(public.__erro_de($$select public.cancelar_cobranca('fe000000-0000-4000-8000-0000000006a4')$$) ->> 'sqlstate',
+          'sem erro', 'recepção cancela cobrança pendente nunca emitida');
+select ok(public.__erro_de($$select public.gerar_cobrancas_matricula('fe000000-0000-4000-8000-0000000005a1')$$) ->> 'sqlstate' = 'sem erro',
+          'recepção gera as cobranças da matrícula');
+reset role;
+select is((select status from public.cobrancas where id = 'fe000000-0000-4000-8000-0000000006a4'), 'cancelada',
+          'a cobrança ficou cancelada (não apagada)');
+
 -- ---------------------------------------------------------------------
 -- Academia suspensa: lê, mas não altera
 -- ---------------------------------------------------------------------
@@ -141,6 +158,7 @@ select ok(public.__falha($$select public.baixar_cobranca_manual('fe000000-0000-4
           'academia suspensa não dá baixa');
 select ok(public.__falha($$select public.cancelar_cobranca('fe000000-0000-4000-8000-0000000006c1')$$),
           'academia suspensa não cancela');
+select is((select count(*)::int from public.vw_inadimplentes), 1, 'academia suspensa vê os inadimplentes');
 reset role;
 
 select * from finish();

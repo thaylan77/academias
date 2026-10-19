@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
+import { act, render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import { CobrancasSecao } from "../pages/painel/cobrancas";
 import { PainelContexto } from "../pages/painel/contexto";
 import * as lib from "../lib/cobrancas";
@@ -185,5 +185,93 @@ describe("Painel: cobranças", () => {
     fireEvent.click(screen.getByRole("button", { name: "Confirmar cancelamento" }));
     expect(await screen.findByText(/Feito, mas não foi possível atualizar a lista/)).toBeInTheDocument();
     await waitFor(() => expect(screen.getByRole("list", { name: "Lista de cobranças" })).toBeInTheDocument());
+  });
+});
+
+describe("Painel: cobranças (cobertura pedida na primeira revisão)", () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+    vi.spyOn(lib, "listarInadimplentes").mockResolvedValue([]);
+    vi.spyOn(lib, "listarMatriculasAtivas").mockResolvedValue([{ id: "m1", aluno: "Ana Souza", plano: "Mensal", dia_vencimento: 10 }]);
+  });
+
+  it("data padrão da baixa é o dia da academia (relógio fixo na virada UTC)", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-10-20T01:30:00Z")); // ainda dia 19 em Fortaleza
+    vi.spyOn(lib, "listarCobrancas").mockResolvedValue([cob()]);
+    montar("recepcao");
+    fireEvent.click(await screen.findByRole("button", { name: /Dar baixa/ }));
+    expect(within(screen.getByRole("form", { name: "Dar baixa" })).getByLabelText("Pago em")).toHaveValue("2026-10-19");
+  });
+
+  it("pago_em perto da meia-noite aparece no dia da academia", async () => {
+    vi.spyOn(lib, "listarCobrancas").mockResolvedValue([
+      cob({ status: "paga", pago_em: "2026-09-13T01:30:00+00:00", forma_pagamento: "pix", valor_pago: 150 }),
+    ]);
+    montar("recepcao");
+    const lista = await screen.findByRole("list", { name: "Lista de cobranças" });
+    expect(lista).toHaveTextContent("paga em 12/09/2026");
+  });
+
+  it("depois de uma ação, inadimplentes também recarregam", async () => {
+    vi.spyOn(lib, "listarCobrancas").mockResolvedValue([cob()]);
+    vi.spyOn(lib, "cancelarCobranca").mockResolvedValue({ sucesso: true });
+    montar("admin");
+    fireEvent.click(await screen.findByRole("button", { name: /Cancelar a cobrança/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Confirmar cancelamento" }));
+    await screen.findByText("Cobrança cancelada.");
+    await waitFor(() => expect(lib.listarInadimplentes).toHaveBeenCalledTimes(2));
+    expect(lib.listarCobrancas).toHaveBeenCalledTimes(2);
+  });
+
+  it("recusa ao cancelar aparece e recarrega; recusa ao gerar também recarrega", async () => {
+    vi.spyOn(lib, "listarCobrancas").mockResolvedValue([cob()]);
+    vi.spyOn(lib, "cancelarCobranca").mockResolvedValue({ sucesso: false, mensagem: "Não foi possível concluir. A lista foi atualizada." });
+    vi.spyOn(lib, "gerarCobrancasAgora").mockResolvedValue({ sucesso: false, mensagem: "Não foi possível gerar." });
+    montar("admin");
+    fireEvent.click(await screen.findByRole("button", { name: /Cancelar a cobrança/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Confirmar cancelamento" }));
+    expect(await screen.findByText("Não foi possível concluir. A lista foi atualizada.")).toBeInTheDocument();
+    await waitFor(() => expect(lib.listarCobrancas).toHaveBeenCalledTimes(2));
+
+    const secao = screen.getByRole("region", { name: "Gerar cobranças" });
+    fireEvent.change(within(secao).getByLabelText("Matrícula ativa"), { target: { value: "m1" } });
+    fireEvent.click(within(secao).getByRole("button", { name: "Gerar agora" }));
+    expect(await screen.findByText("Não foi possível gerar.")).toBeInTheDocument();
+    await waitFor(() => expect(lib.listarCobrancas).toHaveBeenCalledTimes(3));
+  });
+
+  it("clique duplo na baixa envia uma vez só, e o botão trava enquanto envia", async () => {
+    vi.spyOn(lib, "listarCobrancas").mockResolvedValue([cob()]);
+    let terminar: (r: { sucesso: true }) => void = () => {};
+    const baixar = vi.spyOn(lib, "baixarCobranca").mockImplementation(() => new Promise((r) => (terminar = r)));
+    montar("recepcao");
+    fireEvent.click(await screen.findByRole("button", { name: /Dar baixa/ }));
+    const form = screen.getByRole("form", { name: "Dar baixa" });
+    fireEvent.submit(form);
+    fireEvent.submit(form);
+    expect(baixar).toHaveBeenCalledTimes(1);
+    expect(await within(form).findByRole("button", { name: "Salvando..." })).toBeDisabled();
+    await act(async () => terminar({ sucesso: true }));
+  });
+
+  it("trocar a academia do contexto recarrega o financeiro da academia nova", async () => {
+    const listar = vi.spyOn(lib, "listarCobrancas").mockResolvedValue([cob()]);
+    const academia = (id: string): AcademiaDoMembro => ({ academia_id: id, nome: id, slug: id, papel: "admin", ativa: true, fuso: "America/Fortaleza" });
+    const { rerender } = render(
+      <PainelContexto.Provider value={{ academia: academia("acad-a"), item: null, abrir: vi.fn() }}>
+        <CobrancasSecao />
+      </PainelContexto.Provider>
+    );
+    await screen.findByRole("list", { name: "Lista de cobranças" });
+    rerender(
+      <PainelContexto.Provider value={{ academia: academia("acad-b"), item: null, abrir: vi.fn() }}>
+        <CobrancasSecao />
+      </PainelContexto.Provider>
+    );
+    await waitFor(() => expect(listar).toHaveBeenLastCalledWith("acad-b"));
+    expect(lib.listarInadimplentes).toHaveBeenLastCalledWith("acad-b");
+    expect(lib.listarMatriculasAtivas).toHaveBeenLastCalledWith("acad-b");
   });
 });
