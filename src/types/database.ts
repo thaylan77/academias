@@ -562,6 +562,9 @@ isOneToOne: false
 "rotacionar_segredo_checkin":
 { Args: { "p_academia_id": string }; Returns: undefined
                            },
+"salvar_turma":
+{ Args: { "p_academia_id": string,"p_dados": Json,"p_turma_id"?: string }; Returns: string
+                           },
 "sou_o_aluno":
 { Args: { "p_aluno_id": string }; Returns: boolean
                            },

@@ -23,6 +23,7 @@ import { Alert, AlertDescription } from "../../components/ui/alert";
 import { Badge } from "../../components/ui/badge";
 import { Shield, LogOut, Building2 } from "lucide-react";
 import { AlunosSecao } from "./alunos";
+import { TurmasSecao } from "./turmas";
 import { PainelContexto, PainelContextoValor } from "./contexto";
 
 const ROTULO_PAPEL: Record<AcademiaDoMembro["papel"], string> = {
@@ -333,9 +334,11 @@ export const PainelApp: React.FC = () => {
             </ul>
           </nav>
           <section>
+            {/* A chave zera o estado da tela ao trocar de academia. */}
             {secaoVisivel === "alunos" ? (
-              // A chave zera o estado da tela ao trocar de academia.
               <AlunosSecao key={academia.academia_id} />
+            ) : secaoVisivel === "turmas" ? (
+              <TurmasSecao key={academia.academia_id} />
             ) : (
               <SecaoEmConstrucao secao={secaoVisivel} />
             )}
