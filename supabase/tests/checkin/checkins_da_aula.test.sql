@@ -4,16 +4,17 @@
 -- outra academia não vê nada, nem sabendo os UUIDs.
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(12);
+select plan(15);
 
 -- ---------------------------------------------------------------------
 -- Fixtures
---   Academia A: professor, recepção, login de aluno (a1); turma ta
+--   Academia A: professor, recepção, totem, login de aluno (a1); turma ta
 --   Academia B: professor; turma tb
 -- ---------------------------------------------------------------------
 insert into auth.users (id, email) values
   ('f6000000-0000-4000-8000-0000000000a2', 'professor-a@aula.test'),
   ('f6000000-0000-4000-8000-0000000000a3', 'recepcao-a@aula.test'),
+  ('f6000000-0000-4000-8000-0000000000a4', 'totem-a@aula.test'),
   ('f6000000-0000-4000-8000-0000000000c1', 'aluno1@aula.test'),
   ('f6000000-0000-4000-8000-0000000000b2', 'professor-b@aula.test');
 
@@ -24,6 +25,7 @@ insert into public.academias (id, nome, slug, status) values
 insert into public.membros_academia (academia_id, user_id, papel) values
   ('f6000000-0000-4000-8000-00000000000a', 'f6000000-0000-4000-8000-0000000000a2', 'professor'),
   ('f6000000-0000-4000-8000-00000000000a', 'f6000000-0000-4000-8000-0000000000a3', 'recepcao'),
+  ('f6000000-0000-4000-8000-00000000000a', 'f6000000-0000-4000-8000-0000000000a4', 'totem'),
   ('f6000000-0000-4000-8000-00000000000a', 'f6000000-0000-4000-8000-0000000000c1', 'aluno'),
   ('f6000000-0000-4000-8000-00000000000b', 'f6000000-0000-4000-8000-0000000000b2', 'professor');
 
@@ -38,18 +40,28 @@ insert into public.turmas (id, academia_id, modalidade_id, nome) values
 insert into public.alunos (id, academia_id, nome, user_id) values
   ('f6000000-0000-4000-8000-0000000001a1', 'f6000000-0000-4000-8000-00000000000a', 'Aluno 1', 'f6000000-0000-4000-8000-0000000000c1'),
   ('f6000000-0000-4000-8000-0000000001a2', 'f6000000-0000-4000-8000-00000000000a', 'Aluno 2', null),
+  ('f6000000-0000-4000-8000-0000000001a3', 'f6000000-0000-4000-8000-00000000000a', 'Aluno 3', null),
   ('f6000000-0000-4000-8000-0000000001b1', 'f6000000-0000-4000-8000-00000000000b', 'Aluno de B', null);
 
--- Dois check-ins hoje e um ontem na turma de A; um hoje na turma de B.
+-- Três check-ins hoje (dois no mesmo instante) e um ontem na turma de A; um
+-- hoje na turma de B.
 insert into public.presencas (academia_id, aluno_id, turma_id, data, checkin_em, origem) values
   ('f6000000-0000-4000-8000-00000000000a', 'f6000000-0000-4000-8000-0000000001a1', 'f6000000-0000-4000-8000-0000000003a1',
    public.hoje_academia('f6000000-0000-4000-8000-00000000000a'), now() - interval '10 minutes', 'qrcode'),
   ('f6000000-0000-4000-8000-00000000000a', 'f6000000-0000-4000-8000-0000000001a2', 'f6000000-0000-4000-8000-0000000003a1',
    public.hoje_academia('f6000000-0000-4000-8000-00000000000a'), now() - interval '5 minutes', 'professor'),
+  ('f6000000-0000-4000-8000-00000000000a', 'f6000000-0000-4000-8000-0000000001a3', 'f6000000-0000-4000-8000-0000000003a1',
+   public.hoje_academia('f6000000-0000-4000-8000-00000000000a'), now() - interval '5 minutes', 'recepcao'),
   ('f6000000-0000-4000-8000-00000000000a', 'f6000000-0000-4000-8000-0000000001a2', 'f6000000-0000-4000-8000-0000000003a1',
    public.hoje_academia('f6000000-0000-4000-8000-00000000000a') - 1, now() - interval '1 day', 'recepcao'),
   ('f6000000-0000-4000-8000-00000000000b', 'f6000000-0000-4000-8000-0000000001b1', 'f6000000-0000-4000-8000-0000000003b1',
    public.hoje_academia('f6000000-0000-4000-8000-00000000000b'), now(), 'qrcode');
+
+-- Ids fixos nos dois check-ins empatados, para o desempate ser previsível.
+update public.presencas set id = 'f6000000-0000-4000-8000-0000000005a2'
+ where aluno_id = 'f6000000-0000-4000-8000-0000000001a2' and data = public.hoje_academia('f6000000-0000-4000-8000-00000000000a');
+update public.presencas set id = 'f6000000-0000-4000-8000-0000000005a3'
+ where aluno_id = 'f6000000-0000-4000-8000-0000000001a3';
 
 -- A leitura do painel, como o PostgREST a executa (o nome vem de alunos,
 -- também sob RLS).
@@ -57,7 +69,7 @@ create function pg_temp.lista(p_academia uuid, p_turma uuid)
 returns text
 language sql
 as $$
-  select coalesce(string_agg(coalesce(a.nome, '?') || '/' || p.origem, ', ' order by p.checkin_em desc), '')
+  select coalesce(string_agg(coalesce(a.nome, '?') || '/' || p.origem, ', ' order by p.checkin_em desc, p.id), '')
   from public.presencas p
   left join public.alunos a on a.academia_id = p.academia_id and a.id = p.aluno_id
   where p.academia_id = p_academia
@@ -73,9 +85,9 @@ set local request.jwt.claim.sub = 'f6000000-0000-4000-8000-0000000000a2';
 set local request.jwt.claims = '{"sub":"f6000000-0000-4000-8000-0000000000a2","role":"authenticated"}';
 
 select is(pg_temp.lista('f6000000-0000-4000-8000-00000000000a', 'f6000000-0000-4000-8000-0000000003a1'),
-  'Aluno 2/professor, Aluno 1/qrcode',
-  'professor de A vê os check-ins de hoje da turma, com nome, mais recentes primeiro (o de ontem fica de fora)');
-select is((select count(*)::int from public.presencas where turma_id = 'f6000000-0000-4000-8000-0000000003a1'), 3,
+  'Aluno 2/professor, Aluno 3/recepcao, Aluno 1/qrcode',
+  'professor de A vê os check-ins de hoje da turma, com nome, mais recentes primeiro e empate pelo id (o de ontem fica de fora)');
+select is((select count(*)::int from public.presencas where turma_id = 'f6000000-0000-4000-8000-0000000003a1'), 4,
   'professor de A vê também o histórico da turma');
 select is(pg_temp.lista('f6000000-0000-4000-8000-00000000000b', 'f6000000-0000-4000-8000-0000000003b1'), '',
   'professor de A não vê a turma de B');
@@ -85,7 +97,14 @@ select is((select count(*)::int from public.presencas where academia_id = 'f6000
 set local request.jwt.claim.sub = 'f6000000-0000-4000-8000-0000000000a3';
 set local request.jwt.claims = '{"sub":"f6000000-0000-4000-8000-0000000000a3","role":"authenticated"}';
 select is(pg_temp.lista('f6000000-0000-4000-8000-00000000000a', 'f6000000-0000-4000-8000-0000000003a1'),
-  'Aluno 2/professor, Aluno 1/qrcode', 'recepção de A vê a lista');
+  'Aluno 2/professor, Aluno 3/recepcao, Aluno 1/qrcode', 'recepção de A vê a lista');
+
+set local request.jwt.claim.sub = 'f6000000-0000-4000-8000-0000000000a4';
+set local request.jwt.claims = '{"sub":"f6000000-0000-4000-8000-0000000000a4","role":"authenticated"}';
+select is(pg_temp.lista('f6000000-0000-4000-8000-00000000000a', 'f6000000-0000-4000-8000-0000000003a1'), '',
+  'totem de A não vê a lista de check-ins');
+select is((select count(*)::int from public.presencas), 0, 'totem de A não lê presença nenhuma');
+select is((select count(*)::int from public.alunos), 0, 'totem de A não lê alunos');
 
 -- ---------------------------------------------------------------------
 -- Professor de B, sabendo os UUIDs de A
@@ -125,7 +144,7 @@ set local role authenticated;
 set local request.jwt.claim.sub = 'f6000000-0000-4000-8000-0000000000a2';
 set local request.jwt.claims = '{"sub":"f6000000-0000-4000-8000-0000000000a2","role":"authenticated"}';
 select is(pg_temp.lista('f6000000-0000-4000-8000-00000000000a', 'f6000000-0000-4000-8000-0000000003a1'),
-  'Aluno 2/professor, Aluno 1/qrcode', 'academia suspensa: professor ainda vê a lista');
+  'Aluno 2/professor, Aluno 3/recepcao, Aluno 1/qrcode', 'academia suspensa: professor ainda vê a lista');
 
 -- Membro removido da academia deixa de ver.
 reset role;

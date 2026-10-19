@@ -116,10 +116,17 @@ describe("Painel: turmas", () => {
       const listar = vi.spyOn(checkins, "listarCheckinsDaAula").mockResolvedValue([
         { id: "p1", aluno_id: "a1", aluno: "Ana", checkin_em: "2026-10-19T22:10:00Z", origem: "qrcode" },
       ]);
-      montar("professor", T1);
-      const lista = await screen.findByRole("list", { name: "Check-ins da aula" });
-      expect(lista).toHaveTextContent("Ana");
-      expect(listar).toHaveBeenCalledWith("acad-a", T1, expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/));
+      // 01:30 UTC de 20/10 ainda é 19/10 em Fortaleza.
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(new Date("2026-10-20T01:30:00Z"));
+      try {
+        montar("professor", T1);
+        const lista = await screen.findByRole("list", { name: "Check-ins da aula" });
+        expect(lista).toHaveTextContent("Ana");
+        expect(listar).toHaveBeenCalledWith("acad-a", T1, "2026-10-19");
+      } finally {
+        vi.useRealTimers();
+      }
     });
 
     it("turma sem horário avisa que o check-in por QR não abre", async () => {

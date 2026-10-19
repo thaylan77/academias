@@ -25,11 +25,17 @@ export interface CheckinDaAula {
 /** Intervalo da atualização automática da lista. */
 export const INTERVALO_ATUALIZACAO_MS = 15_000;
 
-const DATA = /^\d{4}-\d{2}-\d{2}$/;
+// AAAA-MM-DD que existe no calendário (sem 31/02, mês 13...).
+function dataExiste(data: string): boolean {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(data);
+  if (!m) return false;
+  const dt = new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3])));
+  return dt.toISOString().slice(0, 10) === data;
+}
 
 /** Check-ins da turma no dia `hoje` (AAAA-MM-DD, no fuso da academia), mais recentes primeiro. */
 export async function listarCheckinsDaAula(academiaId: string, turmaId: string, hoje: string): Promise<CheckinDaAula[]> {
-  if (!DATA.test(hoje)) throw new Error("Data inválida.");
+  if (!dataExiste(hoje)) throw new Error("Data inválida.");
   if (!supabase) return [];
   const { data, error } = await supabase
     .from("presencas")

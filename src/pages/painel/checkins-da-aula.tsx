@@ -22,10 +22,16 @@ export const CheckinsDaAula: React.FC<{ turmaId: string }> = ({ turmaId }) => {
   const [lista, setLista] = useState<CheckinDaAula[] | null>(null);
   const [falhou, setFalhou] = useState(false);
   const [atualizadoEm, setAtualizadoEm] = useState<string | null>(null);
+  const [carregando, setCarregando] = useState(false);
   const geracao = useRef(0);
+  // Início (ms) da consulta em andamento, ou null.
+  const emAndamento = useRef<number | null>(null);
 
   const carregar = useCallback(() => {
     const minha = ++geracao.current;
+    emAndamento.current = Date.now();
+    setCarregando(true);
+    // O dia é recalculado a cada busca: na virada da meia-noite (no fuso da academia) a lista recomeça.
     listarCheckinsDaAula(academia.academia_id, turmaId, hojeNoFuso(academia.fuso))
       .then((dados) => {
         if (minha !== geracao.current) return;
@@ -33,33 +39,52 @@ export const CheckinsDaAula: React.FC<{ turmaId: string }> = ({ turmaId }) => {
         setFalhou(false);
         setAtualizadoEm(horaNoFuso(new Date().toISOString(), academia.fuso));
       })
-      .catch(() => minha === geracao.current && setFalhou(true));
+      .catch(() => {
+        if (minha === geracao.current) setFalhou(true);
+      })
+      .finally(() => {
+        if (minha !== geracao.current) return;
+        emAndamento.current = null;
+        setCarregando(false);
+      });
   }, [academia.academia_id, academia.fuso, turmaId]);
 
   useEffect(() => {
+    // Outra turma ou academia: nada da anterior fica na tela enquanto a nova chega.
+    setLista(null);
+    setFalhou(false);
+    setAtualizadoEm(null);
     carregar();
     const tique = () => {
-      if (document.visibilityState === "visible") carregar();
+      // Aba escondida pausa. Consulta em andamento não ganha outra por cima, a não ser
+      // que já dure um intervalo inteiro (assim uma resposta que nunca chega não para a lista).
+      if (document.visibilityState !== "visible") return;
+      const inicio = emAndamento.current;
+      if (inicio !== null && Date.now() - inicio < INTERVALO_ATUALIZACAO_MS) return;
+      carregar();
     };
     const relogio = window.setInterval(tique, INTERVALO_ATUALIZACAO_MS);
     // Voltando para a aba, atualiza na hora (o intervalo pausou enquanto ela estava escondida).
     document.addEventListener("visibilitychange", tique);
     return () => {
       geracao.current++;
+      emAndamento.current = null;
       window.clearInterval(relogio);
       document.removeEventListener("visibilitychange", tique);
     };
   }, [carregar]);
 
   return (
-    <section aria-label="Check-ins de hoje" className="space-y-2">
+    <section aria-label="Check-ins de hoje" aria-busy={carregando} className="space-y-2">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <h3 className="text-sm font-semibold uppercase tracking-wide text-zinc-400">
           Check-ins de hoje{lista ? ` (${lista.length})` : ""}
         </h3>
         <span className="flex items-center gap-2 text-xs text-zinc-500">
           {atualizadoEm && <span aria-live="polite">Atualizado às {atualizadoEm}</span>}
-          <Button size="sm" variant="ghost" onClick={carregar}>Atualizar</Button>
+          <Button size="sm" variant="ghost" onClick={carregar} disabled={carregando}>
+            {carregando ? "Atualizando..." : "Atualizar"}
+          </Button>
         </span>
       </div>
       {falhou && (
@@ -68,7 +93,7 @@ export const CheckinsDaAula: React.FC<{ turmaId: string }> = ({ turmaId }) => {
         </Alert>
       )}
       {lista === null && !falhou && <p role="status" className="text-sm text-zinc-500">Carregando check-ins...</p>}
-      {lista && lista.length === 0 && <p className="text-sm text-zinc-400">Nenhum check-in hoje nesta turma.</p>}
+      {lista && lista.length === 0 && <p role="status" className="text-sm text-zinc-400">Nenhum check-in hoje nesta turma.</p>}
       {lista && lista.length > 0 && (
         <ul aria-label="Check-ins da aula" className="divide-y divide-zinc-800 rounded-xl border border-zinc-800">
           {lista.map((c) => (
