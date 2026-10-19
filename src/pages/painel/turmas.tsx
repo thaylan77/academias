@@ -23,6 +23,7 @@ import {
 } from "../../lib/turmas";
 import { formatarTelefone, hojeNoFuso } from "../../lib/alunos";
 import { usarPainel } from "./contexto";
+import { CheckinsDaAula } from "./checkins-da-aula";
 import { Button } from "../../components/ui/button";
 import { Input } from "../../components/ui/input";
 import { Label } from "../../components/ui/label";
@@ -271,7 +272,7 @@ const FichaTurma: React.FC<{ turmaId: string }> = ({ turmaId }) => {
         )}
       </section>
 
-      <p className="text-xs text-zinc-500">A lista de check-ins da aula em tempo real chega com a issue #16.</p>
+      <CheckinsDaAula turmaId={turma.id} />
     </div>
   );
 };
