@@ -76,7 +76,7 @@ function clienteFalso(respostas: Record<string, Resposta>) {
   const chamadas: Chamada[] = [];
   const from = vi.fn((tabela: string) => {
     const q: Record<string, unknown> = {};
-    for (const metodo of ["select", "eq", "order", "insert", "update", "maybeSingle", "single"]) {
+    for (const metodo of ["select", "eq", "neq", "lte", "or", "order", "range", "insert", "update", "maybeSingle", "single"]) {
       q[metodo] = (...args: unknown[]) => {
         chamadas.push({ tabela, metodo, args });
         return q;
@@ -153,16 +153,59 @@ describe("Dados (sempre filtrados pela academia selecionada)", () => {
     });
     const lib = await carregarComCliente(cliente);
 
-    const { matriculados } = await lib.lerTurma(ACADEMIA, TURMA);
+    const { matriculados } = await lib.lerTurma(ACADEMIA, TURMA, "2026-10-19");
 
     expect(filtros(cliente.chamadas, "turmas")).toEqual([["academia_id", ACADEMIA], ["id", TURMA]]);
     expect(filtros(cliente.chamadas, "matricula_turmas")).toEqual([["academia_id", ACADEMIA], ["turma_id", TURMA]]);
     expect(matriculados.map((m) => m.nome)).toEqual(["Ana", "Zé"]);
   });
 
+  it("matriculados: filtro de status e de vigência no servidor, em páginas de 1.000", async () => {
+    const linha = (i: number) => ({
+      matricula_id: `m${i}`,
+      matriculas: { id: `m${i}`, status: "ativa", data_inicio: "2026-01-01", data_fim: null, aluno_id: `a${i}`, alunos: { nome: `Aluno ${i}` } },
+    });
+    const chamadas: Chamada[] = [];
+    const cliente = clienteFalso({ turmas: { data: LINHA_TURMA, error: null } });
+    // matricula_turmas responde por página, olhando o range pedido.
+    const fromOriginal = cliente.from;
+    cliente.from = vi.fn((tabela: string) => {
+      if (tabela !== "matricula_turmas") return fromOriginal(tabela);
+      const q: Record<string, unknown> = {};
+      let inicio = 0;
+      for (const metodo of ["select", "eq", "neq", "lte", "or", "order", "range"]) {
+        q[metodo] = (...args: unknown[]) => {
+          chamadas.push({ tabela, metodo, args });
+          if (metodo === "range") inicio = args[0] as number;
+          return q;
+        };
+      }
+      q.then = (ok: (r: Resposta) => unknown) =>
+        Promise.resolve({ data: inicio === 0 ? Array.from({ length: 1000 }, (_, i) => linha(i)) : [linha(1000)], error: null }).then(ok);
+      return q;
+    }) as typeof cliente.from;
+    const lib = await carregarComCliente(cliente);
+
+    const { matriculados } = await lib.lerTurma(ACADEMIA, TURMA, "2026-10-19");
+
+    expect(matriculados).toHaveLength(1001);
+    const de = (metodo: string) => chamadas.filter((c) => c.metodo === metodo).map((c) => c.args);
+    expect(de("range")).toEqual([[0, 999], [1000, 1999]]);
+    expect(de("neq")[0]).toEqual(["matriculas.status", "cancelada"]);
+    expect(de("lte")[0]).toEqual(["matriculas.data_inicio", "2026-10-19"]);
+    expect(de("or")[0]).toEqual(["data_fim.is.null,data_fim.gte.2026-10-19", { referencedTable: "matriculas" }]);
+    expect(String(de("select")[0][0])).toContain("matriculas!inner(");
+    expect(de("eq").slice(0, 2)).toEqual([["academia_id", ACADEMIA], ["turma_id", TURMA]]);
+  });
+
+  it("data de hoje fora do formato não vira filtro", async () => {
+    const lib = await carregarComCliente(clienteFalso({}));
+    await expect(lib.lerTurma(ACADEMIA, TURMA, "2026-10-19,status.eq.x")).rejects.toThrow("Data inválida.");
+  });
+
   it("turma de outra academia (ou inexistente): não encontrada", async () => {
     const lib = await carregarComCliente(clienteFalso({ turmas: { data: null, error: null } }));
-    await expect(lib.lerTurma(ACADEMIA, TURMA)).rejects.toBeInstanceOf(lib.TurmaNaoEncontrada);
+    await expect(lib.lerTurma(ACADEMIA, TURMA, "2026-10-19")).rejects.toBeInstanceOf(lib.TurmaNaoEncontrada);
   });
 
   it("erro de leitura propaga", async () => {
@@ -170,7 +213,7 @@ describe("Dados (sempre filtrados pela academia selecionada)", () => {
     let lib = await carregarComCliente(clienteFalso({ turmas: erro }));
     await expect(lib.listarTurmas(ACADEMIA)).rejects.toMatchObject({ message: "rede" });
     lib = await carregarComCliente(clienteFalso({ turmas: { data: LINHA_TURMA, error: null }, matricula_turmas: erro }));
-    await expect(lib.lerTurma(ACADEMIA, TURMA)).rejects.toMatchObject({ message: "rede" });
+    await expect(lib.lerTurma(ACADEMIA, TURMA, "2026-10-19")).rejects.toMatchObject({ message: "rede" });
   });
 
   const DADOS = {
@@ -199,6 +242,7 @@ describe("Dados (sempre filtrados pela academia selecionada)", () => {
       ["horario_invalido", "Há horário inválido: confira o dia e se o fim é depois do início."],
       ["horario_sobreposto", "Há horários que se sobrepõem no mesmo dia."],
       ["turma_nao_encontrada", "Turma não encontrada nesta academia."],
+      ["turma_com_presencas", "Esta turma já tem presenças e não pode mudar de modalidade (isso mudaria o progresso de graduação dos alunos). Crie uma turma nova na outra modalidade e desative esta."],
       ["dados_invalidos", "Confira os dados da turma: nome, modalidade, professor, público e capacidade."],
       [null, "Não foi possível salvar. Verifique a conexão e tente de novo."],
     ];

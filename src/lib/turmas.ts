@@ -190,7 +190,22 @@ export class TurmaNaoEncontrada extends Error {
   }
 }
 
-export async function lerTurma(academiaId: string, turmaId: string): Promise<{ turma: Turma; matriculados: MatriculadoNaTurma[] }> {
+// O PostgREST devolve no máximo 1.000 linhas por consulta.
+const PAGINA = 1000;
+const DATA = /^\d{4}-\d{2}-\d{2}$/;
+
+/**
+ * Turma e as matrículas que valem no dia `hoje` (AAAA-MM-DD, no fuso da
+ * academia): não canceladas, já começadas e não terminadas. O filtro roda no
+ * servidor, em páginas, para uma turma com histórico longo não mostrar só
+ * matrículas antigas.
+ */
+export async function lerTurma(
+  academiaId: string,
+  turmaId: string,
+  hoje: string
+): Promise<{ turma: Turma; matriculados: MatriculadoNaTurma[] }> {
+  if (!DATA.test(hoje)) throw new Error("Data inválida.");
   if (!supabase) throw new TurmaNaoEncontrada();
   const { data, error } = await supabase
     .from("turmas")
@@ -201,14 +216,28 @@ export async function lerTurma(academiaId: string, turmaId: string): Promise<{ t
   if (error) throw error;
   if (!data) throw new TurmaNaoEncontrada();
 
-  const { data: mt, error: erroMt } = await supabase
-    .from("matricula_turmas")
-    .select("matricula_id, matriculas(id, status, data_inicio, data_fim, aluno_id, alunos(nome))")
-    .eq("academia_id", academiaId)
-    .eq("turma_id", turmaId);
-  if (erroMt) throw erroMt;
+  type Vinculo = {
+    matricula_id: string;
+    matriculas: { id: string; status: string; data_inicio: string; data_fim: string | null; aluno_id: string; alunos: { nome: string } | null } | null;
+  };
+  const vinculos: Vinculo[] = [];
+  for (let inicio = 0; ; inicio += PAGINA) {
+    const { data: mt, error: erroMt } = await supabase
+      .from("matricula_turmas")
+      .select("matricula_id, matriculas!inner(id, status, data_inicio, data_fim, aluno_id, alunos(nome))")
+      .eq("academia_id", academiaId)
+      .eq("turma_id", turmaId)
+      .neq("matriculas.status", "cancelada")
+      .lte("matriculas.data_inicio", hoje)
+      .or(`data_fim.is.null,data_fim.gte.${hoje}`, { referencedTable: "matriculas" })
+      .order("matricula_id")
+      .range(inicio, inicio + PAGINA - 1);
+    if (erroMt) throw erroMt;
+    vinculos.push(...(mt ?? []));
+    if (!mt || mt.length < PAGINA) break;
+  }
 
-  const matriculados = (mt ?? [])
+  const matriculados = vinculos
     .map((linha) => linha.matriculas)
     .filter((m): m is NonNullable<typeof m> => !!m && m.status !== "cancelada")
     .map((m) => ({
@@ -225,8 +254,8 @@ export async function lerTurma(academiaId: string, turmaId: string): Promise<{ t
 }
 
 /**
- * Matrícula que vale hoje: não cancelada (o filtro já tirou), começou e não
- * terminou. `hoje` é o dia no fuso da academia.
+ * Matrícula que vale hoje: não cancelada, começou e não terminou. `hoje` é o
+ * dia no fuso da academia. O servidor já filtra assim; a tela confere de novo.
  */
 export function matriculaVigente(m: MatriculadoNaTurma, hoje: string): boolean {
   return m.data_inicio <= hoje && (!m.data_fim || m.data_fim >= hoje);
@@ -277,6 +306,11 @@ export async function salvarTurma(academiaId: string, dados: DadosTurma, turmaId
       return { sucesso: false, mensagem: "Há horário inválido: confira o dia e se o fim é depois do início." };
     case "horario_sobreposto":
       return { sucesso: false, mensagem: "Há horários que se sobrepõem no mesmo dia." };
+    case "turma_com_presencas":
+      return {
+        sucesso: false,
+        mensagem: "Esta turma já tem presenças e não pode mudar de modalidade (isso mudaria o progresso de graduação dos alunos). Crie uma turma nova na outra modalidade e desative esta.",
+      };
     case "turma_nao_encontrada":
       return { sucesso: false, mensagem: "Turma não encontrada nesta academia." };
     case "dados_invalidos":

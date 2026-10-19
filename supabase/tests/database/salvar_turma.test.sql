@@ -2,7 +2,7 @@
 -- com a assinatura em dia, sempre dentro da própria academia.
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(27);
+select plan(32);
 
 create function public.__erro_de(p_sql text)
 returns jsonb
@@ -68,6 +68,7 @@ insert into public.membros_academia (academia_id, user_id, papel) values
 
 insert into public.modalidades (id, academia_id, nome) values
   ('fa000000-0000-4000-8000-0000000002a1', 'fa000000-0000-4000-8000-00000000000a', 'Jiu-Jitsu'),
+  ('fa000000-0000-4000-8000-0000000002a2', 'fa000000-0000-4000-8000-00000000000a', 'Judô'),
   ('fa000000-0000-4000-8000-0000000002b1', 'fa000000-0000-4000-8000-00000000000b', 'Jiu-Jitsu'),
   ('fa000000-0000-4000-8000-0000000002c1', 'fa000000-0000-4000-8000-00000000000c', 'Jiu-Jitsu');
 
@@ -166,6 +167,30 @@ select is((select count(*)::int from public.presencas where turma_id = (select i
           'desativar a turma mantém o histórico de presença');
 select is((select ativa from public.turmas where id = (select id from t_ids where nome = 'turma')), false,
           'turma ficou inativa');
+
+-- Turma com presença não troca de modalidade (o progresso de graduação conta
+-- as presenças pela modalidade da turma), nem pela RPC nem por update direto.
+set local role authenticated;
+set local request.jwt.claim.sub = 'fa000000-0000-4000-8000-0000000000a1';
+set local request.jwt.claims = '{"sub":"fa000000-0000-4000-8000-0000000000a1","role":"authenticated"}';
+select is(public.__hint_de(format($$select public.salvar_turma('fa000000-0000-4000-8000-00000000000a', public.__turma('{"modalidade_id":"fa000000-0000-4000-8000-0000000002a2"}'), %L)$$,
+            (select id from t_ids where nome = 'turma'))),
+          'turma_com_presencas', 'trocar a modalidade de turma com presença pela RPC: turma_com_presencas');
+select is(public.__hint_de(format($$update public.turmas set modalidade_id = 'fa000000-0000-4000-8000-0000000002a2' where id = %L$$,
+            (select id from t_ids where nome = 'turma'))),
+          'turma_com_presencas', 'e por update direto também');
+select is((select count(*)::int from public.turma_horarios where turma_id = (select id from t_ids where nome = 'turma')), 2,
+          'a troca recusada não mexeu nos horários');
+
+-- Sem presença, troca normalmente.
+insert into t_ids values ('sem_presenca',
+  public.salvar_turma('fa000000-0000-4000-8000-00000000000a', public.__turma('{"nome":"Sem presença"}')));
+select is(public.__hint_de(format($$select public.salvar_turma('fa000000-0000-4000-8000-00000000000a', public.__turma('{"nome":"Sem presença","modalidade_id":"fa000000-0000-4000-8000-0000000002a2"}'), %L)$$,
+            (select id from t_ids where nome = 'sem_presenca'))),
+          'sem erro', 'turma sem presença troca de modalidade');
+select is((select modalidade_id from public.turmas where id = (select id from t_ids where nome = 'sem_presenca')),
+          'fa000000-0000-4000-8000-0000000002a2'::uuid, 'modalidade trocada');
+reset role;
 
 -- ---------------------------------------------------------------------
 -- Professor e recepção de A não gravam

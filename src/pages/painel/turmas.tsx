@@ -157,7 +157,10 @@ const ListaDeTurmas: React.FC = () => {
 
 const FichaTurma: React.FC<{ turmaId: string }> = ({ turmaId }) => {
   const { academia, abrir } = usarPainel();
-  const [estado, recarregar] = usarCarga(() => lerTurma(academia.academia_id, turmaId), [academia.academia_id, turmaId]);
+  const [estado, recarregar] = usarCarga(
+    () => lerTurma(academia.academia_id, turmaId, hojeNoFuso(academia.fuso)),
+    [academia.academia_id, turmaId, academia.fuso]
+  );
   const [editando, setEditando] = useState(false);
   const [aviso, setAviso] = useState<string | null>(null);
 

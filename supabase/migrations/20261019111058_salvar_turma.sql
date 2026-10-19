@@ -145,3 +145,34 @@ $$;
 
 revoke execute on function public.salvar_turma(uuid, jsonb, uuid) from public, anon;
 grant execute on function public.salvar_turma(uuid, jsonb, uuid) to authenticated;
+
+-- Turma com presença não troca de modalidade. vw_progresso_graduacao conta
+-- as presenças pela modalidade atual da turma: trocar Jiu-Jitsu por Judô
+-- tiraria aulas já dadas de uma modalidade e as daria à outra, mudando
+-- aulas_desde e apto sem nenhum treino novo. Para mudar, cria-se uma turma
+-- nova e desativa-se a antiga. Vale para salvar_turma e para update direto.
+-- security definer: a conferência olha presenças da própria turma, sem
+-- depender do RLS de quem grava.
+create or replace function public.turmas_modalidade_com_presencas()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  if new.modalidade_id is distinct from old.modalidade_id and exists (
+    select 1 from public.presencas
+     where academia_id = old.academia_id and turma_id = old.id
+  ) then
+    raise exception 'Esta turma já tem presenças: crie uma turma nova na outra modalidade e desative esta'
+      using hint = 'turma_com_presencas';
+  end if;
+  return new;
+end
+$$;
+
+create trigger turmas_modalidade_com_presencas
+  before update of modalidade_id on public.turmas
+  for each row execute function public.turmas_modalidade_com_presencas();
+
+revoke execute on function public.turmas_modalidade_com_presencas() from public, anon, authenticated;

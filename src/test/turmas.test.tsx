@@ -247,7 +247,7 @@ describe("Painel: turmas (cobertura pedida na primeira revisão)", () => {
     const ler = vi.spyOn(lib, "lerTurma").mockResolvedValue({ turma: turma(), matriculados: [] });
     montar("dono", T1, false);
     await screen.findByRole("heading", { name: "Adulto Noite" });
-    expect(ler).toHaveBeenCalledWith("acad-a", T1);
+    expect(ler).toHaveBeenCalledWith("acad-a", T1, expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/));
     expect(screen.queryByRole("button", { name: "Editar" })).not.toBeInTheDocument();
   });
 
