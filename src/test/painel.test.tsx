@@ -146,7 +146,7 @@ describe("Painel da equipe: entrada e escolha de academia", () => {
 
     const menu = await screen.findByRole("navigation", { name: "Menu do painel" });
     fireEvent.click(within(menu).getByRole("link", { name: "Turmas" }));
-    await waitFor(() => expect(screen.getByText(/issue #27/)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByRole("heading", { name: "Turmas" })).toBeInTheDocument());
 
     window.history.pushState({}, "", "/painel/alpha/alunos");
     fireEvent(window, new PopStateEvent("popstate"));
@@ -402,7 +402,7 @@ describe("Painel da equipe: entrada e escolha de academia", () => {
     const menu = await screen.findByRole("navigation", { name: "Menu do painel" });
     fireEvent.click(within(menu).getByRole("link", { name: "Turmas" }));
     await waitFor(() => expect(window.location.pathname).toBe("/painel/alpha/turmas"));
-    expect(screen.getByText(/issue #27/)).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Turmas" })).toBeInTheDocument();
   });
 
   it("sair volta ao login e esquece a escolha", async () => {
