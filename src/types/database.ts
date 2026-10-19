@@ -492,7 +492,7 @@ isOneToOne: false
 { Args: { "p_divergencia"?: string,"p_estado": string,"p_evento_id": string,"p_forma"?: string,"p_gateway_conta_id": string,"p_gateway_id": string,"p_pago_em"?: string,"p_referencia": string,"p_valor_pago"?: number }; Returns: string
                            },
 "aprovar_matricula":
-{ Args: { "p_matricula_id": string }; Returns: undefined
+{ Args: { "p_dia_vencimento"?: number,"p_matricula_id": string }; Returns: undefined
                            },
 "baixar_cobranca_interna":
 { Args: { "p_cobranca_id": string,"p_forma"?: string,"p_pago_em"?: string,"p_user_id": string,"p_valor_pago"?: number }; Returns: undefined
