@@ -4,7 +4,7 @@
 -- gera; cobrança emitida no gateway não tem baixa nem cancelamento manual.
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(26);
+select plan(27);
 
 create function public.__erro_de(p_sql text)
 returns jsonb
@@ -62,7 +62,9 @@ insert into public.alunos (id, academia_id, nome) values
 
 insert into public.matriculas (id, academia_id, aluno_id, plano_id, status, data_inicio, dia_vencimento) values
   ('fe000000-0000-4000-8000-0000000005a1', 'fe000000-0000-4000-8000-00000000000a', 'fe000000-0000-4000-8000-0000000001a1',
-   'fe000000-0000-4000-8000-0000000004a1', 'ativa', current_date, 10);
+   'fe000000-0000-4000-8000-0000000004a1', 'ativa', current_date, 10),
+  ('fe000000-0000-4000-8000-0000000005c1', 'fe000000-0000-4000-8000-00000000000c', 'fe000000-0000-4000-8000-0000000001c1',
+   null, 'ativa', current_date, 10);
 
 -- Conta do gateway só para a cobrança emitida (o par gateway_id e
 -- gateway_conta_id é obrigatório).
@@ -159,6 +161,8 @@ select ok(public.__falha($$select public.baixar_cobranca_manual('fe000000-0000-4
 select ok(public.__falha($$select public.cancelar_cobranca('fe000000-0000-4000-8000-0000000006c1')$$),
           'academia suspensa não cancela');
 select is((select count(*)::int from public.vw_inadimplentes), 1, 'academia suspensa vê os inadimplentes');
+select ok(public.__falha($$select public.gerar_cobrancas_matricula('fe000000-0000-4000-8000-0000000005c1')$$),
+          'academia suspensa não gera cobrança');
 reset role;
 
 select * from finish();
