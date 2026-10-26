@@ -4,6 +4,8 @@ Gestão para academias de artes marciais: alunos, matrícula online, turmas,
 frequência por check-in, graduações (faixas e graus) e financeiro. Cada
 academia é um tenant isolado no mesmo banco.
 
+![Painel da equipe: lista de turmas por modalidade e catálogo](docs/imagens/painel-turmas.png)
+
 ## Estado atual
 
 O que já existe em `main`:
@@ -12,14 +14,71 @@ O que já existe em `main`:
   tabelas, papéis da equipe (dono, admin, professor, recepção, totem),
   matrícula online, check-in por QR com token rotativo, graduações e
   financeiro (cobranças, recorrência, baixa manual, inadimplência).
-- **Testes pgTAP** de RLS, check-in, matrícula online e financeiro,
-  incluindo cenários de isolamento entre academias.
-- **Front** (React + Vite + TypeScript + Tailwind) com três telas:
-  matrícula pública, check-in do aluno e totem com o QR da turma.
+  Duas matrículas não canceladas do mesmo aluno, na mesma turma e com
+  períodos sobrepostos, são recusadas pelo banco; turma e horários são
+  gravados numa transação só.
+- **Testes pgTAP** de RLS, check-in, matrícula, turmas e financeiro,
+  incluindo cenários de isolamento entre academias e de concorrência.
+- **Front** (React + Vite + TypeScript + Tailwind):
+  - páginas públicas: matrícula online, check-in do aluno e totem com o QR
+    da turma;
+  - **painel da equipe**: login e escolha de academia, alunos (lista,
+    ficha, cadastro, edição e anonimização) e turmas (horários,
+    matriculados, modalidades e professores). Cada papel vê só o que pode.
 
-O que ainda não existe: painel da equipe, portal do aluno, integração com
-gateway de pagamento, lembretes por WhatsApp e convite de membros. O
-backlog está no fim do [AGENTS.md](AGENTS.md) e nas issues.
+Em andamento ou ainda não existe: telas de matrículas, cobranças e
+graduações no painel, portal do aluno, integração com gateway de pagamento,
+lembretes por WhatsApp e convite de membros. O backlog está no fim do
+[AGENTS.md](AGENTS.md) e nas issues.
+
+## Telas
+
+As imagens foram tiradas do front rodando localmente, com dados de
+demonstração (nomes e números fictícios).
+
+### Matrícula online
+
+Página pública da academia, para o visitante pedir a matrícula. O pedido
+chega à recepção como matrícula pendente.
+
+<p>
+  <img src="docs/imagens/matricula-online.png" alt="Matrícula online no computador: turmas, horários e planos da academia" width="68%">
+  <img src="docs/imagens/matricula-online-celular.png" alt="Matrícula online no celular" width="28%">
+</p>
+
+### Painel da equipe
+
+Login com e-mail e senha. Quem é da equipe de mais de uma academia escolhe
+em qual entrar. Academia com assinatura suspensa abre só para consulta; a
+única alteração que continua valendo é a anonimização de aluno (LGPD), que
+não depende de pagamento.
+
+![Login do painel da equipe](docs/imagens/painel-login.png)
+
+**Alunos**: busca por nome ou CPF, filtro por situação e ficha com dados,
+matrículas e situação financeira. Dono, admin e recepção cadastram e
+editam; professor só consulta; anonimização (LGPD) só para dono e admin.
+
+![Lista de alunos com busca e situação](docs/imagens/painel-alunos.png)
+
+![Ficha do aluno com dados, matrículas e situação financeira](docs/imagens/painel-aluno-ficha.png)
+
+**Turmas**: agrupadas por modalidade, com professor, público, capacidade e
+horários no fuso da academia. Turma sem horário avisa que não aceita
+check-in por QR. A ficha mostra os horários e os alunos com matrícula
+vigente. Modalidades e professores (o catálogo que as turmas usam) ficam na
+mesma seção. Só dono e admin cadastram e editam; professor e recepção
+consultam.
+
+![Ficha da turma com horários e alunos matriculados](docs/imagens/painel-turma-ficha.png)
+
+### Totem de presença
+
+Tela do aparelho que fica na academia e projeta o QR de check-in da turma.
+Exige o login de alguém da equipe ou de um usuário com o papel `totem`,
+criado só para o aparelho (ele não altera nada; só gera o QR).
+
+![Acesso ao totem de presença](docs/imagens/totem.png)
 
 ## Rodando o front
 
@@ -31,8 +90,11 @@ npm run dev
 ```
 
 O servidor de desenvolvimento sobe em HTTPS com certificado autoassinado
-(a câmera do check-in exige HTTPS). Sem `.env.local`, o front roda com dados
-simulados e a academia de demonstração `honor-demo-a`.
+(a câmera do check-in exige HTTPS). Sem `.env.local`, as páginas públicas
+rodam com dados simulados e a academia de demonstração `honor-demo-a`, e o
+painel entra (com qualquer e-mail e senha) em duas academias de
+demonstração, ainda sem alunos nem turmas. Para o painel com dados, aponte
+para um projeto Supabase.
 
 Para apontar para um projeto Supabase, crie `.env.local`:
 
@@ -46,11 +108,17 @@ para o repositório.
 
 Rotas:
 
-| Endereço              | Tela                                   |
-|-----------------------|----------------------------------------|
-| `/{slug}/matricula`   | matrícula online (visitante anônimo)   |
-| `/{slug}/checkin`     | check-in do aluno pelo QR da turma     |
-| `/{slug}/totem`       | totem da academia (login da equipe)    |
+| Endereço                     | Tela                                       |
+|------------------------------|--------------------------------------------|
+| `/{slug}/matricula`          | matrícula online (visitante anônimo)       |
+| `/{slug}/checkin`            | check-in do aluno pelo QR da turma         |
+| `/{slug}/totem`              | totem da academia (login da equipe ou do papel `totem`) |
+| `/painel`                    | painel da equipe: login e escolha de academia |
+| `/painel/{slug}/{seção}`     | seções do painel (`alunos`, `turmas`...)   |
+| `/painel/{slug}/{seção}/{id}`| registro aberto na seção (ou `novo`)       |
+
+`painel` é um slug reservado: nenhuma academia pode usá-lo (nem `portal`,
+`api`, `admin`, `entrar` e `assets`).
 
 ## Comandos
 
@@ -87,8 +155,10 @@ supabase/migrations/   SQL versionado
 supabase/tests/        testes pgTAP
 supabase/seed.sql      dados de exemplo (duas academias de demonstração)
 src/                   front-end
+src/pages/painel/      painel da equipe
 src/types/database.ts  tipos gerados do banco
 docs/specs/            specs de módulo
+docs/imagens/          capturas de tela do README
 ```
 
 ## Documentação
@@ -96,13 +166,17 @@ docs/specs/            specs de módulo
 - [AGENTS.md](AGENTS.md): regras multi-tenant, papéis e permissões, RPCs e
   views, convenções, fluxo de revisão e merge. Leia antes de contribuir.
 - [docs/specs/checkin-seguranca.md](docs/specs/checkin-seguranca.md):
-  check-in com token rotativo, papel totem e códigos de erro.
+  check-in com token rotativo, papel totem e a lista de códigos de erro
+  (`hint`) das RPCs.
+- [docs/specs/matricula-duplicada.md](docs/specs/matricula-duplicada.md):
+  regra que impede duas matrículas não canceladas do mesmo aluno na mesma
+  turma com períodos sobrepostos.
 - [docs/specs/financeiro-gateway-webhook.md](docs/specs/financeiro-gateway-webhook.md):
   gateway de pagamento e webhook (ainda não implementado).
 
 ## Como contribuir
 
 Nada entra em `main` por commit direto: tudo por pull request, com o CI
-`Banco` verde e revisão aprovada. As regras completas estão no
-[AGENTS.md](AGENTS.md), seções "Revisão e merge" e "Checklist antes de
-abrir PR".
+`Banco` verde e a revisão que o PR exige. As regras completas estão no
+[AGENTS.md](AGENTS.md), seções "Revisão proporcional ao risco", "Revisão e
+merge" e "Checklist antes de abrir PR".
