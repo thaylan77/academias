@@ -119,6 +119,14 @@ begin
       using hint = 'cobrar_a_partir_invalido';
   end if;
 
+  -- Trava o aluno antes de conferir: anonimizar_aluno também trava o aluno
+  -- primeiro e só então cancela as matrículas dele. Sem a trava, uma
+  -- anonimização em andamento deixaria passar uma matrícula ativa nova para
+  -- o aluno já anonimizado.
+  perform 1 from public.alunos
+   where academia_id = p_academia_id and id = v_aluno
+     for update;
+
   -- Aluno (não anonimizado), plano ativo e turmas ativas, todos desta academia.
   if not exists (select 1 from public.alunos
                   where academia_id = p_academia_id and id = v_aluno and anonimizado_em is null)
@@ -169,12 +177,13 @@ set search_path = ''
 as $$
 declare
   v_academia uuid;
+  v_aluno    uuid;
   v_mat      public.matriculas;
   v_hoje     date;
 begin
   -- Permissão antes da trava: quem não gere a academia não espera nem trava
   -- a linha. Inexistente ou de outra academia: a mesma resposta.
-  select academia_id into v_academia from public.matriculas where id = p_matricula_id;
+  select academia_id, aluno_id into v_academia, v_aluno from public.matriculas where id = p_matricula_id;
   if v_academia is null
      or not public.pode_gerir(v_academia, array['dono', 'admin', 'recepcao']) then
     raise exception 'Matrícula não encontrada ou sem permissão'
@@ -184,6 +193,12 @@ begin
   if p_dia_vencimento is not null and p_dia_vencimento not between 1 and 28 then
     raise exception 'O dia de vencimento vai de 1 a 28' using hint = 'dados_invalidos';
   end if;
+
+  -- Trava o aluno antes da matrícula, na mesma ordem de anonimizar_aluno
+  -- (aluno, depois as matrículas dele): sem isso as duas podiam se travar
+  -- mutuamente. Se a anonimização chegou antes, a matrícula já está
+  -- cancelada e a aprovação é recusada logo abaixo.
+  perform 1 from public.alunos where academia_id = v_academia and id = v_aluno for update;
 
   select * into v_mat from public.matriculas where id = p_matricula_id for update;
   if v_mat.status <> 'pendente' then

@@ -265,10 +265,15 @@ select is((select status from public.alunos where id = 'fc000000-0000-4000-8000-
 select is((select count(*)::int from public.cobrancas where matricula_id = 'fc000000-0000-4000-8000-0000000005a1'), 0,
           'aprovar não gera cobrança');
 -- A primeira cobrança, gerada depois, não nasce vencida.
-select is(public.gerar_cobrancas('fc000000-0000-4000-8000-00000000000a', 'fc000000-0000-4000-8000-0000000005a1'), 1, 'gerar_cobrancas cria a primeira cobrança');
-select ok((select min(vencimento) from public.cobrancas where matricula_id = 'fc000000-0000-4000-8000-0000000005a1')
+-- Pode vir também a competência seguinte, quando o vencimento dela já cai
+-- dentro da antecedência (no fim do mês): por isso "pelo menos uma".
+select ok(public.gerar_cobrancas('fc000000-0000-4000-8000-00000000000a', 'fc000000-0000-4000-8000-0000000005a1') >= 1,
+          'gerar_cobrancas cria a primeira cobrança');
+select ok((select vencimento from public.cobrancas
+            where matricula_id = 'fc000000-0000-4000-8000-0000000005a1'
+              and competencia = date_trunc('month', public.hoje_academia('fc000000-0000-4000-8000-00000000000a')::timestamp)::date)
           >= public.hoje_academia('fc000000-0000-4000-8000-00000000000a'),
-          'a primeira cobrança da matrícula aprovada com atraso não nasce vencida');
+          'a cobrança da competência inicial (mês da aprovação) existe e não nasce vencida');
 
 set local role authenticated;
 select public.__como('fc000000-0000-4000-8000-0000000000a1');
