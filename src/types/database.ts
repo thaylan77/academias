@@ -204,7 +204,7 @@ isOneToOne: false
                     "academia_id": string,"aluno_id": string,"created_at": string,"data": string,"faixa_id": string,"grau": number,"id": string,"observacao": string | null,"professor_id": string | null
                   }
                   Insert: {
-                    "academia_id": string,"aluno_id": string,"created_at"?: string,"data"?: string,"faixa_id": string,"grau"?: number,"id"?: string,"observacao"?: string | null,"professor_id"?: string | null
+                    "academia_id": string,"aluno_id": string,"created_at"?: string,"data": string,"faixa_id": string,"grau"?: number,"id"?: string,"observacao"?: string | null,"professor_id"?: string | null
                   }
                   Update: {
                     "academia_id"?: string,"aluno_id"?: string,"created_at"?: string,"data"?: string,"faixa_id"?: string,"grau"?: number,"id"?: string,"observacao"?: string | null,"professor_id"?: string | null
