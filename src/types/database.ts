@@ -491,6 +491,9 @@ isOneToOne: false
 "aplicar_pagamento_gateway":
 { Args: { "p_divergencia"?: string,"p_estado": string,"p_evento_id": string,"p_forma"?: string,"p_gateway_conta_id": string,"p_gateway_id": string,"p_pago_em"?: string,"p_referencia": string,"p_valor_pago"?: number }; Returns: string
                            },
+"aprovar_matricula":
+{ Args: { "p_dia_vencimento"?: number,"p_matricula_id": string }; Returns: undefined
+                           },
 "baixar_cobranca_interna":
 { Args: { "p_cobranca_id": string,"p_forma"?: string,"p_pago_em"?: string,"p_user_id": string,"p_valor_pago"?: number }; Returns: undefined
                            },
@@ -519,6 +522,9 @@ isOneToOne: false
                            },
 "criar_academia":
 { Args: { "p_nome": string,"p_slug": string }; Returns: string
+                           },
+"criar_matricula":
+{ Args: { "p_academia_id": string,"p_dados": Json }; Returns: string
                            },
 "emitir_token_checkin":
 { Args: { "p_turma_id": string }; Returns: Json
