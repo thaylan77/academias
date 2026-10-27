@@ -109,6 +109,30 @@ describe("Painel: graduações", () => {
     expect(lerTurma).toHaveBeenCalledWith("acad-a", "t1", expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/));
   });
 
+  it("com modalidade em 'Todas', a turma escolhida limita o progresso à modalidade dela", async () => {
+    // Ana treina Jiu-Jitsu (não apta) e Muay Thai (apta); a turma t1 é de Jiu-Jitsu.
+    vi.spyOn(lib, "listarProgresso").mockResolvedValue([
+      progresso({ apto: false }),
+      progresso({ modalidade_id: "mt", apto: true }),
+    ]);
+    vi.spyOn(turmas, "lerTurma").mockResolvedValue({
+      turma: (await turmas.listarTurmas("acad-a"))[0],
+      matriculados: [{ matricula_id: "m1", aluno_id: "a1", nome: "Ana Souza", status: "ativa", data_inicio: "2026-01-01", data_fim: null }],
+    });
+    montar("professor");
+    await screen.findByRole("list", { name: "Progresso dos alunos" });
+    expect(within(screen.getByRole("list", { name: "Progresso dos alunos" })).getAllByRole("listitem")).toHaveLength(2);
+
+    fireEvent.change(screen.getByLabelText("Turma"), { target: { value: "t1" } });
+    await waitFor(() => expect(within(screen.getByRole("list", { name: "Progresso dos alunos" })).getAllByRole("listitem")).toHaveLength(1));
+    expect(screen.getByRole("list", { name: "Progresso dos alunos" })).toHaveTextContent("Jiu-Jitsu");
+    expect(screen.getByRole("list", { name: "Progresso dos alunos" })).not.toHaveTextContent("Muay Thai");
+
+    // Só os aptos: Ana não aparece por estar apta em outra modalidade.
+    fireEvent.click(screen.getByLabelText("Só os aptos a graduar"));
+    expect(await screen.findByText("Nenhum aluno com esses filtros.")).toBeInTheDocument();
+  });
+
   it("registrar a partir da linha: aluno e modalidade fixos, data padrão hoje, e recarrega", async () => {
     const listar = vi.spyOn(lib, "listarProgresso").mockResolvedValue([progresso()]);
     const registrar = vi.spyOn(lib, "registrarGraduacao").mockResolvedValue({ sucesso: true, id: "g1" });

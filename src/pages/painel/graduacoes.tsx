@@ -150,7 +150,14 @@ const Progressos: React.FC<{ dados: Dados; aoMudar: () => void }> = ({ dados, ao
     () => new Set(dados.catalogo.modalidades.filter((m) => m.ativa).map((m) => m.id)),
     [dados.catalogo.modalidades]
   );
-  const visiveis = filtrarProgresso(dados.progresso, { modalidadeId: modalidadeId || null, alunosDaTurma, soAptos });
+  // Com uma turma escolhida, vale a modalidade dela: o progresso do aluno em
+  // outra modalidade não é da turma (nem o "apto" dele).
+  const modalidadeDaTurma = turmaId ? dados.turmas.find((t) => t.id === turmaId)?.modalidade_id ?? null : null;
+  const visiveis = filtrarProgresso(dados.progresso, {
+    modalidadeId: modalidadeId || modalidadeDaTurma,
+    alunosDaTurma,
+    soAptos,
+  });
   const turmasDaModalidade = dados.turmas.filter((t) => t.ativa && (!modalidadeId || t.modalidade_id === modalidadeId));
 
   return (
