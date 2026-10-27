@@ -293,6 +293,29 @@ describe("Check-ins da aula: troca de contexto, falhas e ciclo", () => {
     expect(screen.getByText("Ana Souza")).toBeInTheDocument();
   });
 
+  it("na virada do dia, a lista de ontem sai da tela mesmo se a busca do dia novo falhar", async () => {
+    vi.setSystemTime(new Date("2026-10-20T02:59:50Z")); // 23:59:50 em Fortaleza
+    vi.spyOn(lib, "listarCheckinsDaAula")
+      .mockResolvedValueOnce([checkin({ aluno: "Chegou ontem" })])
+      .mockRejectedValue(new Error("rede"));
+    montar();
+    await andar();
+    expect(screen.getByText("Chegou ontem")).toBeInTheDocument();
+
+    await andar(lib.INTERVALO_ATUALIZACAO_MS); // já é dia 20 em Fortaleza
+    expect(screen.queryByText("Chegou ontem")).not.toBeInTheDocument();
+    expect(screen.queryByText(/Atualizado às/)).not.toBeInTheDocument();
+    expect(screen.getByRole("alert")).toHaveTextContent("Não foi possível atualizar os check-ins.");
+  });
+
+  it("no mesmo dia, a falha mantém a lista (só a virada limpa)", async () => {
+    vi.spyOn(lib, "listarCheckinsDaAula").mockResolvedValueOnce([checkin()]).mockRejectedValue(new Error("rede"));
+    montar();
+    await andar();
+    await andar(lib.INTERVALO_ATUALIZACAO_MS);
+    expect(screen.getByText("Ana Souza")).toBeInTheDocument();
+  });
+
   it("na virada da meia-noite no fuso da academia, a busca seguinte já pede o dia novo", async () => {
     vi.setSystemTime(new Date("2026-10-20T02:59:50Z")); // 23:59:50 em Fortaleza
     const listar = vi.spyOn(lib, "listarCheckinsDaAula").mockResolvedValue([]);

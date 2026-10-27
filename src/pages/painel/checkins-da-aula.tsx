@@ -26,15 +26,25 @@ export const CheckinsDaAula: React.FC<{ turmaId: string }> = ({ turmaId }) => {
   const geracao = useRef(0);
   // Início (ms) da consulta em andamento, ou null.
   const emAndamento = useRef<number | null>(null);
+  // Dia (no fuso da academia) da lista que está na tela.
+  const diaDaLista = useRef<string | null>(null);
 
   const carregar = useCallback(() => {
     const minha = ++geracao.current;
     emAndamento.current = Date.now();
     setCarregando(true);
-    // O dia é recalculado a cada busca: na virada da meia-noite (no fuso da academia) a lista recomeça.
-    listarCheckinsDaAula(academia.academia_id, turmaId, hojeNoFuso(academia.fuso))
+    // O dia é recalculado a cada busca. Virou o dia (no fuso da academia): a lista de
+    // ontem sai da tela na hora, para não aparecer como "de hoje" se a busca falhar.
+    const hoje = hojeNoFuso(academia.fuso);
+    if (diaDaLista.current !== null && diaDaLista.current !== hoje) {
+      diaDaLista.current = null;
+      setLista(null);
+      setAtualizadoEm(null);
+    }
+    listarCheckinsDaAula(academia.academia_id, turmaId, hoje)
       .then((dados) => {
         if (minha !== geracao.current) return;
+        diaDaLista.current = hoje;
         setLista(dados);
         setFalhou(false);
         setAtualizadoEm(horaNoFuso(new Date().toISOString(), academia.fuso));
@@ -51,6 +61,7 @@ export const CheckinsDaAula: React.FC<{ turmaId: string }> = ({ turmaId }) => {
 
   useEffect(() => {
     // Outra turma ou academia: nada da anterior fica na tela enquanto a nova chega.
+    diaDaLista.current = null;
     setLista(null);
     setFalhou(false);
     setAtualizadoEm(null);
