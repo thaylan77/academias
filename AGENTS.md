@@ -148,6 +148,9 @@ Plano, status e slug da academia só mudam via `service_role` (billing do SaaS).
 | `baixar_cobranca_manual(cobranca_id, ...)` | secretaria   | baixa de cobrança não emitida no gateway (`baixa_por`, `baixa_em`) |
 | `cancelar_cobranca(cobranca_id)`       | secretaria   | cancela cobrança não emitida; cobrança nunca é apagada     |
 | `gerar_cobrancas_matricula(matricula_id)` | secretaria | gera na hora as cobranças recorrentes da matrícula         |
+| `criar_matricula(academia_id, dados)`  | secretaria   | matrícula `ativa` e turmas numa transação, `cobrar_a_partir` opcional; com plano, exige dia de vencimento; não gera cobrança |
+| `aprovar_matricula(matricula_id, dia_vencimento?)` | secretaria | aprova matrícula `pendente` (da matrícula online), com início e cobrança a partir da aprovação; ativa o aluno |
+| `salvar_turma(academia_id, dados, turma_id?)` | dono, admin | turma e horários numa transação; turma com presença não troca de modalidade |
 | `anonimizar_aluno(aluno_id)`           | dono, admin  | LGPD: substitui o delete de aluno                          |
 | `vw_graduacao_atual`                   | equipe/aluno | faixa e grau atuais por modalidade                         |
 | `vw_progresso_graduacao`               | equipe/aluno | aulas e meses desde a última graduação, campo `apto`       |
