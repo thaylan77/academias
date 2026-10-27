@@ -160,6 +160,10 @@ describe("Painel: cobranças", () => {
     montar("recepcao");
 
     const secao = await screen.findByRole("region", { name: "Gerar cobranças" });
+    // Sem agendamento ainda: a tela não pode prometer geração automática.
+    expect(secao).toHaveTextContent("A geração automática ainda não está ligada");
+    expect(secao).toHaveTextContent("um mês que passar sem gerar não é recuperado depois");
+    expect(secao).not.toHaveTextContent("geradas sozinhas");
     expect(within(secao).getByRole("button", { name: "Gerar agora" })).toBeDisabled();
     fireEvent.change(within(secao).getByLabelText("Matrícula ativa"), { target: { value: "m1" } });
     fireEvent.click(within(secao).getByRole("button", { name: "Gerar agora" }));

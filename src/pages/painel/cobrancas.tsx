@@ -389,7 +389,11 @@ const GerarAgora: React.FC<{ matriculas: MatriculaCobravel[]; aoMudar: () => voi
   return (
     <section aria-label="Gerar cobranças" className="space-y-3">
       <h2 className="text-lg font-bold text-white">Gerar cobranças de uma matrícula</h2>
-      <p className="text-sm text-zinc-400">As cobranças são geradas sozinhas; aqui é para adiantar a de uma matrícula.</p>
+      {/* Enquanto o agendamento de gerar_cobrancas não existe (backlog do financeiro), a geração é só esta. */}
+      <p className="text-sm text-zinc-400">
+        A geração automática ainda não está ligada: gere aqui, todo mês, as cobranças de cada matrícula ativa. Só entram a
+        competência atual e a seguinte; um mês que passar sem gerar não é recuperado depois.
+      </p>
       <div className="flex flex-wrap items-end gap-3">
         <div className="min-w-[260px] flex-1 space-y-1.5">
           <Label htmlFor="gerar-matricula">Matrícula ativa</Label>
