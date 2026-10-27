@@ -56,6 +56,9 @@ describe("Painel: matrículas", () => {
     montar("professor");
     expect(screen.getByRole("alert")).toHaveTextContent("não acessa as matrículas");
     expect(listar).not.toHaveBeenCalled();
+    expect(alunos.listarAlunos).not.toHaveBeenCalled();
+    expect(turmas.listarTurmas).not.toHaveBeenCalled();
+    expect(lib.listarPlanos).not.toHaveBeenCalled();
   });
 
   it("pendentes em destaque; a lista começa nas ativas e filtra por situação, com encerrada no dia da academia", async () => {
@@ -86,16 +89,30 @@ describe("Painel: matrículas", () => {
       mat({ id: "m2", aluno_id: "a2", aluno: "Bruno Lima", status: "pendente", origem: "online", dia_vencimento: null }),
     ]);
     const aprovar = vi.spyOn(lib, "aprovarMatricula").mockResolvedValue({ sucesso: true, valor: undefined });
+    const gerar = vi.spyOn(cobrancas, "gerarCobrancasAgora").mockResolvedValue({ sucesso: true, geradas: 1 });
     montar();
     const botao = await screen.findByRole("button", { name: "Aprovar matrícula de Bruno Lima" });
     fireEvent.click(botao);
     expect(await screen.findByText("Com plano, informe o dia de vencimento (1 a 28).")).toBeInTheDocument();
     expect(aprovar).not.toHaveBeenCalled();
 
+    fireEvent.change(screen.getByLabelText("Dia de vencimento"), { target: { value: "29" } });
+    fireEvent.click(botao);
+    expect(await screen.findByText("O dia de vencimento vai de 1 a 28.")).toBeInTheDocument();
+    expect(aprovar).not.toHaveBeenCalled();
+
     fireEvent.change(screen.getByLabelText("Dia de vencimento"), { target: { value: "5" } });
     fireEvent.click(botao);
-    expect(await screen.findByRole("status")).toHaveTextContent("Matrícula de Bruno Lima aprovada");
+    fireEvent.click(botao);
+    const ok = await screen.findByRole("status");
+    expect(ok).toHaveTextContent("Matrícula de Bruno Lima aprovada");
+    expect(ok).toHaveTextContent("1 cobrança gerada.");
+    expect(within(ok).getByRole("button", { name: "Ver cobranças" })).toBeInTheDocument();
+    // Clique duplo: uma aprovação e uma geração só.
+    expect(aprovar).toHaveBeenCalledTimes(1);
     expect(aprovar).toHaveBeenCalledWith("m2", 5);
+    expect(gerar).toHaveBeenCalledTimes(1);
+    expect(gerar).toHaveBeenCalledWith("m2");
     await waitFor(() => expect(listar).toHaveBeenCalledTimes(2));
   });
 
@@ -105,9 +122,25 @@ describe("Painel: matrículas", () => {
     ]);
     vi.spyOn(lib, "aprovarMatricula").mockResolvedValue({ sucesso: false, mensagem: "Esta matrícula não está mais pendente." });
     montar();
+    const gerar = vi.spyOn(cobrancas, "gerarCobrancasAgora");
     fireEvent.click(await screen.findByRole("button", { name: "Aprovar matrícula de Bruno Lima" }));
-    expect(await screen.findByRole("alert")).toHaveTextContent("não está mais pendente");
+    const pend = screen.getByRole("region", { name: "Pendentes" });
+    expect(await within(pend).findByRole("alert")).toHaveTextContent("não está mais pendente");
     await waitFor(() => expect(listar).toHaveBeenCalledTimes(2));
+    expect(gerar).not.toHaveBeenCalled();
+  });
+
+  it("aprovar sem plano não pede dia nem gera cobrança", async () => {
+    vi.spyOn(lib, "listarMatriculas").mockResolvedValue([
+      mat({ id: "m2", aluno: "Bruno Lima", status: "pendente", plano_id: null, plano: null, dia_vencimento: null }),
+    ]);
+    const aprovar = vi.spyOn(lib, "aprovarMatricula").mockResolvedValue({ sucesso: true, valor: undefined });
+    const gerar = vi.spyOn(cobrancas, "gerarCobrancasAgora");
+    montar();
+    fireEvent.click(await screen.findByRole("button", { name: "Aprovar matrícula de Bruno Lima" }));
+    expect(await screen.findByRole("status")).toHaveTextContent("Matrícula de Bruno Lima aprovada");
+    expect(aprovar).toHaveBeenCalledWith("m2", null);
+    expect(gerar).not.toHaveBeenCalled();
   });
 
   it("matrícula nova: valida, cria pela RPC e gera as cobranças em seguida", async () => {
@@ -143,6 +176,28 @@ describe("Painel: matrículas", () => {
     expect(screen.queryByRole("form", { name: "Nova matrícula" })).not.toBeInTheDocument();
     fireEvent.click(within(ok).getByRole("button", { name: "Ver cobranças" }));
     expect(abrir).toHaveBeenCalledWith("cobrancas");
+  });
+
+  it("matrícula nova: sem turma é recusada; valor e mês inicial vão para a RPC", async () => {
+    vi.spyOn(lib, "listarMatriculas").mockResolvedValue([]);
+    const criar = vi.spyOn(lib, "criarMatricula").mockResolvedValue({ sucesso: true, valor: "m-nova" });
+    vi.spyOn(cobrancas, "gerarCobrancasAgora").mockResolvedValue({ sucesso: true, geradas: 0 });
+    montar();
+    fireEvent.click(await screen.findByRole("button", { name: "Nova matrícula" }));
+    const form = screen.getByRole("form", { name: "Nova matrícula" });
+    fireEvent.change(within(form).getByLabelText("Aluno"), { target: { value: "a1" } });
+    fireEvent.change(within(form).getByLabelText("Plano"), { target: { value: "p1" } });
+    fireEvent.change(within(form).getByLabelText(/Dia de vencimento/), { target: { value: "5" } });
+    fireEvent.change(within(form).getByLabelText(/Valor negociado/), { target: { value: "120,50" } });
+    fireEvent.change(within(form).getByLabelText(/Cobrar a partir de/), { target: { value: "2026-11" } });
+    fireEvent.click(within(form).getByRole("button", { name: "Matricular" }));
+    expect(await within(form).findByRole("alert")).toHaveTextContent("Escolha pelo menos uma turma.");
+    fireEvent.click(within(form).getByLabelText(/Adulto Noite/));
+    fireEvent.click(within(form).getByRole("button", { name: "Matricular" }));
+    expect(await screen.findByRole("status")).toHaveTextContent("Nenhuma cobrança entra agora");
+    expect(criar).toHaveBeenCalledWith("acad-a", {
+      aluno_id: "a1", plano_id: "p1", turma_ids: ["t1"], data_inicio: "2026-10-27", dia_vencimento: 5, valor: 120.5, cobrar_a_partir: "2026-11-01",
+    });
   });
 
   it("matrícula sem plano não gera cobrança; geração que falha avisa para gerar em Cobranças", async () => {
@@ -221,8 +276,65 @@ describe("Painel: matrículas", () => {
     expect(abrir).toHaveBeenCalledWith("cobrancas");
   });
 
+  it("encerrar recusado: o erro fica na linha, a confirmação continua aberta e a lista recarrega", async () => {
+    const listar = vi.spyOn(lib, "listarMatriculas").mockResolvedValue([mat()]);
+    vi.spyOn(lib, "encerrarMatricula").mockResolvedValue({ sucesso: false, mensagem: "Só matrícula ativa ou trancada pode ser encerrada." });
+    montar();
+    fireEvent.click(await screen.findByRole("button", { name: "Encerrar matrícula de Ana Souza" }));
+    fireEvent.click(screen.getByRole("button", { name: "Confirmar fim" }));
+    expect(await within(linhaDe("Ana Souza")).findByRole("alert")).toHaveTextContent("Só matrícula ativa ou trancada");
+    expect(screen.getByRole("group", { name: "Encerrar matrícula de Ana Souza" })).toBeInTheDocument();
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+    await waitFor(() => expect(listar).toHaveBeenCalledTimes(2));
+  });
+
+  it("trancada encerra; 'Mudar fim' começa no fim atual; clique duplo encerra uma vez", async () => {
+    vi.spyOn(lib, "listarMatriculas").mockResolvedValue([mat({ status: "trancada", data_fim: "2026-12-15" })]);
+    let resolver: (v: lib.Resultado<number>) => void = () => {};
+    const encerrar = vi.spyOn(lib, "encerrarMatricula").mockImplementation(() => new Promise((r) => { resolver = r; }));
+    montar();
+    fireEvent.change(await screen.findByLabelText("Situação"), { target: { value: "trancada" } });
+    fireEvent.click(screen.getByRole("button", { name: "Encerrar matrícula de Ana Souza" }));
+    const grupo = screen.getByRole("group", { name: "Encerrar matrícula de Ana Souza" });
+    expect(within(grupo).getByLabelText("Último dia")).toHaveValue("2026-12-15");
+    fireEvent.click(within(grupo).getByRole("button", { name: "Confirmar fim" }));
+    fireEvent.click(within(grupo).getByRole("button", { name: /Confirmar fim|Salvando/ }));
+    expect(encerrar).toHaveBeenCalledTimes(1);
+    expect(encerrar).toHaveBeenCalledWith("m1", "2026-12-15");
+    resolver({ sucesso: true, valor: 0 });
+    expect(await screen.findByRole("status")).toHaveTextContent("encerrada em 15/12/2026.");
+  });
+
+  it("trancar com pendentes de hoje em diante avisa e leva a Cobranças", async () => {
+    vi.spyOn(lib, "listarMatriculas").mockResolvedValue([mat()]);
+    vi.spyOn(lib, "trancarMatricula").mockResolvedValue({ sucesso: true, valor: 1 });
+    const { abrir } = montar();
+    fireEvent.click(await screen.findByRole("button", { name: "Trancar matrícula de Ana Souza" }));
+    fireEvent.click(screen.getByRole("button", { name: "Confirmar trancamento" }));
+    const ok = await screen.findByRole("status");
+    expect(ok).toHaveTextContent("1 cobrança pendente vence de hoje em diante e continua em aberto");
+    fireEvent.click(within(ok).getByRole("button", { name: "Ver cobranças" }));
+    expect(abrir).toHaveBeenCalledWith("cobrancas");
+  });
+
+  it("destrancar com plano gera as cobranças; trancada que já terminou não oferece destrancar", async () => {
+    vi.spyOn(lib, "listarMatriculas").mockResolvedValue([
+      mat({ status: "trancada" }),
+      mat({ id: "m9", aluno: "Fim Passado", status: "trancada", data_fim: "2026-10-26" }),
+    ]);
+    vi.spyOn(lib, "destrancarMatricula").mockResolvedValue({ sucesso: true, valor: undefined });
+    const gerar = vi.spyOn(cobrancas, "gerarCobrancasAgora").mockResolvedValue({ sucesso: false, mensagem: "x" });
+    montar();
+    fireEvent.change(await screen.findByLabelText("Situação"), { target: { value: "todas" } });
+    expect(within(linhaDe("Fim Passado")).queryByRole("button", { name: /Destrancar/ })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Destrancar matrícula de Ana Souza" }));
+    const alerta = await screen.findByText(/destrancada: check-in e cobranças voltam a valer/);
+    expect(alerta).toHaveTextContent("As cobranças não foram geradas: gere em Cobranças.");
+    expect(gerar).toHaveBeenCalledWith("m1");
+  });
+
   it("trancar pede confirmação; destrancar só aparece na trancada", async () => {
-    vi.spyOn(lib, "listarMatriculas").mockResolvedValue([mat(), mat({ id: "m5", aluno: "Eva Melo", status: "trancada" })]);
+    vi.spyOn(lib, "listarMatriculas").mockResolvedValue([mat(), mat({ id: "m5", aluno: "Eva Melo", status: "trancada", plano_id: null, plano: null })]);
     const trancar = vi.spyOn(lib, "trancarMatricula").mockResolvedValue({ sucesso: true, valor: 0 });
     const destrancar = vi.spyOn(lib, "destrancarMatricula").mockResolvedValue({ sucesso: true, valor: undefined });
     montar();
@@ -244,13 +356,16 @@ describe("Painel: matrículas", () => {
   });
 
   it("academia suspensa: consulta, sem aprovar, matricular nem alterar", async () => {
-    vi.spyOn(lib, "listarMatriculas").mockResolvedValue([mat(), mat({ id: "m2", aluno: "Bruno Lima", status: "pendente" })]);
+    vi.spyOn(lib, "listarMatriculas").mockResolvedValue([
+      mat(), mat({ id: "m2", aluno: "Bruno Lima", status: "pendente" }), mat({ id: "m5", aluno: "Eva Melo", status: "trancada" }),
+    ]);
     montar("dono", false);
     await screen.findByRole("region", { name: "Pendentes" });
     expect(screen.getByText(/assinatura suspensa/)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Aprovar/ })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Nova matrícula" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /Encerrar|Trancar/ })).not.toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("Situação"), { target: { value: "todas" } });
+    expect(screen.queryByRole("button", { name: /Encerrar|Trancar|Destrancar/ })).not.toBeInTheDocument();
   });
 
   it("falha ao carregar oferece tentar de novo", async () => {

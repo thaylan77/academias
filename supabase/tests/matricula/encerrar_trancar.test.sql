@@ -4,7 +4,7 @@
 -- encerrar e trancar devolvem quantas pendentes ficaram depois.
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(35);
+select plan(51);
 
 create function public.__hint_de(p_sql text)
 returns text
@@ -230,6 +230,82 @@ select public.__como('fe100000-0000-4000-8000-0000000000c1');
 select isnt(public.fazer_checkin('fe100000-0000-4000-8000-0000000003a1', (select tok from t_tok)), null,
             'destrancada, o check-in volta a valer');
 reset role;
+
+-- ---------------------------------------------------------------------
+-- 6. Fronteiras, trancada encerrada e as recusas que faltavam
+--   M7 trancada do aluno 5 (pendente); M8 ativa do aluno 6 com fim hoje e
+--   quatro pendentes (ontem, hoje, hoje + 5, hoje + 6); M9 trancada do
+--   aluno 7 (inativo) com fim ontem; M10 trancada na academia suspensa.
+-- ---------------------------------------------------------------------
+insert into public.alunos (id, academia_id, nome, status) values
+  ('fe100000-0000-4000-8000-0000000001a5', 'fe100000-0000-4000-8000-00000000000a', 'Aluno 5', 'pendente'),
+  ('fe100000-0000-4000-8000-0000000001a6', 'fe100000-0000-4000-8000-00000000000a', 'Aluno 6', 'ativo'),
+  ('fe100000-0000-4000-8000-0000000001a7', 'fe100000-0000-4000-8000-00000000000a', 'Aluno 7', 'inativo'),
+  ('fe100000-0000-4000-8000-0000000001c2', 'fe100000-0000-4000-8000-00000000000c', 'Aluno C2', 'ativo');
+insert into public.matriculas (id, academia_id, aluno_id, plano_id, status, origem, data_inicio, data_fim, dia_vencimento) values
+  ('fe100000-0000-4000-8000-000000000507', 'fe100000-0000-4000-8000-00000000000a', 'fe100000-0000-4000-8000-0000000001a5', null,
+   'trancada', 'recepcao', (select hoje from t_d) - 60, null, null),
+  ('fe100000-0000-4000-8000-000000000508', 'fe100000-0000-4000-8000-00000000000a', 'fe100000-0000-4000-8000-0000000001a6', 'fe100000-0000-4000-8000-0000000004a1',
+   'ativa', 'recepcao', (select hoje from t_d) - 60, (select hoje from t_d), 10),
+  ('fe100000-0000-4000-8000-000000000509', 'fe100000-0000-4000-8000-00000000000a', 'fe100000-0000-4000-8000-0000000001a7', null,
+   'trancada', 'recepcao', (select hoje from t_d) - 60, (select hoje from t_d) - 1, null),
+  ('fe100000-0000-4000-8000-000000000510', 'fe100000-0000-4000-8000-00000000000c', 'fe100000-0000-4000-8000-0000000001c2', null,
+   'trancada', 'recepcao', (select hoje from t_d) - 60, null, null);
+insert into public.cobrancas (academia_id, aluno_id, matricula_id, valor, vencimento)
+select 'fe100000-0000-4000-8000-00000000000a', 'fe100000-0000-4000-8000-0000000001a6', 'fe100000-0000-4000-8000-000000000508',
+       150, (select hoje from t_d) + d
+from unnest(array[-1, 0, 5, 6]) d;
+
+set local role authenticated;
+select public.__como('fe100000-0000-4000-8000-0000000000a2');
+select is(public.__hint_de($$select public.destrancar_matricula('fe100000-0000-4000-8000-000000000507')$$),
+          'sem_permissao', 'professor não destranca');
+select public.__como('fe100000-0000-4000-8000-0000000000a3');
+select is(public.__hint_de($$select public.destrancar_matricula('fe100000-0000-4000-8000-000000000507')$$),
+          'sem_permissao', 'totem não destranca');
+select public.__como('fe100000-0000-4000-8000-0000000000d1');
+select is(public.__hint_de($$select public.destrancar_matricula('fe100000-0000-4000-8000-000000000510')$$),
+          'sem_permissao', 'academia suspensa: recepção não destranca');
+reset role;
+select is((select string_agg(status, ',' order by id) from public.matriculas
+            where id in ('fe100000-0000-4000-8000-000000000507', 'fe100000-0000-4000-8000-000000000510')),
+          'trancada,trancada', 'as recusas não destrancaram nada');
+select is((select status from public.alunos where id = 'fe100000-0000-4000-8000-0000000001a5'), 'pendente',
+          'nem reativaram o aluno');
+
+set local role authenticated;
+select public.__como('fe100000-0000-4000-8000-0000000000a1');
+-- Fim hoje ainda está em andamento; conta a pendente de hoje, não a de ontem.
+select is(public.trancar_matricula('fe100000-0000-4000-8000-000000000508'), 3,
+          'trancar com fim hoje é aceito e conta as pendentes de hoje em diante (hoje inclusive)');
+reset role;
+select is((select status || '|' || data_fim from public.matriculas where id = 'fe100000-0000-4000-8000-000000000508'),
+          'trancada|' || (select hoje from t_d), 'trancada, com o fim preservado');
+set local role authenticated;
+select public.__como('fe100000-0000-4000-8000-0000000000a1');
+select is(public.encerrar_matricula('fe100000-0000-4000-8000-000000000508', (select hoje from t_d) + 5), 1,
+          'trancada também encerra; a pendente no dia do fim não conta, a do dia seguinte sim');
+reset role;
+select is((select status || '|' || data_fim from public.matriculas where id = 'fe100000-0000-4000-8000-000000000508'),
+          'trancada|' || ((select hoje from t_d) + 5), 'encerrar a trancada muda o fim e mantém trancada');
+set local role authenticated;
+select public.__como('fe100000-0000-4000-8000-0000000000a1');
+select is(public.__hint_de($$select public.destrancar_matricula('fe100000-0000-4000-8000-000000000509')$$),
+          'matricula_nao_trancada', 'trancada que já terminou não destranca');
+select is(public.__hint_de($$select public.destrancar_matricula('fe100000-0000-4000-8000-000000000503')$$),
+          'matricula_nao_trancada', 'pendente não destranca');
+select is(public.__hint_de($$select public.destrancar_matricula('fe100000-0000-4000-8000-000000000504')$$),
+          'matricula_nao_trancada', 'cancelada não destranca');
+select is(public.__hint_de($$select public.trancar_matricula('fe100000-0000-4000-8000-000000000504')$$),
+          'matricula_nao_ativa', 'cancelada não tranca');
+select is(public.__hint_de($$select public.destrancar_matricula('fe100000-0000-4000-8000-000000000507')$$),
+          'sem erro', 'recepção destranca a do aluno pendente');
+reset role;
+select is((select status from public.alunos where id = 'fe100000-0000-4000-8000-0000000001a5'), 'ativo',
+          'e o aluno pendente fica ativo');
+select is((select m.status || '|' || a.status from public.matriculas m join public.alunos a on a.id = m.aluno_id
+            where m.id = 'fe100000-0000-4000-8000-000000000509'), 'trancada|inativo',
+          'a trancada encerrada continua como estava, e o aluno dela também');
 
 select * from finish();
 rollback;

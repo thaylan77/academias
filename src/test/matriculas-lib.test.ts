@@ -27,10 +27,12 @@ const FORM = { aluno_id: "a1", plano_id: "p1", turma_ids: ["t1"], data_inicio: H
 
 describe("Regras de tela", () => {
   it("dono, admin e recepção veem; gravam só com a assinatura em dia; professor não", () => {
-    expect(podeVerMatriculas("recepcao")).toBe(true);
+    for (const papel of ["dono", "admin", "recepcao"] as const) {
+      expect(podeVerMatriculas(papel)).toBe(true);
+      expect(podeGerirMatriculas(papel, true)).toBe(true);
+      expect(podeGerirMatriculas(papel, false)).toBe(false);
+    }
     expect(podeVerMatriculas("professor")).toBe(false);
-    expect(podeGerirMatriculas("admin", true)).toBe(true);
-    expect(podeGerirMatriculas("dono", false)).toBe(false);
     expect(podeGerirMatriculas("professor", true)).toBe(false);
   });
 
@@ -46,11 +48,18 @@ describe("Regras de tela", () => {
     expect(podeEncerrar(mat({ status: "trancada" }))).toBe(true);
     expect(podeEncerrar(mat({ status: "pendente" }))).toBe(false);
     expect(podeEncerrar(mat({ status: "desconhecido" }))).toBe(false);
+    // Corrigir o fim de uma que já terminou também vale.
+    expect(podeEncerrar(mat({ data_fim: "2026-10-01" }))).toBe(true);
+    expect(podeEncerrar(mat({ status: "trancada", data_fim: "2026-10-01" }))).toBe(true);
     expect(podeTrancar(mat(), HOJE)).toBe(true);
     expect(podeTrancar(mat({ data_fim: "2026-10-26" }), HOJE)).toBe(false);
     expect(podeTrancar(mat({ status: "trancada" }), HOJE)).toBe(false);
-    expect(podeDestrancar(mat({ status: "trancada" }))).toBe(true);
-    expect(podeDestrancar(mat())).toBe(false);
+    expect(podeTrancar(mat({ data_fim: HOJE }), HOJE)).toBe(true);
+    expect(podeDestrancar(mat({ status: "trancada" }), HOJE)).toBe(true);
+    expect(podeDestrancar(mat({ status: "trancada", data_fim: HOJE }), HOJE)).toBe(true);
+    // Trancada que já terminou não destranca (o banco recusa).
+    expect(podeDestrancar(mat({ status: "trancada", data_fim: "2026-10-26" }), HOJE)).toBe(false);
+    expect(podeDestrancar(mat(), HOJE)).toBe(false);
   });
 
   it("filtra por situação e por nome sem acento", () => {
@@ -71,7 +80,9 @@ describe("validarNovaMatricula", () => {
 
   it("sem plano, o dia de vencimento é opcional e o plano vai nulo", () => {
     const v = validarNovaMatricula({ ...FORM, plano_id: "", dia_vencimento: "" }, HOJE);
-    expect(v.ok && v.dados.plano_id).toBe(null);
+    expect(v).toEqual({ ok: true, dados: {
+      aluno_id: "a1", plano_id: null, turma_ids: ["t1"], data_inicio: HOJE, dia_vencimento: null, valor: null, cobrar_a_partir: null,
+    } });
   });
 
   it.each([
@@ -99,6 +110,10 @@ describe("validarNovaMatricula", () => {
     expect(lerValorMatricula("0")).toBe(0);
     expect(lerValorMatricula("1,234.56")).toBe(null);
     expect(lerValorMatricula("-5")).toBe(null);
+    for (const ruim of ["150,555", "150.123", "1.23.456,00", "", "  ", "123456789", "1e3"]) {
+      expect(lerValorMatricula(ruim)).toBe(null);
+    }
+    expect(lerValorMatricula("99999999,99")).toBe(99999999.99);
   });
 });
 
@@ -195,6 +210,18 @@ describe("Leitura e RPCs", () => {
     expect(cliente.rpc).toHaveBeenCalledWith("trancar_matricula", { p_matricula_id: "m1" });
   });
 
+  it("destrancar chama a RPC com a matrícula e só confirma", async () => {
+    const cliente = clienteFalso({ data: [], error: null }, { data: null, error: null });
+    const lib = await carregarComCliente(cliente);
+    expect(await lib.destrancarMatricula("m1")).toEqual({ sucesso: true, valor: undefined });
+    expect(cliente.rpc).toHaveBeenCalledWith("destrancar_matricula", { p_matricula_id: "m1" });
+  });
+
+  it("encerrar sem número na resposta não é sucesso", async () => {
+    const lib = await carregarComCliente(clienteFalso({ data: [], error: null }, { data: null, error: null }));
+    expect((await lib.encerrarMatricula("m1", HOJE)).sucesso).toBe(false);
+  });
+
   it.each([
     ["matricula_duplicada", "já tem matrícula nesta turma"],
     ["dia_vencimento_obrigatorio", "informe o dia de vencimento"],
@@ -213,6 +240,13 @@ describe("Leitura e RPCs", () => {
 
   it.each([
     ["aprovar", "matricula_nao_pendente", "não está mais pendente"],
+    ["aprovar", "matricula_duplicada", "já tem matrícula nesta turma"],
+    ["aprovar", "dia_vencimento_obrigatorio", "informe o dia de vencimento"],
+    ["aprovar", "sem_permissao", "assinatura em dia"],
+    ["encerrar", "matricula_duplicada", "já tem matrícula nesta turma"],
+    ["trancar", "sem_permissao", "assinatura em dia"],
+    ["destrancar", "matricula_duplicada", "já tem matrícula nesta turma"],
+    ["destrancar", null, "Verifique a conexão"],
     ["encerrar", "matricula_nao_encerravel", "Só matrícula ativa ou trancada"],
     ["encerrar", "dados_invalidos", "antes do início"],
     ["trancar", "matricula_nao_ativa", "ativa e em andamento"],

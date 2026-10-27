@@ -58,7 +58,8 @@ export function situacaoDa(m: Matricula, hoje: string): SituacaoMatricula {
 
 export const podeEncerrar = (m: Matricula) => m.status === "ativa" || m.status === "trancada";
 export const podeTrancar = (m: Matricula, hoje: string) => m.status === "ativa" && situacaoDa(m, hoje) === "ativa";
-export const podeDestrancar = (m: Matricula) => m.status === "trancada";
+// Trancada que já terminou não destranca (o banco recusa com matricula_nao_trancada).
+export const podeDestrancar = (m: Matricula, hoje: string) => m.status === "trancada" && situacaoDa(m, hoje) === "trancada";
 
 export type FiltroSituacao = SituacaoMatricula | "todas";
 
@@ -174,7 +175,7 @@ function mensagem(hint: string | null | undefined, dadosInvalidos: string): stri
     case "matricula_nao_ativa":
       return "Só matrícula ativa e em andamento pode ser trancada. A lista foi atualizada.";
     case "matricula_nao_trancada":
-      return "Esta matrícula não está trancada. A lista foi atualizada.";
+      return "Esta matrícula não está trancada, ou já terminou. A lista foi atualizada.";
     default:
       return MSG_REDE;
   }

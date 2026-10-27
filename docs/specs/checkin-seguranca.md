@@ -96,7 +96,7 @@ O código vai no `hint` do erro (`raise exception '<mensagem em português>' usi
 | `matricula_nao_pendente` | `aprovar_matricula` | a matrícula não está pendente (já aprovada, ativa ou cancelada) |
 | `matricula_nao_encerravel` | `encerrar_matricula` | só matrícula ativa ou trancada é encerrada |
 | `matricula_nao_ativa` | `trancar_matricula` | só matrícula ativa e em andamento (sem fim antes de hoje) é trancada |
-| `matricula_nao_trancada` | `destrancar_matricula` | a matrícula não está trancada |
+| `matricula_nao_trancada` | `destrancar_matricula` | a matrícula não está trancada, ou já terminou (fim antes de hoje) |
 | `horario_invalido` | `salvar_turma` | dia fora de domingo a sábado, hora fora de `HH:MM` ou fim não depois do início |
 | `horario_sobreposto` | `salvar_turma` | dois horários da turma se sobrepõem no mesmo dia |
 | `turma_nao_encontrada` | `salvar_turma` | a turma editada não é da academia informada |

@@ -6,7 +6,7 @@
 -- trancar_matricula: status 'trancada'. gerar_cobrancas só cobra matrícula
 --   ativa e o check-in também só aceita ativa; a trancada continua ocupando
 --   a turma (docs/specs/matricula-duplicada.md).
--- destrancar_matricula: volta a 'ativa'. Os meses trancados não são cobrados
+-- destrancar_matricula: volta a 'ativa' (só a trancada que ainda não terminou). Os meses trancados não são cobrados
 --   depois: a geração só olha a competência atual e a seguinte.
 --
 -- Nenhuma cobrança é cancelada aqui. encerrar e trancar devolvem quantas
@@ -39,6 +39,10 @@ begin
 
   perform 1 from public.alunos where academia_id = v_academia and id = v_aluno for update;
   select * into v_mat from public.matriculas where id = p_matricula_id for update;
+  -- Apagada entre a primeira leitura e a trava: a mesma resposta de inexistente.
+  if not found then
+    raise exception 'Matrícula não encontrada ou sem permissão' using hint = 'sem_permissao';
+  end if;
 
   if v_mat.status not in ('ativa', 'trancada') then
     raise exception 'Só matrícula ativa ou trancada pode ser encerrada'
@@ -83,6 +87,10 @@ begin
 
   perform 1 from public.alunos where academia_id = v_academia and id = v_aluno for update;
   select * into v_mat from public.matriculas where id = p_matricula_id for update;
+  -- Apagada entre a primeira leitura e a trava: a mesma resposta de inexistente.
+  if not found then
+    raise exception 'Matrícula não encontrada ou sem permissão' using hint = 'sem_permissao';
+  end if;
   v_hoje := public.hoje_academia(v_academia);
 
   -- Encerrada (fim antes de hoje) não tranca: já não gera cobrança nem check-in.
@@ -121,9 +129,16 @@ begin
 
   perform 1 from public.alunos where academia_id = v_academia and id = v_aluno for update;
   select * into v_mat from public.matriculas where id = p_matricula_id for update;
+  -- Apagada entre a primeira leitura e a trava: a mesma resposta de inexistente.
+  if not found then
+    raise exception 'Matrícula não encontrada ou sem permissão' using hint = 'sem_permissao';
+  end if;
 
-  if v_mat.status <> 'trancada' then
-    raise exception 'Só matrícula trancada pode ser destrancada'
+  -- Trancada já encerrada (fim antes de hoje) não destranca: viraria ativa sem
+  -- período pela frente e reativaria o aluno sem matrícula vigente.
+  if v_mat.status <> 'trancada'
+     or (v_mat.data_fim is not null and v_mat.data_fim < public.hoje_academia(v_academia)) then
+    raise exception 'Só matrícula trancada e em andamento pode ser destrancada'
       using hint = 'matricula_nao_trancada';
   end if;
 

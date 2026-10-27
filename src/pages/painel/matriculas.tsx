@@ -47,6 +47,18 @@ const ROTULO_SITUACAO: Record<SituacaoMatricula, string> = {
 type Dados = { matriculas: Matricula[]; alunos: AlunoResumo[]; turmas: Turma[]; planos: Plano[] };
 type Aviso = { tipo: "ok" | "erro"; texto: string; verCobrancas?: boolean };
 
+/**
+ * Depois de aprovar ou destrancar matrícula com plano, gera na hora as
+ * cobranças já elegíveis (não há geração automática ainda). Devolve o
+ * complemento do aviso.
+ */
+async function gerarDepois(matriculaId: string): Promise<{ texto: string; verCobrancas?: boolean; falhou?: boolean }> {
+  const g = await gerarCobrancasAgora(matriculaId);
+  if (!g.sucesso) return { texto: " As cobranças não foram geradas: gere em Cobranças.", verCobrancas: true, falhou: true };
+  if (g.geradas === 0) return { texto: " Nenhuma cobrança entra agora: a primeira sai perto do vencimento (gere em Cobranças)." };
+  return { texto: ` ${g.geradas} ${g.geradas === 1 ? "cobrança gerada" : "cobranças geradas"}.`, verCobrancas: true };
+}
+
 /** Seção Matrículas do painel: pendentes da matrícula online, matrícula nova e a lista. */
 export const MatriculasSecao: React.FC = () => {
   const { academia } = usarPainel();
@@ -143,7 +155,7 @@ const Matriculas: React.FC = () => {
         </Alert>
       )}
 
-      <Pendentes lista={pendentes} gerir={gerir} avisar={avisar} />
+      <Pendentes lista={pendentes} gerir={gerir} avisar={avisar} aoMudar={recarregar} />
 
       {gerir && (
         nova ? (
@@ -160,14 +172,16 @@ const Matriculas: React.FC = () => {
         )
       )}
 
-      <Lista matriculas={dados.matriculas} gerir={gerir} avisar={avisar} />
+      <Lista matriculas={dados.matriculas} gerir={gerir} avisar={avisar} aoMudar={recarregar} />
     </div>
   );
 };
 
 // ------------------------------------------------------------------ pendentes
 
-const Pendentes: React.FC<{ lista: Matricula[]; gerir: boolean; avisar: (a: Aviso) => void }> = ({ lista, gerir, avisar }) => (
+type Acoes = { gerir: boolean; avisar: (a: Aviso) => void; aoMudar: () => void };
+
+const Pendentes: React.FC<{ lista: Matricula[] } & Acoes> = ({ lista, ...acoes }) => (
   <section aria-label="Pendentes" className="space-y-2">
     <h2 className="text-lg font-bold text-white">Pendentes da matrícula online ({lista.length})</h2>
     {lista.length === 0 ? (
@@ -175,14 +189,14 @@ const Pendentes: React.FC<{ lista: Matricula[]; gerir: boolean; avisar: (a: Avis
     ) : (
       <ul className="divide-y divide-zinc-800 rounded-xl border border-amber-700/60">
         {lista.map((m) => (
-          <LinhaPendente key={m.id} m={m} gerir={gerir} avisar={avisar} />
+          <LinhaPendente key={m.id} m={m} {...acoes} />
         ))}
       </ul>
     )}
   </section>
 );
 
-const LinhaPendente: React.FC<{ m: Matricula; gerir: boolean; avisar: (a: Aviso) => void }> = ({ m, gerir, avisar }) => {
+const LinhaPendente: React.FC<{ m: Matricula } & Acoes> = ({ m, gerir, avisar, aoMudar }) => {
   const [dia, setDia] = useState(m.dia_vencimento ? String(m.dia_vencimento) : "");
   const [erro, setErro] = useState<string | null>(null);
   const [enviando, setEnviando] = useState(false);
@@ -206,10 +220,19 @@ const LinhaPendente: React.FC<{ m: Matricula; gerir: boolean; avisar: (a: Aviso)
     setEnviando(true);
     setErro(null);
     const r = await aprovarMatricula(m.id, diaNum);
+    if (!r.sucesso) {
+      trava.current = false;
+      setEnviando(false);
+      // O erro fica na linha; a lista recarrega porque a matrícula pode ter mudado.
+      setErro(r.mensagem);
+      aoMudar();
+      return;
+    }
+    const base = `Matrícula de ${m.aluno} aprovada: o aluno já pode fazer check-in nas turmas dela.`;
+    const g = m.plano_id ? await gerarDepois(m.id) : null;
     trava.current = false;
     setEnviando(false);
-    if (r.sucesso) avisar({ tipo: "ok", texto: `Matrícula de ${m.aluno} aprovada: o aluno já pode fazer check-in nas turmas dela.` });
-    else avisar({ tipo: "erro", texto: r.mensagem });
+    avisar({ tipo: g?.falhou ? "erro" : "ok", texto: base + (g?.texto ?? ""), verCobrancas: g?.verCobrancas });
   };
 
   return (
@@ -372,7 +395,7 @@ const NovaMatricula: React.FC<{ dados: Dados; aoFechar: () => void; aoCriar: (a:
 
 // ------------------------------------------------------------------ lista
 
-const Lista: React.FC<{ matriculas: Matricula[]; gerir: boolean; avisar: (a: Aviso) => void }> = ({ matriculas, gerir, avisar }) => {
+const Lista: React.FC<{ matriculas: Matricula[] } & Acoes> = ({ matriculas, ...acoes }) => {
   const { academia } = usarPainel();
   const hoje = hojeNoFuso(academia.fuso);
   const [situacao, setSituacao] = useState<FiltroSituacao>("ativa");
@@ -402,7 +425,7 @@ const Lista: React.FC<{ matriculas: Matricula[]; gerir: boolean; avisar: (a: Avi
       ) : (
         <ul aria-label="Lista de matrículas" className="divide-y divide-zinc-800 rounded-xl border border-zinc-800">
           {visiveis.map((m) => (
-            <LinhaMatricula key={m.id} m={m} hoje={hoje} gerir={gerir} avisar={avisar} />
+            <LinhaMatricula key={m.id} m={m} hoje={hoje} {...acoes} />
           ))}
         </ul>
       )}
@@ -412,7 +435,7 @@ const Lista: React.FC<{ matriculas: Matricula[]; gerir: boolean; avisar: (a: Avi
 
 type Acao = null | "encerrar" | "trancar";
 
-const LinhaMatricula: React.FC<{ m: Matricula; hoje: string; gerir: boolean; avisar: (a: Aviso) => void }> = ({ m, hoje, gerir, avisar }) => {
+const LinhaMatricula: React.FC<{ m: Matricula; hoje: string } & Acoes> = ({ m, hoje, gerir, avisar, aoMudar }) => {
   const [acao, setAcao] = useState<Acao>(null);
   const [fim, setFim] = useState(hoje);
   const [erro, setErro] = useState<string | null>(null);
@@ -420,7 +443,9 @@ const LinhaMatricula: React.FC<{ m: Matricula; hoje: string; gerir: boolean; avi
   const trava = useRef(false);
   const situacao = situacaoDa(m, hoje);
 
-  const executar = async (fn: () => Promise<{ sucesso: true; texto: string; verCobrancas?: boolean } | { sucesso: false; mensagem: string }>) => {
+  const executar = async (
+    fn: () => Promise<{ sucesso: true; texto: string; verCobrancas?: boolean; falhou?: boolean } | { sucesso: false; mensagem: string }>
+  ) => {
     if (trava.current) return;
     trava.current = true;
     setEnviando(true);
@@ -428,9 +453,14 @@ const LinhaMatricula: React.FC<{ m: Matricula; hoje: string; gerir: boolean; avi
     const r = await fn();
     trava.current = false;
     setEnviando(false);
+    if (!r.sucesso) {
+      // O erro fica na linha, com a confirmação aberta; a lista recarrega porque a matrícula pode ter mudado.
+      setErro(r.mensagem);
+      aoMudar();
+      return;
+    }
     setAcao(null);
-    if (r.sucesso) avisar({ tipo: "ok", texto: r.texto, verCobrancas: r.verCobrancas });
-    else avisar({ tipo: "erro", texto: r.mensagem });
+    avisar({ tipo: r.falhou ? "erro" : "ok", texto: r.texto, verCobrancas: r.verCobrancas });
   };
 
   const pendentesTexto = (n: number, quando: string) =>
@@ -471,7 +501,9 @@ const LinhaMatricula: React.FC<{ m: Matricula; hoje: string; gerir: boolean; avi
     void executar(async () => {
       const r = await destrancarMatricula(m.id);
       if (!r.sucesso) return r;
-      return { sucesso: true, texto: `Matrícula de ${m.aluno} destrancada: check-in e cobranças voltam a valer.` };
+      const base = `Matrícula de ${m.aluno} destrancada: check-in e cobranças voltam a valer.`;
+      const g = m.plano_id ? await gerarDepois(m.id) : null;
+      return { sucesso: true, texto: base + (g?.texto ?? ""), verCobrancas: g?.verCobrancas, falhou: g?.falhou };
     });
 
   return (
@@ -493,7 +525,7 @@ const LinhaMatricula: React.FC<{ m: Matricula; hoje: string; gerir: boolean; avi
           {gerir && acao === null && (
             <>
               {podeEncerrar(m) && (
-                <Button size="sm" variant="ghost" onClick={() => { setAcao("encerrar"); setErro(null); }} aria-label={`Encerrar matrícula de ${m.aluno}`}>
+                <Button size="sm" variant="ghost" onClick={() => { setAcao("encerrar"); setFim(m.data_fim ?? hoje); setErro(null); }} aria-label={`Encerrar matrícula de ${m.aluno}`}>
                   {m.data_fim ? "Mudar fim" : "Encerrar"}
                 </Button>
               )}
@@ -502,7 +534,7 @@ const LinhaMatricula: React.FC<{ m: Matricula; hoje: string; gerir: boolean; avi
                   Trancar
                 </Button>
               )}
-              {podeDestrancar(m) && (
+              {podeDestrancar(m, hoje) && (
                 <Button size="sm" variant="ghost" disabled={enviando} onClick={destrancar} aria-label={`Destrancar matrícula de ${m.aluno}`}>
                   Destrancar
                 </Button>
