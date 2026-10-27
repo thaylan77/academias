@@ -86,8 +86,8 @@ O código vai no `hint` do erro (`raise exception '<mensagem em português>' usi
 | `aluno_anonimizado` | gravação em `alunos` | cadastro anonimizado não pode ser alterado |
 | `anonimizar_cobranca_pendente` | `anonimizar_aluno` | o aluno tem cobrança pendente: cancelar ou dar baixa antes |
 | `menor_sem_responsavel` | `matricula_online` | menor de 18 anos sem nome e CPF do responsável |
-| `dados_invalidos` | `matricula_online`, `criar_matricula`, `salvar_turma` | nome vazio, termo não aceito, plano inválido, CPF malformado (D7); e qualquer entrada malformada: `p_dados` que não é objeto, `plano_id` que não é uuid, `data_nascimento` fora de `AAAA-MM-DD`, inexistente ou no futuro, `aceite_termo` que não é o booleano `true`, `turma_ids` que não é lista de uuids |
-| `sem_permissao` | `emitir_token_checkin`, `totem_turmas_agora`, `rotacionar_segredo_checkin`, `anonimizar_aluno`, `criar_matricula`, `aprovar_matricula`, `salvar_turma` | quem chama não tem o papel na academia (D7); em `anonimizar_aluno`, também aluno inexistente |
+| `dados_invalidos` | `matricula_online`, `criar_matricula`, `salvar_turma`, `registrar_graduacao` | nome vazio, termo não aceito, plano inválido, CPF malformado (D7); e qualquer entrada malformada: `p_dados` que não é objeto, `plano_id` que não é uuid, `data_nascimento` fora de `AAAA-MM-DD`, inexistente ou no futuro, `aceite_termo` que não é o booleano `true`, `turma_ids` que não é lista de uuids |
+| `sem_permissao` | `emitir_token_checkin`, `totem_turmas_agora`, `rotacionar_segredo_checkin`, `anonimizar_aluno`, `criar_matricula`, `aprovar_matricula`, `salvar_turma`, `registrar_graduacao` | quem chama não tem o papel na academia (D7); em `anonimizar_aluno`, também aluno inexistente |
 | `slug_reservado` | `criar_academia` | slug é caminho do app (`painel`, `portal`, `api`, `admin`, `entrar`, `assets`). O check `academias_slug_nao_reservado` vale também para a troca de slug pelo billing |
 | `slug_em_uso` | `criar_academia` | outra academia já usa o slug |
 | `slug_invalido` | `criar_academia` | slug fora do formato: 3 a 40 caracteres, letras minúsculas, números e hífen, sem hífen nas pontas |
@@ -98,6 +98,8 @@ O código vai no `hint` do erro (`raise exception '<mensagem em português>' usi
 | `horario_sobreposto` | `salvar_turma` | dois horários da turma se sobrepõem no mesmo dia |
 | `turma_nao_encontrada` | `salvar_turma` | a turma editada não é da academia informada |
 | `turma_com_presencas` | gravação em `turmas` (e `salvar_turma`) | trocar a modalidade de turma que já tem presença (mudaria o progresso de graduação) |
+| `grau_invalido` | `registrar_graduacao` e gravação em `graduacoes` | grau acima do máximo da faixa |
+| `graduacao_repetida` | `registrar_graduacao` | mesma faixa, grau e data já registrados para o aluno |
 | `matricula_duplicada` | gravação em `matricula_turmas` e em `matriculas` | o aluno já tem matrícula não cancelada na turma em período sobreposto. O `detail` traz `matricula_id` e `turma_id` em conflito. Regra em `docs/specs/matricula-duplicada.md` |
 
 

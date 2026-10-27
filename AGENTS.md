@@ -152,6 +152,7 @@ Plano, status e slug da academia só mudam via `service_role` (billing do SaaS).
 | `aprovar_matricula(matricula_id, dia_vencimento?)` | secretaria | aprova matrícula `pendente` (da matrícula online), com início e cobrança a partir da aprovação; ativa o aluno |
 | `salvar_turma(academia_id, dados, turma_id?)` | dono, admin | turma e horários numa transação; turma com presença não troca de modalidade |
 | `anonimizar_aluno(aluno_id)`           | dono, admin  | LGPD: substitui o delete de aluno                          |
+| `registrar_graduacao(academia_id, dados)` | dono, admin, professor | graduação com data no dia da academia (nunca no futuro) e grau dentro da faixa |
 | `vw_graduacao_atual`                   | equipe/aluno | faixa e grau atuais por modalidade                         |
 | `vw_progresso_graduacao`               | equipe/aluno | aulas e meses desde a última graduação, campo `apto`       |
 | `vw_inadimplentes`                     | secretaria   | alunos com cobrança pendente vencida                       |

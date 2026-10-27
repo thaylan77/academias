@@ -25,6 +25,7 @@ import { Shield, LogOut, Building2 } from "lucide-react";
 import { AlunosSecao } from "./alunos";
 import { TurmasSecao } from "./turmas";
 import { CobrancasSecao } from "./cobrancas";
+import { GraduacoesSecao } from "./graduacoes";
 import { PainelContexto, PainelContextoValor } from "./contexto";
 
 const ROTULO_PAPEL: Record<AcademiaDoMembro["papel"], string> = {
@@ -342,6 +343,8 @@ export const PainelApp: React.FC = () => {
               <TurmasSecao key={academia.academia_id} />
             ) : secaoVisivel === "cobrancas" ? (
               <CobrancasSecao key={academia.academia_id} />
+            ) : secaoVisivel === "graduacoes" ? (
+              <GraduacoesSecao key={academia.academia_id} />
             ) : (
               <SecaoEmConstrucao secao={secaoVisivel} />
             )}
