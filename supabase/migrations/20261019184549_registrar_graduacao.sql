@@ -113,6 +113,12 @@ $$;
 revoke execute on function public.registrar_graduacao(uuid, jsonb) from public, anon;
 grant execute on function public.registrar_graduacao(uuid, jsonb) to authenticated;
 
+-- O default da coluna era current_date, o dia em UTC: à noite no Brasil ele
+-- já é amanhã, e a graduação gravada sem data nasceria no futuro. Sem
+-- default, o gatilho abaixo preenche a data omitida com o dia da academia (o
+-- not null é conferido depois dos gatilhos before).
+alter table public.graduacoes alter column data drop default;
+
 -- As regras de dado valem também para a gravação direta na tabela (a
 -- política graduacoes_insert continua permitindo; só a RPC conferia):
 -- grau dentro do máximo da faixa e data nunca depois de hoje na academia.
@@ -126,6 +132,9 @@ as $$
 declare
   v_max smallint;
 begin
+  if tg_op = 'INSERT' and new.data is null then
+    new.data := public.hoje_academia(new.academia_id);
+  end if;
   select max_graus into v_max from public.faixas
    where academia_id = new.academia_id and id = new.faixa_id;
   if v_max is not null and new.grau > v_max then

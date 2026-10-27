@@ -2,7 +2,7 @@
 -- em dia; data no dia da academia; grau dentro da faixa; progresso zera.
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(29);
+select plan(31);
 
 create function public.__erro_de(p_sql text)
 returns jsonb
@@ -214,6 +214,29 @@ reset role;
 
 select is((select count(*)::int from public.graduacoes where academia_id = 'fd000000-0000-4000-8000-00000000000c'), 0,
           'nada foi gravado na academia suspensa');
+
+-- Gravação sem data fica com o dia da academia, não com o dia em UTC. Nos
+-- dois extremos de fuso, a qualquer hora pelo menos um deles está num dia
+-- diferente do UTC.
+insert into public.academias (id, nome, slug, status, fuso) values
+  ('fd000000-0000-4000-8000-00000000000d', 'Grad oeste', 'grad-d', 'ativa', 'Etc/GMT+12'),
+  ('fd000000-0000-4000-8000-00000000000e', 'Grad leste', 'grad-e', 'ativa', 'Pacific/Kiritimati');
+insert into public.modalidades (id, academia_id, nome) values
+  ('fd000000-0000-4000-8000-0000000002d1', 'fd000000-0000-4000-8000-00000000000d', 'Judô'),
+  ('fd000000-0000-4000-8000-0000000002e1', 'fd000000-0000-4000-8000-00000000000e', 'Judô');
+insert into public.faixas (id, academia_id, modalidade_id, nome, ordem) values
+  ('fd000000-0000-4000-8000-0000000006d1', 'fd000000-0000-4000-8000-00000000000d', 'fd000000-0000-4000-8000-0000000002d1', 'Branca', 1),
+  ('fd000000-0000-4000-8000-0000000006e1', 'fd000000-0000-4000-8000-00000000000e', 'fd000000-0000-4000-8000-0000000002e1', 'Branca', 1);
+insert into public.alunos (id, academia_id, nome) values
+  ('fd000000-0000-4000-8000-0000000001d1', 'fd000000-0000-4000-8000-00000000000d', 'Aluno oeste'),
+  ('fd000000-0000-4000-8000-0000000001e1', 'fd000000-0000-4000-8000-00000000000e', 'Aluno leste');
+insert into public.graduacoes (academia_id, aluno_id, faixa_id) values
+  ('fd000000-0000-4000-8000-00000000000d', 'fd000000-0000-4000-8000-0000000001d1', 'fd000000-0000-4000-8000-0000000006d1'),
+  ('fd000000-0000-4000-8000-00000000000e', 'fd000000-0000-4000-8000-0000000001e1', 'fd000000-0000-4000-8000-0000000006e1');
+select is((select data from public.graduacoes where aluno_id = 'fd000000-0000-4000-8000-0000000001d1'),
+          public.hoje_academia('fd000000-0000-4000-8000-00000000000d'), 'sem data, fica o dia da academia (UTC-12)');
+select is((select data from public.graduacoes where aluno_id = 'fd000000-0000-4000-8000-0000000001e1'),
+          public.hoje_academia('fd000000-0000-4000-8000-00000000000e'), 'sem data, fica o dia da academia (UTC+14)');
 
 select * from finish();
 rollback;
