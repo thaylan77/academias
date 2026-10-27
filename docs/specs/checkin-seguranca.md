@@ -86,14 +86,17 @@ O código vai no `hint` do erro (`raise exception '<mensagem em português>' usi
 | `aluno_anonimizado` | gravação em `alunos` | cadastro anonimizado não pode ser alterado |
 | `anonimizar_cobranca_pendente` | `anonimizar_aluno` | o aluno tem cobrança pendente: cancelar ou dar baixa antes |
 | `menor_sem_responsavel` | `matricula_online` | menor de 18 anos sem nome e CPF do responsável |
-| `dados_invalidos` | `matricula_online`, `criar_matricula`, `salvar_turma`, `registrar_graduacao` | nome vazio, termo não aceito, plano inválido, CPF malformado (D7); e qualquer entrada malformada: `p_dados` que não é objeto, `plano_id` que não é uuid, `data_nascimento` fora de `AAAA-MM-DD`, inexistente ou no futuro, `aceite_termo` que não é o booleano `true`, `turma_ids` que não é lista de uuids |
-| `sem_permissao` | `emitir_token_checkin`, `totem_turmas_agora`, `rotacionar_segredo_checkin`, `anonimizar_aluno`, `criar_matricula`, `aprovar_matricula`, `salvar_turma`, `registrar_graduacao` | quem chama não tem o papel na academia (D7); em `anonimizar_aluno`, também aluno inexistente |
+| `dados_invalidos` | `matricula_online`, `criar_matricula`, `encerrar_matricula`, `salvar_turma`, `registrar_graduacao` | nome vazio, termo não aceito, plano inválido, CPF malformado (D7); e qualquer entrada malformada: `p_dados` que não é objeto, `plano_id` que não é uuid, `data_nascimento` fora de `AAAA-MM-DD`, inexistente ou no futuro, `aceite_termo` que não é o booleano `true`, `turma_ids` que não é lista de uuids |
+| `sem_permissao` | `emitir_token_checkin`, `totem_turmas_agora`, `rotacionar_segredo_checkin`, `anonimizar_aluno`, `criar_matricula`, `aprovar_matricula`, `encerrar_matricula`, `trancar_matricula`, `destrancar_matricula`, `salvar_turma`, `registrar_graduacao` | quem chama não tem o papel na academia (D7); em `anonimizar_aluno`, também aluno inexistente |
 | `slug_reservado` | `criar_academia` | slug é caminho do app (`painel`, `portal`, `api`, `admin`, `entrar`, `assets`). O check `academias_slug_nao_reservado` vale também para a troca de slug pelo billing |
 | `slug_em_uso` | `criar_academia` | outra academia já usa o slug |
 | `slug_invalido` | `criar_academia` | slug fora do formato: 3 a 40 caracteres, letras minúsculas, números e hífen, sem hífen nas pontas |
 | `cobrar_a_partir_invalido` | `criar_matricula` | mês inicial de cobrança fora do dia 1, antes do mês atual ou antes do mês de início das aulas |
 | `dia_vencimento_obrigatorio` | `criar_matricula`, `aprovar_matricula` | matrícula com plano sem dia de vencimento (`gerar_cobrancas` nunca a cobraria) |
 | `matricula_nao_pendente` | `aprovar_matricula` | a matrícula não está pendente (já aprovada, ativa ou cancelada) |
+| `matricula_nao_encerravel` | `encerrar_matricula` | só matrícula ativa ou trancada é encerrada |
+| `matricula_nao_ativa` | `trancar_matricula` | só matrícula ativa e em andamento (sem fim antes de hoje) é trancada |
+| `matricula_nao_trancada` | `destrancar_matricula` | a matrícula não está trancada |
 | `horario_invalido` | `salvar_turma` | dia fora de domingo a sábado, hora fora de `HH:MM` ou fim não depois do início |
 | `horario_sobreposto` | `salvar_turma` | dois horários da turma se sobrepõem no mesmo dia |
 | `turma_nao_encontrada` | `salvar_turma` | a turma editada não é da academia informada |
