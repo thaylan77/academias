@@ -24,6 +24,7 @@ import { Badge } from "../../components/ui/badge";
 import { Shield, LogOut, Building2 } from "lucide-react";
 import { AlunosSecao } from "./alunos";
 import { TurmasSecao } from "./turmas";
+import { CobrancasSecao } from "./cobrancas";
 import { GraduacoesSecao } from "./graduacoes";
 import { PainelContexto, PainelContextoValor } from "./contexto";
 
@@ -340,6 +341,8 @@ export const PainelApp: React.FC = () => {
               <AlunosSecao key={academia.academia_id} />
             ) : secaoVisivel === "turmas" ? (
               <TurmasSecao key={academia.academia_id} />
+            ) : secaoVisivel === "cobrancas" ? (
+              <CobrancasSecao key={academia.academia_id} />
             ) : secaoVisivel === "graduacoes" ? (
               <GraduacoesSecao key={academia.academia_id} />
             ) : (
