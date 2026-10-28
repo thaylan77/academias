@@ -78,6 +78,11 @@ export function podeGerirCobrancas(papel: PapelPainel, academiaAtiva: boolean): 
   return academiaAtiva && podeVerCobrancas(papel);
 }
 
+/** Registro da geração automática: só dono e admin (o RLS devolve vazio aos outros). */
+export function podeVerGeracaoAutomatica(papel: PapelPainel): boolean {
+  return papel === "dono" || papel === "admin";
+}
+
 /** Baixa e cancelamento manuais só valem para cobrança pendente que nunca foi para o gateway. */
 export function aceitaAcaoManual(c: Cobranca): boolean {
   return c.status === "pendente" && !c.emitida;
@@ -152,6 +157,21 @@ export function diaNoFuso(instante: string, fuso: string): string {
   }
 }
 
+/** "dd/mm/aaaa às hh:mm" de um instante no fuso da academia. */
+export function dataHoraNoFuso(instante: string, fuso: string): string {
+  const d = new Date(instante);
+  if (Number.isNaN(d.getTime())) return instante;
+  const opcoes = { year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23" } as const;
+  let partes: Intl.DateTimeFormatPart[];
+  try {
+    partes = new Intl.DateTimeFormat("pt-BR", { ...opcoes, timeZone: fuso }).formatToParts(d);
+  } catch {
+    partes = new Intl.DateTimeFormat("pt-BR", { ...opcoes, timeZone: "UTC" }).formatToParts(d);
+  }
+  const p = (t: string) => partes.find((x) => x.type === t)?.value ?? "";
+  return `${p("day")}/${p("month")}/${p("year")} às ${p("hour")}:${p("minute")}`;
+}
+
 /**
  * Meio-dia do dia `data` (AAAA-MM-DD) no fuso da academia, em ISO com o
  * deslocamento certo. Mandar só a data faria o banco ler meia-noite em UTC,
@@ -214,6 +234,29 @@ export async function listarCobrancas(academiaId: string): Promise<Cobranca[]> {
     emitida: c.gateway_id !== null || c.emissao_iniciada_em !== null,
     divergencia: c.divergencia,
   }));
+}
+
+export interface GeracaoAutomatica {
+  executado_em: string;
+  geradas: number;
+  erro: string | null;
+}
+
+/**
+ * Última execução do job diário de geração (cobrancas_geracao_log), ou null se
+ * ainda não houve. Só dono e admin leem o registro (RLS).
+ */
+export async function ultimaGeracaoAutomatica(academiaId: string): Promise<GeracaoAutomatica | null> {
+  if (!supabase) return null;
+  const { data, error } = await supabase
+    .from("cobrancas_geracao_log")
+    .select("executado_em, geradas, erro")
+    .eq("academia_id", academiaId)
+    .order("executado_em", { ascending: false })
+    .range(0, 0);
+  if (error) throw error;
+  const linha = data?.[0];
+  return linha ? { executado_em: linha.executado_em, geradas: Number(linha.geradas), erro: linha.erro } : null;
 }
 
 /** Atraso calculado no servidor, no fuso da academia (vw_inadimplentes). */
