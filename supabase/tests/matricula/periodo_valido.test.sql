@@ -4,7 +4,7 @@
 -- continua valendo.
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(16);
+select plan(19);
 
 select has_check('public', 'matriculas', 'matriculas tem check');
 select col_has_check('public', 'matriculas', array['data_fim', 'data_inicio'], 'o check cobre início e fim');
@@ -60,6 +60,7 @@ reset role;
 -- Codex no PR #65).
 --   anonimizar_aluno com matrícula que ainda não começou, na academia ativa
 --   e na suspensa (a anonimização não depende da assinatura);
+--   anonimizar_aluno mantém o fim da matrícula que já tinha terminado;
 --   aprovar_matricula de pedido cujo fim já passou, com fim hoje e sem fim.
 -- ---------------------------------------------------------------------
 insert into auth.users (id, email) values
@@ -82,7 +83,11 @@ insert into public.matriculas (id, academia_id, aluno_id, status, origem, data_i
   ('fe200000-0000-4000-8000-000000000504', 'fe200000-0000-4000-8000-00000000000a', 'fe200000-0000-4000-8000-0000000001a3',
    'pendente', 'online', public.hoje_academia('fe200000-0000-4000-8000-00000000000a') - 5, public.hoje_academia('fe200000-0000-4000-8000-00000000000a')),
   ('fe200000-0000-4000-8000-000000000505', 'fe200000-0000-4000-8000-00000000000c', 'fe200000-0000-4000-8000-0000000001c1',
-   'ativa', 'recepcao', public.hoje_academia('fe200000-0000-4000-8000-00000000000c') + 10, null);
+   'ativa', 'recepcao', public.hoje_academia('fe200000-0000-4000-8000-00000000000c') + 10, null),
+  ('fe200000-0000-4000-8000-000000000506', 'fe200000-0000-4000-8000-00000000000a', 'fe200000-0000-4000-8000-0000000001a2',
+   'ativa', 'recepcao', public.hoje_academia('fe200000-0000-4000-8000-00000000000a') - 60, public.hoje_academia('fe200000-0000-4000-8000-00000000000a') - 10),
+  ('fe200000-0000-4000-8000-000000000507', 'fe200000-0000-4000-8000-00000000000a', 'fe200000-0000-4000-8000-0000000001a3',
+   'pendente', 'online', public.hoje_academia('fe200000-0000-4000-8000-00000000000a') - 5, null);
 
 set local role authenticated;
 set local request.jwt.claim.sub = 'fe200000-0000-4000-8000-0000000000a2';
@@ -93,6 +98,8 @@ select is(pg_temp.hint_de($$select public.aprovar_matricula('fe200000-0000-4000-
           'matricula_vencida', 'aprovar pedido cujo fim já passou: matricula_vencida');
 select is(pg_temp.hint_de($$select public.aprovar_matricula('fe200000-0000-4000-8000-000000000504')$$),
           'sem erro', 'aprovar pedido com fim hoje funciona (início vira hoje)');
+select is(pg_temp.hint_de($$select public.aprovar_matricula('fe200000-0000-4000-8000-000000000507')$$),
+          'sem erro', 'aprovar pedido sem fim funciona');
 set local request.jwt.claim.sub = 'fe200000-0000-4000-8000-0000000000c2';
 set local request.jwt.claims = '{"sub":"fe200000-0000-4000-8000-0000000000c2","role":"authenticated"}';
 select is(pg_temp.hint_de($$select public.anonimizar_aluno('fe200000-0000-4000-8000-0000000001c1')$$),
@@ -113,6 +120,11 @@ select is((select m.status || '|' || (a.anonimizado_em is not null)::text
              from public.matriculas m join public.alunos a on a.id = m.aluno_id
             where m.id = 'fe200000-0000-4000-8000-000000000505'),
           'cancelada|true', 'na suspensa, matrícula cancelada e aluno anonimizado');
+
+select is((select status || '|' || data_fim from public.matriculas where id = 'fe200000-0000-4000-8000-000000000506'),
+          'cancelada|' || (public.hoje_academia('fe200000-0000-4000-8000-00000000000a') - 10), 'a anonimização cancela a matrícula que já tinha terminado sem mudar o fim dela');
+select is((select status || '|' || data_inicio || '|' || coalesce(data_fim::text, 'sem fim') from public.matriculas where id = 'fe200000-0000-4000-8000-000000000507'),
+          'ativa|' || public.hoje_academia('fe200000-0000-4000-8000-00000000000a') || '|sem fim', 'o aprovado sem fim começa hoje e segue sem fim');
 
 select * from finish();
 rollback;

@@ -42,8 +42,9 @@ $$;
 -- PR #65), recriados com a mesma regra de antes e o período sempre válido.
 -- Permissões continuam as mesmas (create or replace as preserva).
 
--- anonimizar_aluno: ao cancelar, o fim é hoje, ou o início se ela ainda não
--- começou (sem isso, a anonimização de quem tem matrícula futura falharia).
+-- anonimizar_aluno: ao cancelar, o fim é hoje, o fim que ela já tinha se já
+-- terminou, ou o início se ela ainda não começou (sem isso, a anonimização de
+-- quem tem matrícula futura falharia).
 create or replace function public.anonimizar_aluno(p_aluno_id uuid)
 returns void
 language plpgsql
@@ -75,9 +76,12 @@ begin
 
   update public.matriculas
      set status = 'cancelada',
-         -- Matrícula que ainda nem começou termina no próprio início: o fim nunca
-         -- fica antes dele (check matriculas_periodo_valido).
-         data_fim = greatest(data_inicio, public.hoje_academia(v_aluno.academia_id))
+         -- Fim hoje, mas a que já terminou mantém o fim dela, e a que ainda nem
+         -- começou termina no próprio início (o fim nunca fica antes do início:
+         -- check matriculas_periodo_valido).
+         data_fim = greatest(data_inicio,
+                             least(coalesce(data_fim, public.hoje_academia(v_aluno.academia_id)),
+                                   public.hoje_academia(v_aluno.academia_id)))
    where academia_id = v_aluno.academia_id
      and aluno_id = p_aluno_id
      and status <> 'cancelada';
