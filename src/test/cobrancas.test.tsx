@@ -235,17 +235,28 @@ describe("Painel: cobranças, última geração automática", () => {
     expect(within(alerta).getByText("Detalhe técnico").closest("details")).not.toHaveAttribute("open");
   });
 
-  it("sem execução há mais de dois dias: avisa que parou", async () => {
+  it("sem execução há mais de dois dias: avisa, lembrando a academia recém-regularizada", async () => {
     vi.spyOn(lib, "ultimaGeracaoAutomatica").mockResolvedValue({ executado_em: agoraMenos(60), geradas: 1, erro: null });
     montar("dono");
-    expect(await screen.findByText(/não roda desde/)).toBeInTheDocument();
+    const alerta = await screen.findByRole("alert");
+    expect(alerta).toHaveTextContent("deveria rodar todo dia");
+    expect(alerta).toHaveTextContent("Se a assinatura foi regularizada há pouco");
   });
 
-  it("assinatura suspensa: diz que fica parada", async () => {
-    vi.spyOn(lib, "ultimaGeracaoAutomatica").mockResolvedValue({ executado_em: agoraMenos(200), geradas: 1, erro: null });
+  it("falha antiga: um aviso só, o do atraso", async () => {
+    vi.spyOn(lib, "ultimaGeracaoAutomatica").mockResolvedValue({ executado_em: agoraMenos(60), geradas: 0, erro: "falhou" });
+    montar("dono");
+    const secao = await screen.findByRole("region", { name: "Geração automática" });
+    await within(secao).findByRole("alert");
+    expect(within(secao).getAllByRole("alert")).toHaveLength(1);
+    expect(within(secao).getByRole("alert")).toHaveTextContent("deveria rodar todo dia");
+  });
+
+  it("assinatura suspensa: diz que fica parada, sem consultar o registro", async () => {
+    const ultima = vi.spyOn(lib, "ultimaGeracaoAutomatica");
     montar("dono", false);
     expect(await screen.findByText(/a geração automática fica parada/)).toBeInTheDocument();
-    expect(screen.queryByText(/não roda desde/)).not.toBeInTheDocument();
+    expect(ultima).not.toHaveBeenCalled();
   });
 
   it("recepção não vê a seção nem consulta o registro", async () => {

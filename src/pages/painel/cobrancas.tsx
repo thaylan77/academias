@@ -137,6 +137,21 @@ const LIMITE_ATRASO_MS = 48 * 60 * 60 * 1000;
 
 const UltimaGeracao: React.FC = () => {
   const { academia } = usarPainel();
+  return (
+    <section aria-label="Geração automática" className="space-y-2">
+      <h2 className="text-lg font-bold text-white">Geração automática</h2>
+      {/* Suspensa: o lote pula a academia, então nem consulta o registro. */}
+      {academia.ativa ? (
+        <ResumoDaGeracao />
+      ) : (
+        <p className="text-sm text-zinc-400">Com a assinatura suspensa, a geração automática fica parada.</p>
+      )}
+    </section>
+  );
+};
+
+const ResumoDaGeracao: React.FC = () => {
+  const { academia } = usarPainel();
   const [estado, setEstado] = useState<{ fase: "carregando" } | { fase: "erro" } | { fase: "pronto"; ultima: GeracaoAutomatica | null }>({ fase: "carregando" });
 
   // Falhar aqui não derruba o resto da tela.
@@ -151,52 +166,45 @@ const UltimaGeracao: React.FC = () => {
     };
   }, [academia.academia_id]);
 
-  let conteudo: React.ReactNode;
-  if (estado.fase === "carregando") {
-    conteudo = <p role="status" className="text-sm text-zinc-500">Carregando a última geração...</p>;
-  } else if (estado.fase === "erro") {
-    conteudo = <p className="text-sm text-zinc-400">Não foi possível consultar a última geração automática.</p>;
-  } else if (!academia.ativa) {
-    conteudo = <p className="text-sm text-zinc-400">Com a assinatura suspensa, a geração automática fica parada.</p>;
-  } else if (!estado.ultima) {
-    conteudo = <p className="text-sm text-zinc-400">As cobranças são geradas automaticamente todo dia, de madrugada. Ainda não houve execução para esta academia.</p>;
-  } else {
-    const u = estado.ultima;
-    const quando = dataHoraNoFuso(u.executado_em, academia.fuso);
-    const atrasada = Date.now() - new Date(u.executado_em).getTime() > LIMITE_ATRASO_MS;
-    conteudo = (
-      <>
-        {u.erro ? (
-          <Alert variant="destructive" role="alert">
-            <AlertDescription>
-              A geração automática de {quando} falhou: as cobranças desta academia não foram geradas nessa execução. A do dia
-              seguinte tenta de novo; se precisar antes, gere abaixo por matrícula.
-              <details className="mt-2 text-xs">
-                <summary className="cursor-pointer">Detalhe técnico</summary>
-                <span className="block break-words">{u.erro}</span>
-              </details>
-            </AlertDescription>
-          </Alert>
-        ) : (
-          <p className="text-sm text-zinc-300">
-            Última geração automática: {quando},{" "}
-            {u.geradas === 0 ? "nenhuma cobrança nova" : `${u.geradas} ${u.geradas === 1 ? "cobrança gerada" : "cobranças geradas"}`}.
-          </p>
-        )}
-        {atrasada && (
-          <Alert variant="warning" role="alert">
-            <AlertDescription>A geração automática deveria rodar todo dia e não roda desde {quando}. Avise o suporte.</AlertDescription>
-          </Alert>
-        )}
-      </>
-    );
+  if (estado.fase === "carregando") return <p role="status" className="text-sm text-zinc-500">Carregando a última geração...</p>;
+  if (estado.fase === "erro") return <p className="text-sm text-zinc-400">Não foi possível consultar a última geração automática.</p>;
+  if (!estado.ultima) {
+    return <p className="text-sm text-zinc-400">As cobranças são geradas automaticamente todo dia, de madrugada. Ainda não houve execução para esta academia.</p>;
   }
 
+  const u = estado.ultima;
+  const quando = dataHoraNoFuso(u.executado_em, academia.fuso);
+  // Atraso vem antes da falha: uma execução falha e antiga é, antes de tudo, um job parado.
+  // A academia que acabou de sair da suspensão também cai aqui até a próxima madrugada.
+  if (Date.now() - new Date(u.executado_em).getTime() > LIMITE_ATRASO_MS) {
+    return (
+      <Alert variant="warning" role="alert">
+        <AlertDescription>
+          A última geração automática registrada foi em {quando}, e ela deveria rodar todo dia. Se a assinatura foi
+          regularizada há pouco, a próxima roda de madrugada; se não, avise o suporte.
+        </AlertDescription>
+      </Alert>
+    );
+  }
+  if (u.erro) {
+    return (
+      <Alert variant="destructive" role="alert">
+        <AlertDescription>
+          A geração automática de {quando} falhou: as cobranças desta academia não foram geradas nessa execução. A do dia
+          seguinte tenta de novo; se precisar antes, gere abaixo por matrícula.
+          <details className="mt-2 text-xs">
+            <summary className="cursor-pointer">Detalhe técnico</summary>
+            <span className="block break-words">{u.erro}</span>
+          </details>
+        </AlertDescription>
+      </Alert>
+    );
+  }
   return (
-    <section aria-label="Geração automática" className="space-y-2">
-      <h2 className="text-lg font-bold text-white">Geração automática</h2>
-      {conteudo}
-    </section>
+    <p className="text-sm text-zinc-300">
+      Última geração automática: {quando},{" "}
+      {u.geradas === 0 ? "nenhuma cobrança nova" : `${u.geradas} ${u.geradas === 1 ? "cobrança gerada" : "cobranças geradas"}`}.
+    </p>
   );
 };
 

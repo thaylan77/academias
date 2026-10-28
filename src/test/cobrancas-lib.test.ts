@@ -200,6 +200,8 @@ describe("Dados (sempre filtrados pela academia selecionada)", () => {
     expect(filtros(cliente.chamadas, "cobrancas_geracao_log")).toEqual([["academia_id", ACADEMIA]]);
     expect(cliente.chamadas.find((c) => c.tabela === "cobrancas_geracao_log" && c.metodo === "order")?.args)
       .toEqual(["executado_em", { ascending: false }]);
+    // Só a mais recente: não baixa o histórico de 180 dias.
+    expect(cliente.chamadas.find((c) => c.tabela === "cobrancas_geracao_log" && c.metodo === "range")?.args).toEqual([0, 0]);
 
     lib = await carregarComCliente(clienteFalso({}));
     expect(await lib.ultimaGeracaoAutomatica(ACADEMIA)).toBeNull();
