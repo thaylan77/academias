@@ -148,7 +148,7 @@ Plano, status e slug da academia só mudam via `service_role` (billing do SaaS).
 | `baixar_cobranca_manual(cobranca_id, ...)` | secretaria   | baixa de cobrança não emitida no gateway (`baixa_por`, `baixa_em`) |
 | `cancelar_cobranca(cobranca_id)`       | secretaria   | cancela cobrança não emitida; cobrança nunca é apagada     |
 | `gerar_cobrancas_matricula(matricula_id)` | secretaria | gera na hora as cobranças recorrentes da matrícula         |
-| `gerar_cobrancas_agendado()`           | job pg_cron (service_role) | todo dia às 06:00 UTC gera as cobranças das academias ativas, com o erro de cada uma isolado; registra em `cobrancas_geracao_log` (dono e admin leem) |
+| `gerar_cobrancas_agendado()` (procedure) | job pg_cron (service_role) | todo dia às 06:00 UTC gera as cobranças das academias ativas, uma por vez (`gerar_cobrancas_da_academia`, com commit e erro isolado); registra em `cobrancas_geracao_log` (dono e admin leem; 180 dias) |
 | `criar_matricula(academia_id, dados)`  | secretaria   | matrícula `ativa` e turmas numa transação, `cobrar_a_partir` opcional; com plano, exige dia de vencimento; não gera cobrança |
 | `aprovar_matricula(matricula_id, dia_vencimento?)` | secretaria | aprova matrícula `pendente` (da matrícula online), com início e cobrança a partir da aprovação; ativa o aluno |
 | `encerrar_matricula(matricula_id, data_fim)` | secretaria | define ou corrige o fim (não antes do início; pode ser no passado); devolve quantas pendentes vencem depois dele, sem cancelar |

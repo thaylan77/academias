@@ -1,8 +1,9 @@
--- gerar_cobrancas_agendado e cobrancas_geracao_log (issue #18): gera para as
--- academias ativas e pula a suspensa; o erro de uma academia fica no registro
--- e não impede as outras; rodar de novo não duplica; só dono e admin leem o
--- registro, e só o da própria academia; só service_role executa a função.
--- O agendamento em si (pg_cron) está em agendamento_cron.test.sql.
+-- gerar_cobrancas_da_academia e cobrancas_geracao_log (issue #18): gera e
+-- registra; a suspensa não gera; o erro de uma academia fica no registro e
+-- desfaz só o dela; rodar de novo não duplica; só dono e admin leem o
+-- registro, e só o da própria academia; só service_role executa.
+-- A procedure do lote (com commit) está em geracao_agendada_lote.test.sql e o
+-- agendamento (pg_cron) em agendamento_cron.test.sql.
 begin;
 create extension if not exists pgtap with schema extensions;
 select plan(22);
@@ -68,23 +69,28 @@ $$;
 -- ---------------------------------------------------------------------
 select has_trigger('public', 'cobrancas_geracao_log', 'cobrancas_geracao_log_academia_imutavel', 'registro com academia imutável');
 select ok((select relrowsecurity from pg_class where oid = 'public.cobrancas_geracao_log'::regclass), 'registro com RLS ligado');
-select ok(not has_function_privilege('anon', 'public.gerar_cobrancas_agendado()', 'execute'), 'anon não executa a geração agendada');
-select ok(not has_function_privilege('authenticated', 'public.gerar_cobrancas_agendado()', 'execute'), 'authenticated não executa a geração agendada');
-select ok(has_function_privilege('service_role', 'public.gerar_cobrancas_agendado()', 'execute'), 'service_role executa a geração agendada');
+select ok(not has_function_privilege('anon', 'public.gerar_cobrancas_da_academia(uuid)', 'execute')
+          and not has_function_privilege('anon', 'public.gerar_cobrancas_agendado()', 'execute'), 'anon não executa a geração agendada');
+select ok(not has_function_privilege('authenticated', 'public.gerar_cobrancas_da_academia(uuid)', 'execute')
+          and not has_function_privilege('authenticated', 'public.gerar_cobrancas_agendado()', 'execute'), 'authenticated não executa a geração agendada');
+select ok(has_function_privilege('service_role', 'public.gerar_cobrancas_da_academia(uuid)', 'execute')
+          and has_function_privilege('service_role', 'public.gerar_cobrancas_agendado()', 'execute'), 'service_role executa a geração agendada');
 
 -- ---------------------------------------------------------------------
 -- 2. A execução
 -- ---------------------------------------------------------------------
-select cmp_ok(public.gerar_cobrancas_agendado(), '>=', 2, 'a geração agendada devolve o total gerado');
+select is(public.gerar_cobrancas_da_academia('fe400000-0000-4000-8000-00000000000a'), 1, 'A: devolve quantas gerou');
+select public.gerar_cobrancas_da_academia(x::uuid) from unnest(array[
+  'fe400000-0000-4000-8000-00000000000b', 'fe400000-0000-4000-8000-00000000000c', 'fe400000-0000-4000-8000-00000000000d']) x;
 select is(pg_temp.cobrancas('fe400000-0000-4000-8000-00000000000a'), 1, 'A: gerou a cobrança');
 select is(pg_temp.cobrancas('fe400000-0000-4000-8000-00000000000b'), 1, 'B: gerou a cobrança');
 select is(pg_temp.cobrancas('fe400000-0000-4000-8000-00000000000c'), 0, 'C (suspensa): nada gerado');
 select is(pg_temp.cobrancas('fe400000-0000-4000-8000-00000000000d'), 0, 'D: a falha desfez só o que era dela');
 select is(pg_temp.log('fe400000-0000-4000-8000-00000000000a'), '1:-', 'A: registro com 1 gerada, sem erro');
 select is(pg_temp.log('fe400000-0000-4000-8000-00000000000d'), '0:falha simulada na academia D', 'D: registro com o erro');
-select is(pg_temp.log('fe400000-0000-4000-8000-00000000000c'), '', 'C (suspensa): nem entra no registro');
+select is(pg_temp.log('fe400000-0000-4000-8000-00000000000c'), '0:-', 'C (suspensa): registro com zero (o lote nem a chama)');
 
-select public.gerar_cobrancas_agendado();
+select public.gerar_cobrancas_da_academia('fe400000-0000-4000-8000-00000000000a');
 select is(pg_temp.cobrancas('fe400000-0000-4000-8000-00000000000a'), 1, 'rodar de novo não duplica');
 select is(pg_temp.log('fe400000-0000-4000-8000-00000000000a'), '1:-,0:-', 'e registra a segunda execução, com zero');
 
@@ -107,7 +113,7 @@ select is(pg_temp.vejo('fe400000-0000-4000-8000-0000000000a2', 'fe400000-0000-40
 select is(pg_temp.vejo('fe400000-0000-4000-8000-0000000000a3', 'fe400000-0000-4000-8000-00000000000a'), 0, 'recepção não lê o registro');
 select is(pg_temp.vejo('fe400000-0000-4000-8000-0000000000a4', 'fe400000-0000-4000-8000-00000000000a'), 0, 'professor não lê o registro');
 select is(pg_temp.vejo('fe400000-0000-4000-8000-0000000000a1', 'fe400000-0000-4000-8000-00000000000b'), 0, 'dono de A não lê o registro de B');
-select is(pg_temp.vejo('fe400000-0000-4000-8000-0000000000b1', 'fe400000-0000-4000-8000-00000000000b'), 2, 'dono de B lê o de B');
+select is(pg_temp.vejo('fe400000-0000-4000-8000-0000000000b1', 'fe400000-0000-4000-8000-00000000000b'), 1, 'dono de B lê o de B');
 
 set local role authenticated;
 set local request.jwt.claim.sub = 'fe400000-0000-4000-8000-0000000000a1';
