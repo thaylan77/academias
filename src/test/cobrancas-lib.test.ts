@@ -2,6 +2,7 @@ import { describe, it, expect, afterEach, vi } from "vitest";
 import {
   Cobranca,
   aceitaAcaoManual,
+  dataHoraNoFuso,
   diaNoFuso,
   estaVencida,
   filtrarCobrancas,
@@ -9,6 +10,7 @@ import {
   meioDiaNoFuso,
   podeGerirCobrancas,
   podeVerCobrancas,
+  podeVerGeracaoAutomatica,
   textoDivergencia,
   validarBaixa,
 } from "../lib/cobrancas";
@@ -31,6 +33,19 @@ describe("Regras de tela", () => {
     expect(podeGerirCobrancas("recepcao", true)).toBe(true);
     expect(podeGerirCobrancas("dono", false)).toBe(false);
     expect(podeGerirCobrancas("professor", true)).toBe(false);
+  });
+
+  it("registro da geração automática: só dono e admin", () => {
+    expect(podeVerGeracaoAutomatica("dono")).toBe(true);
+    expect(podeVerGeracaoAutomatica("admin")).toBe(true);
+    expect(podeVerGeracaoAutomatica("recepcao")).toBe(false);
+    expect(podeVerGeracaoAutomatica("professor")).toBe(false);
+  });
+
+  it("data e hora no fuso da academia; fuso inválido cai em UTC", () => {
+    expect(dataHoraNoFuso("2026-10-29T06:00:05Z", "America/Fortaleza")).toBe("29/10/2026 às 03:00");
+    expect(dataHoraNoFuso("2026-10-29T02:30:00Z", "America/Fortaleza")).toBe("28/10/2026 às 23:30");
+    expect(dataHoraNoFuso("2026-10-29T06:00:05Z", "Fuso/Invalido")).toBe("29/10/2026 às 06:00");
   });
 
   it("ação manual só para pendente nunca emitida no gateway", () => {
@@ -176,6 +191,20 @@ describe("Dados (sempre filtrados pela academia selecionada)", () => {
     const res = await lib.baixarCobranca("c1", { forma: "pix", data: "2026-10-19", valorPago: null }, "America/Fortaleza");
     expect(res.sucesso).toBe(false);
     if (!res.sucesso) expect(res.mensagem).toContain("A lista foi atualizada");
+  });
+
+  it("última geração automática: da academia, a mais recente, ou null; erro propaga", async () => {
+    const cliente = clienteFalso({ cobrancas_geracao_log: { data: [{ executado_em: "2026-10-29T06:00:05Z", geradas: 2, erro: null }], error: null } });
+    let lib = await carregarComCliente(cliente);
+    expect(await lib.ultimaGeracaoAutomatica(ACADEMIA)).toEqual({ executado_em: "2026-10-29T06:00:05Z", geradas: 2, erro: null });
+    expect(filtros(cliente.chamadas, "cobrancas_geracao_log")).toEqual([["academia_id", ACADEMIA]]);
+    expect(cliente.chamadas.find((c) => c.tabela === "cobrancas_geracao_log" && c.metodo === "order")?.args)
+      .toEqual(["executado_em", { ascending: false }]);
+
+    lib = await carregarComCliente(clienteFalso({}));
+    expect(await lib.ultimaGeracaoAutomatica(ACADEMIA)).toBeNull();
+    lib = await carregarComCliente(clienteFalso({ cobrancas_geracao_log: { data: null, error: { message: "rede" } } }));
+    await expect(lib.ultimaGeracaoAutomatica(ACADEMIA)).rejects.toMatchObject({ message: "rede" });
   });
 
   it("cancelar e gerar: chamam a RPC certa; gerar devolve quantas", async () => {

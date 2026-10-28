@@ -27,6 +27,7 @@ describe("Painel: cobranças", () => {
       { aluno_id: "a1", nome: "Ana Souza", telefone: "5585999991234", cobrancas_atrasadas: 2, total_atrasado: 300, vencimento_mais_antigo: "2026-08-10" },
     ]);
     vi.spyOn(lib, "listarMatriculasAtivas").mockResolvedValue([{ id: "m1", aluno: "Ana Souza", plano: "Mensal", dia_vencimento: 10 }]);
+    vi.spyOn(lib, "ultimaGeracaoAutomatica").mockResolvedValue(null);
   });
 
   it("professor não vê nada do financeiro, nem carrega os dados", () => {
@@ -160,10 +161,9 @@ describe("Painel: cobranças", () => {
     montar("recepcao");
 
     const secao = await screen.findByRole("region", { name: "Gerar cobranças" });
-    // Sem agendamento ainda: a tela não pode prometer geração automática.
-    expect(secao).toHaveTextContent("A geração automática ainda não está ligada");
-    expect(secao).toHaveTextContent("um mês que passar sem gerar não é recuperado depois");
-    expect(secao).not.toHaveTextContent("geradas sozinhas");
+    // Com o job diário (#18), a geração manual é só para gerar na hora.
+    expect(secao).toHaveTextContent("geradas automaticamente todo dia");
+    expect(secao).not.toHaveTextContent("ainda não está ligada");
     expect(within(secao).getByRole("button", { name: "Gerar agora" })).toBeDisabled();
     fireEvent.change(within(secao).getByLabelText("Matrícula ativa"), { target: { value: "m1" } });
     fireEvent.click(within(secao).getByRole("button", { name: "Gerar agora" }));
@@ -189,6 +189,78 @@ describe("Painel: cobranças", () => {
     fireEvent.click(screen.getByRole("button", { name: "Confirmar cancelamento" }));
     expect(await screen.findByText(/Feito, mas não foi possível atualizar a lista/)).toBeInTheDocument();
     await waitFor(() => expect(screen.getByRole("list", { name: "Lista de cobranças" })).toBeInTheDocument());
+  });
+});
+
+describe("Painel: cobranças, última geração automática", () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+    vi.spyOn(lib, "listarCobrancas").mockResolvedValue([]);
+    vi.spyOn(lib, "listarInadimplentes").mockResolvedValue([]);
+    vi.spyOn(lib, "listarMatriculasAtivas").mockResolvedValue([]);
+  });
+
+  const agoraMenos = (horas: number) => new Date(Date.now() - horas * 3600 * 1000).toISOString();
+
+  it("dono vê quando foi e quantas saíram, no fuso da academia", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-10-29T12:00:00Z"));
+    const ultima = vi.spyOn(lib, "ultimaGeracaoAutomatica").mockResolvedValue({ executado_em: "2026-10-29T06:00:05Z", geradas: 3, erro: null });
+    montar("dono");
+    const secao = await screen.findByRole("region", { name: "Geração automática" });
+    expect(await within(secao).findByText(/Última geração automática: 29\/10\/2026 às 03:00, 3 cobranças geradas\./)).toBeInTheDocument();
+    expect(ultima).toHaveBeenCalledWith("acad-a");
+    expect(within(secao).queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("zero geradas", async () => {
+    vi.spyOn(lib, "ultimaGeracaoAutomatica").mockResolvedValueOnce({ executado_em: agoraMenos(5), geradas: 0, erro: null });
+    montar("admin");
+    expect(await screen.findByText(/nenhuma cobrança nova\./)).toBeInTheDocument();
+  });
+
+  it("sem execução ainda: explica que roda todo dia", async () => {
+    vi.spyOn(lib, "ultimaGeracaoAutomatica").mockResolvedValue(null);
+    montar("admin");
+    expect(await screen.findByText(/Ainda não houve execução para esta academia/)).toBeInTheDocument();
+  });
+
+  it("falha na última execução: aviso, com o detalhe técnico recolhido", async () => {
+    vi.spyOn(lib, "ultimaGeracaoAutomatica").mockResolvedValue({ executado_em: agoraMenos(5), geradas: 0, erro: "time zone \"x\" not recognized" });
+    montar("dono");
+    const secao = await screen.findByRole("region", { name: "Geração automática" });
+    const alerta = await within(secao).findByRole("alert");
+    expect(alerta).toHaveTextContent("falhou");
+    expect(within(alerta).getByText("Detalhe técnico").closest("details")).not.toHaveAttribute("open");
+  });
+
+  it("sem execução há mais de dois dias: avisa que parou", async () => {
+    vi.spyOn(lib, "ultimaGeracaoAutomatica").mockResolvedValue({ executado_em: agoraMenos(60), geradas: 1, erro: null });
+    montar("dono");
+    expect(await screen.findByText(/não roda desde/)).toBeInTheDocument();
+  });
+
+  it("assinatura suspensa: diz que fica parada", async () => {
+    vi.spyOn(lib, "ultimaGeracaoAutomatica").mockResolvedValue({ executado_em: agoraMenos(200), geradas: 1, erro: null });
+    montar("dono", false);
+    expect(await screen.findByText(/a geração automática fica parada/)).toBeInTheDocument();
+    expect(screen.queryByText(/não roda desde/)).not.toBeInTheDocument();
+  });
+
+  it("recepção não vê a seção nem consulta o registro", async () => {
+    const ultima = vi.spyOn(lib, "ultimaGeracaoAutomatica");
+    montar("recepcao");
+    await screen.findByRole("region", { name: "Cobranças" });
+    expect(screen.queryByRole("region", { name: "Geração automática" })).not.toBeInTheDocument();
+    expect(ultima).not.toHaveBeenCalled();
+  });
+
+  it("erro ao consultar o registro não derruba a tela", async () => {
+    vi.spyOn(lib, "ultimaGeracaoAutomatica").mockRejectedValue(new Error("rede"));
+    montar("dono");
+    expect(await screen.findByText("Não foi possível consultar a última geração automática.")).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "Cobranças" })).toBeInTheDocument();
   });
 });
 

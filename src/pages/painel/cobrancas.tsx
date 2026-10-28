@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import {
   Cobranca,
   FormaPagamento,
+  GeracaoAutomatica,
   Inadimplente,
   MatriculaCobravel,
   ROTULO_FORMA,
@@ -9,6 +10,7 @@ import {
   aceitaAcaoManual,
   baixarCobranca,
   cancelarCobranca,
+  dataHoraNoFuso,
   estaVencida,
   filtrarCobrancas,
   gerarCobrancasAgora,
@@ -16,9 +18,11 @@ import {
   listarInadimplentes,
   listarMatriculasAtivas,
   podeGerirCobrancas,
+  podeVerGeracaoAutomatica,
   podeVerCobrancas,
   reais,
   textoDivergencia,
+  ultimaGeracaoAutomatica,
   validarBaixa,
 } from "../../lib/cobrancas";
 import { formatarTelefone, hojeNoFuso } from "../../lib/alunos";
@@ -116,12 +120,83 @@ const Financeiro: React.FC = () => {
           </AlertDescription>
         </Alert>
       )}
+      {podeVerGeracaoAutomatica(academia.papel) && <UltimaGeracao />}
       <Inadimplentes lista={estado.dados.inadimplentes} />
       <ListaDeCobrancas cobrancas={estado.dados.cobrancas} aoMudar={recarregar} />
       {podeGerirCobrancas(academia.papel, academia.ativa) && (
         <GerarAgora matriculas={estado.dados.matriculas} aoMudar={recarregar} />
       )}
     </div>
+  );
+};
+
+// ------------------------------------------------------------------ geração automática
+
+// O job roda uma vez por dia: sem execução há mais de dois dias, algo parou.
+const LIMITE_ATRASO_MS = 48 * 60 * 60 * 1000;
+
+const UltimaGeracao: React.FC = () => {
+  const { academia } = usarPainel();
+  const [estado, setEstado] = useState<{ fase: "carregando" } | { fase: "erro" } | { fase: "pronto"; ultima: GeracaoAutomatica | null }>({ fase: "carregando" });
+
+  // Falhar aqui não derruba o resto da tela.
+  useEffect(() => {
+    let vale = true;
+    setEstado({ fase: "carregando" });
+    ultimaGeracaoAutomatica(academia.academia_id)
+      .then((ultima) => vale && setEstado({ fase: "pronto", ultima }))
+      .catch(() => vale && setEstado({ fase: "erro" }));
+    return () => {
+      vale = false;
+    };
+  }, [academia.academia_id]);
+
+  let conteudo: React.ReactNode;
+  if (estado.fase === "carregando") {
+    conteudo = <p role="status" className="text-sm text-zinc-500">Carregando a última geração...</p>;
+  } else if (estado.fase === "erro") {
+    conteudo = <p className="text-sm text-zinc-400">Não foi possível consultar a última geração automática.</p>;
+  } else if (!academia.ativa) {
+    conteudo = <p className="text-sm text-zinc-400">Com a assinatura suspensa, a geração automática fica parada.</p>;
+  } else if (!estado.ultima) {
+    conteudo = <p className="text-sm text-zinc-400">As cobranças são geradas automaticamente todo dia, de madrugada. Ainda não houve execução para esta academia.</p>;
+  } else {
+    const u = estado.ultima;
+    const quando = dataHoraNoFuso(u.executado_em, academia.fuso);
+    const atrasada = Date.now() - new Date(u.executado_em).getTime() > LIMITE_ATRASO_MS;
+    conteudo = (
+      <>
+        {u.erro ? (
+          <Alert variant="destructive" role="alert">
+            <AlertDescription>
+              A geração automática de {quando} falhou: as cobranças desta academia não foram geradas nessa execução. A do dia
+              seguinte tenta de novo; se precisar antes, gere abaixo por matrícula.
+              <details className="mt-2 text-xs">
+                <summary className="cursor-pointer">Detalhe técnico</summary>
+                <span className="block break-words">{u.erro}</span>
+              </details>
+            </AlertDescription>
+          </Alert>
+        ) : (
+          <p className="text-sm text-zinc-300">
+            Última geração automática: {quando},{" "}
+            {u.geradas === 0 ? "nenhuma cobrança nova" : `${u.geradas} ${u.geradas === 1 ? "cobrança gerada" : "cobranças geradas"}`}.
+          </p>
+        )}
+        {atrasada && (
+          <Alert variant="warning" role="alert">
+            <AlertDescription>A geração automática deveria rodar todo dia e não roda desde {quando}. Avise o suporte.</AlertDescription>
+          </Alert>
+        )}
+      </>
+    );
+  }
+
+  return (
+    <section aria-label="Geração automática" className="space-y-2">
+      <h2 className="text-lg font-bold text-white">Geração automática</h2>
+      {conteudo}
+    </section>
   );
 };
 
@@ -389,10 +464,9 @@ const GerarAgora: React.FC<{ matriculas: MatriculaCobravel[]; aoMudar: () => voi
   return (
     <section aria-label="Gerar cobranças" className="space-y-3">
       <h2 className="text-lg font-bold text-white">Gerar cobranças de uma matrícula</h2>
-      {/* Enquanto o agendamento de gerar_cobrancas não existe (backlog do financeiro), a geração é só esta. */}
       <p className="text-sm text-zinc-400">
-        A geração automática ainda não está ligada: gere aqui, todo mês, as cobranças de cada matrícula ativa. Só entram a
-        competência atual e a seguinte; um mês que passar sem gerar não é recuperado depois.
+        As cobranças das matrículas ativas são geradas automaticamente todo dia, de madrugada. Use aqui para gerar na hora as
+        de uma matrícula. Só entram a competência atual e a seguinte.
       </p>
       <div className="flex flex-wrap items-end gap-3">
         <div className="min-w-[260px] flex-1 space-y-1.5">
