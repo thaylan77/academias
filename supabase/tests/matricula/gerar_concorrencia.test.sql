@@ -5,6 +5,8 @@
 -- encerramento aberto, ela espera e, depois do commit, reavalia a matrícula
 -- já atualizada: não cobra a trancada nem o vencimento depois do fim. Na
 -- ordem inversa, trancar espera a geração e conta a cobrança que ela gravou.
+-- Contra anonimizar_aluno (que trava o aluno e depois cancela as matrículas),
+-- a geração trava o aluno antes da matrícula: espera, e não há ciclo.
 -- Nenhuma das ordens trava em deadlock (as RPCs travam o aluno com
 -- "for no key update", que não conflita com a chave estrangeira de cobrancas).
 --
@@ -13,7 +15,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 create extension if not exists dblink with schema extensions;
-select plan(15);
+select plan(20);
 
 -- Mesma conexão de concorrencia.test.sql (ver o comentário lá).
 create function pg_temp.conexao() returns text language sql as $$
@@ -26,7 +28,7 @@ $$;
 select extensions.dblink_connect('prep', pg_temp.conexao());
 select extensions.dblink_connect('s1', pg_temp.conexao());
 select extensions.dblink_connect('s2', pg_temp.conexao());
--- As duas sessões agem como a recepção da academia. Nenhuma espera pode travar o CI.
+-- As duas sessões agem como o dono da academia (anonimizar é de dono e admin). Nenhuma espera pode travar o CI.
 select extensions.dblink_exec(c, $s$
   set statement_timeout = '20s';
   set role authenticated;
@@ -35,30 +37,33 @@ select extensions.dblink_exec(c, $s$
 $s$) from unnest(array['s1', 's2']) c;
 
 -- ---------------------------------------------------------------------
--- Fixtures confirmadas: academia ativa, recepção, plano e três alunos, cada um
+-- Fixtures confirmadas: academia ativa, dono, plano e quatro alunos, cada um
 -- com uma matrícula ativa cadastrada hoje, que gera agora a primeira cobrança
 -- (vence hoje): M1 (trancar), M2 (encerrar, início 5 dias atrás), M3 (ordem
--- inversa).
+-- inversa), M4 (anonimizar).
 -- ---------------------------------------------------------------------
 select extensions.dblink_exec('prep', $f$
   insert into auth.users (id, email) values
-    ('f9200000-0000-4000-8000-0000000000a1', 'recepcao@gerar-concorrencia.test');
+    ('f9200000-0000-4000-8000-0000000000a1', 'dono@gerar-concorrencia.test');
   insert into public.academias (id, nome, slug, status) values
     ('f9200000-0000-4000-8000-00000000000a', 'Gerar concorrência', 'gerar-concorrencia-a', 'ativa');
   insert into public.membros_academia (academia_id, user_id, papel) values
-    ('f9200000-0000-4000-8000-00000000000a', 'f9200000-0000-4000-8000-0000000000a1', 'recepcao');
+    ('f9200000-0000-4000-8000-00000000000a', 'f9200000-0000-4000-8000-0000000000a1', 'dono');
   insert into public.planos (id, academia_id, nome, valor, ativo) values
     ('f9200000-0000-4000-8000-0000000004a1', 'f9200000-0000-4000-8000-00000000000a', 'Mensal', 150, true);
   insert into public.alunos (id, academia_id, nome, status) values
     ('f9200000-0000-4000-8000-0000000001a1', 'f9200000-0000-4000-8000-00000000000a', 'Aluno 1', 'ativo'),
     ('f9200000-0000-4000-8000-0000000001a2', 'f9200000-0000-4000-8000-00000000000a', 'Aluno 2', 'ativo'),
-    ('f9200000-0000-4000-8000-0000000001a3', 'f9200000-0000-4000-8000-00000000000a', 'Aluno 3', 'ativo');
+    ('f9200000-0000-4000-8000-0000000001a3', 'f9200000-0000-4000-8000-00000000000a', 'Aluno 3', 'ativo'),
+    ('f9200000-0000-4000-8000-0000000001a4', 'f9200000-0000-4000-8000-00000000000a', 'Aluno 4', 'ativo');
   insert into public.matriculas (id, academia_id, aluno_id, plano_id, status, origem, data_inicio, dia_vencimento) values
     ('f9200000-0000-4000-8000-000000000401', 'f9200000-0000-4000-8000-00000000000a', 'f9200000-0000-4000-8000-0000000001a1',
      'f9200000-0000-4000-8000-0000000004a1', 'ativa', 'recepcao', public.hoje_academia('f9200000-0000-4000-8000-00000000000a'), 28),
     ('f9200000-0000-4000-8000-000000000402', 'f9200000-0000-4000-8000-00000000000a', 'f9200000-0000-4000-8000-0000000001a2',
      'f9200000-0000-4000-8000-0000000004a1', 'ativa', 'recepcao', public.hoje_academia('f9200000-0000-4000-8000-00000000000a') - 5, 28),
     ('f9200000-0000-4000-8000-000000000403', 'f9200000-0000-4000-8000-00000000000a', 'f9200000-0000-4000-8000-0000000001a3',
+     'f9200000-0000-4000-8000-0000000004a1', 'ativa', 'recepcao', public.hoje_academia('f9200000-0000-4000-8000-00000000000a'), 28),
+    ('f9200000-0000-4000-8000-000000000404', 'f9200000-0000-4000-8000-00000000000a', 'f9200000-0000-4000-8000-0000000001a4',
      'f9200000-0000-4000-8000-0000000004a1', 'ativa', 'recepcao', public.hoje_academia('f9200000-0000-4000-8000-00000000000a'), 28);
 $f$);
 
@@ -141,6 +146,32 @@ $$), 1, 'C: s2 envia o trancamento');
 select ok(pg_temp.alguem_esperando(), 'C: o trancamento espera a geração aberta');
 select extensions.dblink_exec('s1', 'commit');
 select is(pg_temp.resultado_s2(), '1', 'C: depois do commit, trancar termina (sem deadlock) e conta a cobrança gravada');
+
+-- ---------------------------------------------------------------------
+-- D. s1 trava o aluno 4 (o primeiro passo de anonimizar_aluno) e não
+--    confirma; s2 gera as cobranças de M4; então s1 anonimiza o aluno.
+--    Se a geração travasse a matrícula antes do aluno, as duas se
+--    esperariam (deadlock): a anonimização vai cancelar M4.
+-- ---------------------------------------------------------------------
+select extensions.dblink_exec('s1', 'begin');
+select extensions.dblink_exec('s1', $$do $d$ begin
+  perform 1 from public.alunos where id = 'f9200000-0000-4000-8000-0000000001a4' for update;
+end $d$ $$);
+select is(extensions.dblink_send_query('s2', $$
+  select public.gerar_cobrancas_matricula('f9200000-0000-4000-8000-000000000404')::text
+$$), 1, 'D: s2 envia a geração');
+select ok(pg_temp.alguem_esperando(), 'D: a geração espera o aluno travado');
+-- Síncrono: se o Postgres abortar s1 por deadlock, o teste para aqui com o erro;
+-- se abortar s2, o resultado dela (abaixo) traz o erro.
+select is((select r from extensions.dblink('s1', $$
+  select 'sem deadlock' from (select public.anonimizar_aluno('f9200000-0000-4000-8000-0000000001a4')) x
+$$) as t(r text)), 'sem deadlock', 'D: a anonimização segue sem esperar a geração');
+select extensions.dblink_exec('s1', 'commit');
+select is(pg_temp.resultado_s2(), '0', 'D: depois do commit, a geração termina (sem deadlock) e não cobra o aluno anonimizado');
+select is((select m.status || '|' || (a.anonimizado_em is not null)::text || '|' || pg_temp.cobrancas_de(m.id)
+             from public.matriculas m join public.alunos a on a.id = m.aluno_id
+            where m.id = 'f9200000-0000-4000-8000-000000000404'),
+  'cancelada|true|0', 'D: aluno anonimizado, matrícula cancelada e nenhuma cobrança');
 
 -- ---------------------------------------------------------------------
 -- Limpeza das fixtures confirmadas.

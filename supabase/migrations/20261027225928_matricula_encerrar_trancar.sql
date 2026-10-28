@@ -226,9 +226,14 @@ begin
          + extract(month from g.competencia) - extract(month from m.cobrar_a_partir))::int % b.intervalo = 0
     and b.hoje >= x.vencimento - a.dias_antecedencia_cobranca
     and (m.data_fim is null or x.vencimento <= m.data_fim)
-  -- Trava a matrícula: um trancamento, encerramento ou cancelamento em
-  -- andamento faz a geração esperar e reavaliar a matrícula já atualizada
-  -- (status, data_fim) antes de gravar, em vez de cobrar pela versão antiga.
+  -- Trava o aluno e depois a matrícula, na mesma ordem das RPCs de matrícula
+  -- e de anonimizar_aluno (aluno, depois as matrículas dele): um trancamento,
+  -- encerramento ou anonimização em andamento faz a geração esperar e
+  -- reavaliar a linha já atualizada (status, data_fim) antes de gravar, em vez
+  -- de cobrar pela versão antiga, e sem ciclo de espera entre elas. A do aluno
+  -- é "key share": basta para esperar anonimizar_aluno (for update) e não
+  -- conflita com a "for no key update" de trancar e encerrar.
+  for key share of al
   for share of m
   on conflict (matricula_id, competencia) do nothing;
 
