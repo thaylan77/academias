@@ -209,6 +209,39 @@ describe("Dados (sempre filtrados pela academia selecionada)", () => {
     await expect(lib.ultimaGeracaoAutomatica(ACADEMIA)).rejects.toMatchObject({ message: "rede" });
   });
 
+  it("recusa decidida pelo hint, nunca pelo texto; hint desconhecido vira a genérica", async () => {
+    const recusa = (hint: string | null, message = "texto qualquer do banco") => {
+      const c = clienteFalso({});
+      c.rpc.mockResolvedValue({ data: null, error: { message, hint } });
+      return carregarComCliente(c);
+    };
+    const baixa = { forma: "pix" as const, data: "2026-10-19", valorPago: null };
+    const msgBaixa = async (hint: string | null, message?: string) => {
+      const lib = await recusa(hint, message);
+      const r = await lib.baixarCobranca("c1", baixa, "America/Fortaleza");
+      return r.sucesso ? "" : r.mensagem;
+    };
+    expect(await msgBaixa("cobranca_emitida")).toContain("já foi emitida no gateway");
+    expect(await msgBaixa("cobranca_nao_pendente")).toContain("não está mais pendente");
+    expect(await msgBaixa("cobranca_paga_gateway")).toContain("já foi paga pelo gateway");
+    expect(await msgBaixa("dados_invalidos")).toContain("Confira a forma, a data");
+    expect(await msgBaixa("sem_permissao")).toContain("só com a assinatura em dia");
+    // O texto do banco não decide nada, nem quando parece um caso conhecido.
+    expect(await msgBaixa(null, "Esta cobrança já foi paga pelo gateway")).toContain("a cobrança pode ter mudado");
+    expect(await msgBaixa("codigo_novo")).toContain("a cobrança pode ter mudado");
+
+    let lib = await recusa("cobranca_emitida");
+    const cancel = await lib.cancelarCobranca("c1");
+    expect(cancel.sucesso ? "" : cancel.mensagem).toContain("já foi emitida no gateway");
+
+    lib = await recusa("sem_permissao");
+    const gerou = await lib.gerarCobrancasAgora("m1");
+    expect(gerou.sucesso ? "" : gerou.mensagem).toContain("só com a assinatura em dia");
+    lib = await recusa(null);
+    const semHint = await lib.gerarCobrancasAgora("m1");
+    expect(semHint.sucesso ? "" : semHint.mensagem).toContain("Não foi possível gerar");
+  });
+
   it("cancelar e gerar: chamam a RPC certa; gerar devolve quantas", async () => {
     const cliente = clienteFalso({});
     cliente.rpc.mockResolvedValueOnce({ data: null, error: null }).mockResolvedValueOnce({ data: 2, error: null });
