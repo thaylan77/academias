@@ -9,8 +9,12 @@ describe("Cabeçalho das páginas públicas", () => {
     const nav = screen.getByRole("navigation", { name: "Páginas de demonstração" });
     for (const [nome, aba] of [["Matrícula Pública", "matricula"], ["Totem QR da Turma", "totem"], ["Check-in Aluno", "checkin"]] as const) {
       const botao = within(nav).getByRole("button", { name: nome });
-      // No celular o texto some (hidden sm:inline); o nome vem do aria-label.
-      expect(within(botao).getByText(nome)).toHaveClass("hidden", "sm:inline");
+      // Abaixo de md o texto some e fica o ícone; o nome vem do aria-label, que
+      // é igual ao rótulo visível a partir de md.
+      expect(within(botao).getByText(nome)).toHaveClass("hidden", "md:inline", "whitespace-nowrap");
+      expect(botao).toHaveAttribute("aria-label", nome);
+      // Alvo de toque de 40 x 40 px no celular.
+      expect(botao).toHaveClass("min-h-10", "min-w-10");
       fireEvent.click(botao);
       expect(trocar).toHaveBeenLastCalledWith(aba);
     }

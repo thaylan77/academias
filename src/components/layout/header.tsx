@@ -40,6 +40,7 @@ export const Header: React.FC<HeaderProps> = ({
           </div>
         </div>
 
+        {/* Abas: só o ícone abaixo de md (o nome vai no aria-label); os rótulos inteiros só cabem a partir de 768 px. */}
         {/* Totem nunca exibe menu de navegação em nenhum estado (login ou quiosque ativo) */}
         {activeTab === "totem" ? (
           <div className="flex min-w-0 items-center gap-2">
@@ -67,38 +68,38 @@ export const Header: React.FC<HeaderProps> = ({
                   type="button"
                   onClick={() => onTabChange("matricula")}
                   aria-label={"Matrícula Pública"}
-                  className={`flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
+                  className={`flex min-h-10 min-w-10 items-center justify-center gap-1.5 px-2.5 md:min-h-0 md:min-w-0 md:px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
                     activeTab === "matricula"
                       ? "bg-red-600 text-white shadow-sm"
                       : "text-zinc-400 hover:text-white hover:bg-zinc-800"
                   }`}
                 >
-                  <UserPlus className="w-4 h-4 sm:w-3.5 sm:h-3.5" />
-                  <span className="hidden sm:inline">Matrícula Pública</span>
+                  <UserPlus className="w-4 h-4 md:w-3.5 md:h-3.5" />
+                  <span className="hidden md:inline whitespace-nowrap">Matrícula Pública</span>
                 </button>
 
                 <button
                   type="button"
                   onClick={() => onTabChange("totem")}
                   aria-label={"Totem QR da Turma"}
-                  className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-lg text-xs font-semibold transition-all text-zinc-400 hover:text-white hover:bg-zinc-800"
+                  className="flex min-h-10 min-w-10 items-center justify-center gap-1.5 px-2.5 md:min-h-0 md:min-w-0 md:px-3 py-1.5 rounded-lg text-xs font-semibold transition-all text-zinc-400 hover:text-white hover:bg-zinc-800"
                 >
-                  <Monitor className="w-4 h-4 sm:w-3.5 sm:h-3.5" />
-                  <span className="hidden sm:inline">Totem QR da Turma</span>
+                  <Monitor className="w-4 h-4 md:w-3.5 md:h-3.5" />
+                  <span className="hidden md:inline whitespace-nowrap">Totem QR da Turma</span>
                 </button>
 
                 <button
                   type="button"
                   onClick={() => onTabChange("checkin")}
                   aria-label={"Check-in Aluno"}
-                  className={`flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
+                  className={`flex min-h-10 min-w-10 items-center justify-center gap-1.5 px-2.5 md:min-h-0 md:min-w-0 md:px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
                     activeTab === "checkin"
                       ? "bg-red-600 text-white shadow-sm"
                       : "text-zinc-400 hover:text-white hover:bg-zinc-800"
                   }`}
                 >
-                  <QrCode className="w-4 h-4 sm:w-3.5 sm:h-3.5" />
-                  <span className="hidden sm:inline">Check-in Aluno</span>
+                  <QrCode className="w-4 h-4 md:w-3.5 md:h-3.5" />
+                  <span className="hidden md:inline whitespace-nowrap">Check-in Aluno</span>
                 </button>
               </nav>
 
