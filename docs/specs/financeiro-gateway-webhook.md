@@ -267,7 +267,7 @@ Só para `service_role`. As que recebem `p_user_id` **reconferem no SQL** se ess
 - Só a competência corrente e a seguinte.
 - `on conflict (matricula_id, competencia) do nothing`.
 
-O agendamento no pg_cron e a emissão automática ficam para a etapa seguinte.
+O agendamento no pg_cron entrou com a #18: o job `gerar-cobrancas-diario` chama `gerar_cobrancas_agendado()` todo dia às 06:00 UTC e registra cada academia em `cobrancas_geracao_log`. A emissão automática no gateway fica para depois da #17.
 
 ### 4.6 Validação
 
