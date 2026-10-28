@@ -566,8 +566,8 @@ isOneToOne: false
 "gerar_cobrancas":
 { Args: { "p_academia_id"?: string,"p_matricula_id"?: string }; Returns: number
                            },
-"gerar_cobrancas_agendado":
-{ Args: Record<PropertyKey, never>; Returns: number
+"gerar_cobrancas_da_academia":
+{ Args: { "p_academia_id": string }; Returns: number
                            },
 "gerar_cobrancas_matricula":
 { Args: { "p_matricula_id": string }; Returns: number
