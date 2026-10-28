@@ -94,6 +94,7 @@ O código vai no `hint` do erro (`raise exception '<mensagem em português>' usi
 | `cobrar_a_partir_invalido` | `criar_matricula` | mês inicial de cobrança fora do dia 1, antes do mês atual ou antes do mês de início das aulas |
 | `dia_vencimento_obrigatorio` | `criar_matricula`, `aprovar_matricula` | matrícula com plano sem dia de vencimento (`gerar_cobrancas` nunca a cobraria) |
 | `matricula_nao_pendente` | `aprovar_matricula` | a matrícula não está pendente (já aprovada, ativa ou cancelada) |
+| `matricula_vencida` | `aprovar_matricula` | o fim do pedido já passou (aprovar levaria o início para depois dele) |
 | `matricula_nao_encerravel` | `encerrar_matricula` | só matrícula ativa ou trancada é encerrada |
 | `matricula_nao_ativa` | `trancar_matricula` | só matrícula ativa e em andamento (sem fim antes de hoje) é trancada |
 | `matricula_nao_trancada` | `destrancar_matricula` | a matrícula não está trancada, ou já terminou (fim antes de hoje) |

@@ -168,6 +168,8 @@ function mensagem(hint: string | null | undefined, dadosInvalidos: string): stri
       return MSG_DIA_VENCIMENTO;
     case "cobrar_a_partir_invalido":
       return "O mês inicial de cobrança precisa ser o mês atual ou depois, e não antes do mês de início das aulas.";
+    case "matricula_vencida":
+      return "O período pedido nesta matrícula já terminou: não dá para aprovar. Cancele o pedido ou faça uma matrícula nova.";
     case "matricula_nao_pendente":
       return "Esta matrícula não está mais pendente (já foi aprovada ou cancelada). A lista foi atualizada.";
     case "matricula_nao_encerravel":
