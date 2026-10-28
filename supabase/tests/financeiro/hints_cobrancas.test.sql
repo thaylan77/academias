@@ -3,7 +3,7 @@
 -- a mesma. Academias A e B; a suspensa C.
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(18);
+select plan(25);
 
 -- Hint da recusa (ou 'sem erro'), para comparar com o código.
 create function public.__hint_de(p_sql text)
@@ -62,13 +62,18 @@ insert into public.gateway_contas (id, academia_id, gateway, ambiente, conta_ext
    gen_random_uuid(), 'hash-hints-cobrancas');
 
 -- a1 pendente; a2 emitida no gateway; a3 paga pelo gateway (sem baixa manual);
--- a4 cancelada; c1 pendente na suspensa.
+-- a4 cancelada; a5 com a emissão reservada (ainda sem gateway_id); c1 pendente
+-- na suspensa.
 insert into public.cobrancas (id, academia_id, aluno_id, valor, vencimento, status, gateway_id, gateway_conta_id, pago_em) values
   ('fe600000-0000-4000-8000-0000000006a1', 'fe600000-0000-4000-8000-00000000000a', 'fe600000-0000-4000-8000-0000000001a1', 150, current_date + 5, 'pendente', null, null, null),
   ('fe600000-0000-4000-8000-0000000006a2', 'fe600000-0000-4000-8000-00000000000a', 'fe600000-0000-4000-8000-0000000001a1', 150, current_date + 5, 'pendente', 'pay_hints', 'fe600000-0000-4000-8000-0000000007a1', null),
   ('fe600000-0000-4000-8000-0000000006a3', 'fe600000-0000-4000-8000-00000000000a', 'fe600000-0000-4000-8000-0000000001a1', 150, current_date - 30, 'paga', null, null, now() - interval '25 days'),
   ('fe600000-0000-4000-8000-0000000006a4', 'fe600000-0000-4000-8000-00000000000a', 'fe600000-0000-4000-8000-0000000001a1', 150, current_date - 60, 'cancelada', null, null, null),
+  ('fe600000-0000-4000-8000-0000000006a5', 'fe600000-0000-4000-8000-00000000000a', 'fe600000-0000-4000-8000-0000000001a1', 150, current_date + 5, 'pendente', null, null, null),
   ('fe600000-0000-4000-8000-0000000006c1', 'fe600000-0000-4000-8000-00000000000c', 'fe600000-0000-4000-8000-0000000001c1', 120, current_date + 5, 'pendente', null, null, null);
+update public.cobrancas
+   set emissao_iniciada_em = now(), emissao_gateway_conta_id = 'fe600000-0000-4000-8000-0000000007a1', emissao_tentativa = gen_random_uuid()
+ where id = 'fe600000-0000-4000-8000-0000000006a5';
 
 -- ---------------------------------------------------------------------
 -- sem_permissao: outra academia, papel sem acesso, suspensa, inexistente
@@ -85,6 +90,10 @@ select is(public.__hint_de($$select public.gerar_cobrancas_matricula('fe600000-0
 select public.__como('fe600000-0000-4000-8000-0000000000a2');
 select is(public.__hint_de($$select public.baixar_cobranca_manual('fe600000-0000-4000-8000-0000000006a1', 'pix')$$),
           'sem_permissao', 'professor não dá baixa: sem_permissao');
+select is(public.__hint_de($$select public.cancelar_cobranca('fe600000-0000-4000-8000-0000000006a1')$$),
+          'sem_permissao', 'professor não cancela: sem_permissao');
+select is(public.__hint_de($$select public.gerar_cobrancas_matricula('fe600000-0000-4000-8000-0000000005a1')$$),
+          'sem_permissao', 'professor não gera: sem_permissao');
 
 select public.__como('fe600000-0000-4000-8000-0000000000c1');
 select is(public.__hint_de($$select public.baixar_cobranca_manual('fe600000-0000-4000-8000-0000000006c1', 'pix')$$),
@@ -100,6 +109,16 @@ select is(public.__hint_de($$select public.gerar_cobrancas_matricula('fe600000-0
 select public.__como('fe600000-0000-4000-8000-0000000000a1');
 select is(public.__hint_de($$select public.baixar_cobranca_manual('fe600000-0000-4000-8000-000000000999', 'pix')$$),
           'sem_permissao', 'cobrança inexistente: sem_permissao');
+select is(public.__hint_de($$select public.cancelar_cobranca('fe600000-0000-4000-8000-000000000999')$$),
+          'sem_permissao', 'cancelar cobrança inexistente: sem_permissao');
+select is(public.__hint_de($$select public.gerar_cobrancas_matricula('fe600000-0000-4000-8000-000000000999')$$),
+          'sem_permissao', 'gerar para matrícula inexistente: sem_permissao');
+select is(public.__hint_de($$select public.baixar_cobranca_manual('fe600000-0000-4000-8000-0000000006a5', 'pix')$$),
+          'cobranca_emitida', 'baixa com a emissão reservada: cobranca_emitida');
+select is(public.__hint_de($$select public.cancelar_cobranca('fe600000-0000-4000-8000-0000000006a5')$$),
+          'cobranca_emitida', 'cancelamento com a emissão reservada: cobranca_emitida');
+select is(public.__hint_de($$select public.baixar_cobranca_manual('fe600000-0000-4000-8000-0000000006a4', 'pix')$$),
+          'cobranca_nao_pendente', 'baixa de cancelada: cobranca_nao_pendente');
 select is(public.__hint_de($$select public.baixar_cobranca_manual('fe600000-0000-4000-8000-0000000006a2', 'pix')$$),
           'cobranca_emitida', 'baixa de emitida no gateway: cobranca_emitida');
 select is(public.__hint_de($$select public.cancelar_cobranca('fe600000-0000-4000-8000-0000000006a2')$$),
