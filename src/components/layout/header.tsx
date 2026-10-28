@@ -20,21 +20,21 @@ export const Header: React.FC<HeaderProps> = ({
   return (
     <header className="sticky top-0 z-40 w-full border-b border-zinc-800 bg-zinc-950/80 backdrop-blur-md">
       <div className="container mx-auto px-4 h-16 flex items-center justify-between gap-4">
-        {/* Marca & Logo */}
-        <div className="flex items-center gap-2.5">
-          <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-red-600 to-red-800 flex items-center justify-center text-white shadow-lg shadow-red-900/30">
+        {/* Marca & Logo: não encolhe nem quebra; no celular só o nome fica */}
+        <div className="flex shrink-0 items-center gap-2.5">
+          <div className="w-9 h-9 shrink-0 rounded-xl bg-gradient-to-br from-red-600 to-red-800 flex items-center justify-center text-white shadow-lg shadow-red-900/30">
             <Shield className="w-5 h-5" />
           </div>
           <div>
             <div className="flex items-center gap-2">
-              <span className="font-extrabold text-base tracking-tight text-white">
+              <span className="whitespace-nowrap font-extrabold text-base tracking-tight text-white">
                 HONOR TEAM
               </span>
-              <Badge variant="secondary" className="text-[10px] py-0 px-1.5 font-mono">
+              <Badge variant="secondary" className="hidden sm:inline-flex text-[10px] py-0 px-1.5 font-mono">
                 SAAS
               </Badge>
             </div>
-            <p className="text-[11px] text-zinc-400 -mt-0.5">
+            <p className="hidden sm:block text-[11px] text-zinc-400 -mt-0.5">
               Gestão de Artes Marciais
             </p>
           </div>
@@ -42,53 +42,63 @@ export const Header: React.FC<HeaderProps> = ({
 
         {/* Totem nunca exibe menu de navegação em nenhum estado (login ou quiosque ativo) */}
         {activeTab === "totem" ? (
-          <div className="flex items-center gap-2">
-            <Badge variant="outline" className="border-red-800/80 bg-red-950/40 text-red-300 gap-1.5 px-3 py-1 text-xs">
-              <Lock className="w-3.5 h-3.5 text-red-500" />
-              {modoKiosk ? "Modo Quiosque Tatame • Navegação Bloqueada" : "Totem de Presença"}
+          <div className="flex min-w-0 items-center gap-2">
+            <Badge variant="outline" className="border-red-800/80 bg-red-950/40 text-red-300 gap-1.5 px-3 py-1 text-xs whitespace-nowrap">
+              <Lock className="w-3.5 h-3.5 shrink-0 text-red-500" />
+              {modoKiosk ? (
+                <>
+                  <span className="hidden sm:inline">Modo Quiosque Tatame • Navegação Bloqueada</span>
+                  <span className="sm:hidden">Quiosque</span>
+                </>
+              ) : (
+                <>
+                  <span className="hidden sm:inline">Totem de Presença</span>
+                  <span className="sm:hidden">Totem</span>
+                </>
+              )}
             </Badge>
           </div>
         ) : (
           /* Em produção, páginas públicas não têm menu de abas; abas só aparecem em DEV */
           import.meta.env.DEV && (
-            <div className="flex items-center gap-3">
-              <nav className="flex items-center gap-1 bg-zinc-900/80 p-1 rounded-xl border border-zinc-800">
+            <div className="flex min-w-0 items-center gap-3">
+              <nav aria-label="Páginas de demonstração" className="flex items-center gap-1 bg-zinc-900/80 p-1 rounded-xl border border-zinc-800">
                 <button
                   type="button"
                   onClick={() => onTabChange("matricula")}
-                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
+                  aria-label={"Matrícula Pública"}
+                  className={`flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
                     activeTab === "matricula"
                       ? "bg-red-600 text-white shadow-sm"
                       : "text-zinc-400 hover:text-white hover:bg-zinc-800"
                   }`}
                 >
-                  <UserPlus className="w-3.5 h-3.5" />
+                  <UserPlus className="w-4 h-4 sm:w-3.5 sm:h-3.5" />
                   <span className="hidden sm:inline">Matrícula Pública</span>
-                  <span className="sm:hidden">Matrícula</span>
                 </button>
 
                 <button
                   type="button"
                   onClick={() => onTabChange("totem")}
-                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all text-zinc-400 hover:text-white hover:bg-zinc-800"
+                  aria-label={"Totem QR da Turma"}
+                  className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-lg text-xs font-semibold transition-all text-zinc-400 hover:text-white hover:bg-zinc-800"
                 >
-                  <Monitor className="w-3.5 h-3.5" />
+                  <Monitor className="w-4 h-4 sm:w-3.5 sm:h-3.5" />
                   <span className="hidden sm:inline">Totem QR da Turma</span>
-                  <span className="sm:hidden">Totem QR</span>
                 </button>
 
                 <button
                   type="button"
                   onClick={() => onTabChange("checkin")}
-                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
+                  aria-label={"Check-in Aluno"}
+                  className={`flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
                     activeTab === "checkin"
                       ? "bg-red-600 text-white shadow-sm"
                       : "text-zinc-400 hover:text-white hover:bg-zinc-800"
                   }`}
                 >
-                  <QrCode className="w-3.5 h-3.5" />
+                  <QrCode className="w-4 h-4 sm:w-3.5 sm:h-3.5" />
                   <span className="hidden sm:inline">Check-in Aluno</span>
-                  <span className="sm:hidden">Check-in</span>
                 </button>
               </nav>
 
