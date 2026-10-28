@@ -1,17 +1,18 @@
 -- gerar_cobrancas_da_academia e cobrancas_geracao_log (issue #18): gera e
--- registra; a suspensa não gera; o erro de uma academia fica no registro e
+-- registra; a suspensa não gera nem registra; fuso inválido vira erro no
+-- registro; o erro de uma academia fica no registro e
 -- desfaz só o dela; rodar de novo não duplica; só dono e admin leem o
 -- registro, e só o da própria academia; só service_role executa.
 -- A procedure do lote (com commit) está em geracao_agendada_lote.test.sql e o
 -- agendamento (pg_cron) em agendamento_cron.test.sql.
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(22);
+select plan(24);
 
 -- ---------------------------------------------------------------------
 -- Fixtures: academias A e B (ativas), C (suspensa) e D (ativa, mas a gravação
 -- das cobranças dela falha), cada uma com uma matrícula que gera hoje a
--- primeira cobrança.
+-- primeira cobrança; E em trial com fuso inválido (academia_ativa falha).
 -- ---------------------------------------------------------------------
 insert into auth.users (id, email) values
   ('fe400000-0000-4000-8000-0000000000a1', 'dono-a@agendada.test'),
@@ -25,6 +26,8 @@ insert into public.academias (id, nome, slug, status) values
   ('fe400000-0000-4000-8000-00000000000b', 'Agendada B', 'agendada-b', 'ativa'),
   ('fe400000-0000-4000-8000-00000000000c', 'Agendada C', 'agendada-c', 'suspensa'),
   ('fe400000-0000-4000-8000-00000000000d', 'Agendada D', 'agendada-d', 'ativa');
+insert into public.academias (id, nome, slug, status, fuso) values
+  ('fe400000-0000-4000-8000-00000000000e', 'Agendada E', 'agendada-e', 'trial', 'Fuso/Invalido');
 
 insert into public.membros_academia (academia_id, user_id, papel) values
   ('fe400000-0000-4000-8000-00000000000a', 'fe400000-0000-4000-8000-0000000000a1', 'dono'),
@@ -88,7 +91,10 @@ select is(pg_temp.cobrancas('fe400000-0000-4000-8000-00000000000c'), 0, 'C (susp
 select is(pg_temp.cobrancas('fe400000-0000-4000-8000-00000000000d'), 0, 'D: a falha desfez só o que era dela');
 select is(pg_temp.log('fe400000-0000-4000-8000-00000000000a'), '1:-', 'A: registro com 1 gerada, sem erro');
 select is(pg_temp.log('fe400000-0000-4000-8000-00000000000d'), '0:falha simulada na academia D', 'D: registro com o erro');
-select is(pg_temp.log('fe400000-0000-4000-8000-00000000000c'), '0:-', 'C (suspensa): registro com zero (o lote nem a chama)');
+select is(pg_temp.log('fe400000-0000-4000-8000-00000000000c'), '', 'C (suspensa): sai sem gerar nem registrar');
+select is(public.gerar_cobrancas_da_academia('fe400000-0000-4000-8000-00000000000e'), 0, 'E (fuso inválido): devolve zero sem estourar');
+select ok((select erro is not null and geradas = 0 from public.cobrancas_geracao_log
+            where academia_id = 'fe400000-0000-4000-8000-00000000000e'), 'E: registro com o erro do fuso');
 
 select public.gerar_cobrancas_da_academia('fe400000-0000-4000-8000-00000000000a');
 select is(pg_temp.cobrancas('fe400000-0000-4000-8000-00000000000a'), 1, 'rodar de novo não duplica');

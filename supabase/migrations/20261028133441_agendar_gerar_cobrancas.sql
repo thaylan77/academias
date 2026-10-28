@@ -8,10 +8,10 @@
 -- 1. cobrancas_geracao_log: uma linha por academia e execução, com quantas
 --    cobranças saíram ou o erro. Dono e admin leem a da própria academia;
 --    ninguém grava pela API. Guarda 180 dias.
--- 2. gerar_cobrancas_da_academia(academia): gera as de uma academia com o erro
---    isolado e registra. Só service_role.
+-- 2. gerar_cobrancas_da_academia(academia): se a academia estiver ativa, gera
+--    as dela com o erro isolado e registra. Só service_role.
 -- 3. gerar_cobrancas_agendado(): procedure que o job chama; percorre as
---    academias ativas com commit depois de cada uma (não segura travas nem
+--    academias com commit depois de cada uma (não segura travas nem
 --    perde o que já fez se cair no meio) e limpa o registro antigo.
 -- 4. Job diário gerar-cobrancas-diario às 06:00 UTC (03:00 em Brasília e
 --    Fortaleza, 01:00 no Acre): o dia já virou em todos os fusos do Brasil.
@@ -58,8 +58,14 @@ declare
   v_qtd  integer;
   v_erro text;
 begin
-  -- Subtransação: o erro desfaz só o que esta academia gravou.
+  -- Subtransação: o erro desfaz só o que esta academia gravou. A conferência
+  -- da assinatura fica dentro dela porque academia_ativa calcula o dia no fuso
+  -- da academia (trial) e falha com fuso inválido: o erro de uma academia não
+  -- pode parar o lote das outras.
   begin
+    if not public.academia_ativa(p_academia_id) then
+      return 0;
+    end if;
     v_qtd := public.gerar_cobrancas(p_academia_id, null);
     insert into public.cobrancas_geracao_log (academia_id, geradas) values (p_academia_id, v_qtd);
     return v_qtd;
@@ -89,7 +95,7 @@ declare
   v_academia uuid;
 begin
   for v_academia in
-    select a.id from public.academias a where public.academia_ativa(a.id) order by a.id
+    select a.id from public.academias a order by a.id
   loop
     perform public.gerar_cobrancas_da_academia(v_academia);
     commit;
