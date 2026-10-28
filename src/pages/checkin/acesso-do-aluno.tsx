@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from "react";
 import { supabase } from "../../lib/supabase";
 import {
   emailDaSessao,
+  enderecoDeVolta,
   enviarLinkDeAcesso,
   normalizarEmail,
   observarLogin,
@@ -36,6 +37,7 @@ const Portao: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [estado, setEstado] = useState<Estado>({ fase: "carregando" });
   // O último e-mail já ligado: o aviso de login de outra aba não liga de novo.
   const ligado = useRef<string | null>(null);
+  const religar = useRef<(email: string) => void>(() => {});
 
   useEffect(() => {
     let vale = true;
@@ -51,11 +53,20 @@ const Portao: React.FC<{ children: React.ReactNode }> = ({ children }) => {
       setEstado({ fase: "ligando", email });
       const res = await vincularCadastro();
       if (!vale || ligado.current !== email) return;
-      setEstado(res.sucesso ? { fase: "pronto", email } : { fase: "erro_vinculo", email, mensagem: res.mensagem });
+      if (res.sucesso) {
+        setEstado({ fase: "pronto", email });
+      } else {
+        // Falhou: o próximo aviso do mesmo login (ou o botão) tenta de novo.
+        ligado.current = null;
+        setEstado({ fase: "erro_vinculo", email, mensagem: res.mensagem });
+      }
     };
+    religar.current = (email) => void ligar(email);
     emailDaSessao()
       .then(ligar)
-      .catch(() => vale && setEstado({ fase: "sem_login" }));
+      // Sem a sessão inicial, só cai para o pedido de link se o aviso de login
+      // ainda não trouxe ninguém.
+      .catch(() => vale && ligado.current === null && setEstado((e) => (e.fase === "carregando" ? { fase: "sem_login" } : e)));
     const parar = observarLogin((email) => void ligar(email));
     return () => {
       vale = false;
@@ -82,6 +93,9 @@ const Portao: React.FC<{ children: React.ReactNode }> = ({ children }) => {
           <Alert variant="destructive" role="alert">
             <AlertDescription>{estado.mensagem}</AlertDescription>
           </Alert>
+          <Button size="sm" variant="outline" className="mt-3" onClick={() => religar.current(estado.email)}>
+            Tentar de novo
+          </Button>
         </div>
       )}
       {estado.fase === "pronto" && children}
@@ -92,10 +106,14 @@ const Portao: React.FC<{ children: React.ReactNode }> = ({ children }) => {
 const BotaoSair: React.FC = () => {
   const [falhou, setFalhou] = useState(false);
   const [saindo, setSaindo] = useState(false);
+  const emAndamento = useRef(false);
   const sair = async () => {
+    if (emAndamento.current) return;
+    emAndamento.current = true;
     setSaindo(true);
     setFalhou(false);
     const ok = await sairDoPortal();
+    emAndamento.current = false;
     setSaindo(false);
     // Saiu: o aviso de login muda o portão para o pedido de link.
     if (!ok) setFalhou(true);
@@ -115,6 +133,14 @@ const PedirLink: React.FC = () => {
   const [enviando, setEnviando] = useState(false);
   // Trava síncrona contra clique duplo ou Enter repetido.
   const emAndamento = useRef(false);
+  const campo = useRef<HTMLInputElement>(null);
+  const voltarAoCampo = useRef(false);
+  useEffect(() => {
+    if (!enviadoPara && voltarAoCampo.current) {
+      voltarAoCampo.current = false;
+      campo.current?.focus();
+    }
+  }, [enviadoPara]);
 
   const enviar = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -124,7 +150,7 @@ const PedirLink: React.FC = () => {
     setErro(null);
     emAndamento.current = true;
     setEnviando(true);
-    const res = await enviarLinkDeAcesso(valido, window.location.href);
+    const res = await enviarLinkDeAcesso(valido, enderecoDeVolta(window.location.href));
     emAndamento.current = false;
     setEnviando(false);
     if (res.sucesso) setEnviadoPara(valido);
@@ -143,20 +169,23 @@ const PedirLink: React.FC = () => {
             </CardDescription>
           </div>
           {enviadoPara ? (
-            <Alert variant="success" role="status">
-              <AlertDescription>
-                Link enviado para <strong>{enviadoPara}</strong>. Abra o e-mail neste aparelho. Se o QR da aula tiver mudado
-                até lá, é só ler o novo.
-                <button type="button" className="mt-2 block underline" onClick={() => setEnviadoPara(null)}>
-                  Usar outro e-mail
-                </button>
-              </AlertDescription>
-            </Alert>
+            <div className="space-y-2">
+              <Alert variant="success" role="status">
+                <AlertDescription>
+                  Link enviado para <strong>{enviadoPara}</strong>. Abra o e-mail neste aparelho. Se o QR da aula tiver
+                  mudado até lá, é só ler o novo.
+                </AlertDescription>
+              </Alert>
+              <button type="button" className="text-xs text-zinc-300 underline"
+                onClick={() => { voltarAoCampo.current = true; setEnviadoPara(null); }}>
+                Usar outro e-mail
+              </button>
+            </div>
           ) : (
             <form onSubmit={enviar} noValidate aria-label="Entrar" className="space-y-3">
               <div className="space-y-1.5">
                 <Label htmlFor="portal-email">E-mail</Label>
-                <Input id="portal-email" type="email" autoComplete="email" inputMode="email" value={email}
+                <Input ref={campo} id="portal-email" type="email" autoComplete="email" inputMode="email" value={email}
                   onChange={(e) => setEmail(e.target.value)} aria-invalid={erro ? true : undefined}
                   aria-describedby={erro ? "portal-email-erro" : undefined} />
               </div>

@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach, vi } from "vitest";
-import { normalizarEmail } from "../lib/portal";
+import { enderecoDeVolta, normalizarEmail } from "../lib/portal";
 
 vi.mock("@supabase/supabase-js", () => ({ createClient: vi.fn() }));
 
@@ -33,6 +33,12 @@ describe("Portal do aluno: acesso", () => {
     expect(normalizarEmail("  Maria@Exemplo.COM ")).toBe("maria@exemplo.com");
     expect(normalizarEmail("maria@")).toBeNull();
     expect(normalizarEmail("")).toBeNull();
+  });
+
+  it("endereço de volta: mantém a turma e o token, tira fragmento e erros de um link anterior", () => {
+    expect(enderecoDeVolta("https://app/acad/checkin?turma=t1&t=abc&error=access_denied&error_code=otp_expired#error=x"))
+      .toBe("https://app/acad/checkin?turma=t1&t=abc");
+    expect(enderecoDeVolta("https://app/acad/checkin?turma=t1&code=123")).toBe("https://app/acad/checkin?turma=t1");
   });
 
   it("link: volta para a página do QR e cria o login se ainda não existe", async () => {

@@ -18,6 +18,20 @@ export function normalizarEmail(texto: string): string | null {
   return EMAIL_VALIDO.test(email) ? email : null;
 }
 
+// Parâmetros que o Auth põe na URL de volta (erro de link vencido, código).
+const PARAMETROS_DO_AUTH = ["error", "error_code", "error_description", "code"];
+
+/**
+ * Endereço de volta do link: a página do check-in com a turma e o token do QR,
+ * sem o que um link anterior deixou na URL (fragmento e erros do Auth).
+ */
+export function enderecoDeVolta(atual: string): string {
+  const url = new URL(atual);
+  url.hash = "";
+  for (const p of PARAMETROS_DO_AUTH) url.searchParams.delete(p);
+  return url.toString();
+}
+
 /** E-mail do login atual, ou null sem sessão. */
 export async function emailDaSessao(): Promise<string | null> {
   if (!supabase) return null;

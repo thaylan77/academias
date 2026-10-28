@@ -7,6 +7,7 @@ vi.mock("../lib/portal", async (original) => {
   const real = await original<typeof import("../lib/portal")>();
   return {
     normalizarEmail: real.normalizarEmail,
+    enderecoDeVolta: real.enderecoDeVolta,
     emailDaSessao: vi.fn(),
     observarLogin: vi.fn(),
     enviarLinkDeAcesso: vi.fn(),
@@ -104,6 +105,65 @@ describe("Portal do aluno: portão do check-in", () => {
     montar();
     expect(await screen.findByRole("alert")).toHaveTextContent("Confirme o e-mail");
     expect(screen.queryByText("conteúdo do check-in")).not.toBeInTheDocument();
+  });
+
+  it("vínculo recusado: 'Tentar de novo' liga de novo e mostra o check-in", async () => {
+    m.emailDaSessao.mockResolvedValue("ana@x.test");
+    m.vincularCadastro
+      .mockResolvedValueOnce({ sucesso: false, mensagem: "Não foi possível ligar seu cadastro agora." })
+      .mockResolvedValueOnce({ sucesso: true, ligados: 1 });
+    montar();
+    fireEvent.click(await screen.findByRole("button", { name: "Tentar de novo" }));
+    expect(await screen.findByText("conteúdo do check-in")).toBeInTheDocument();
+    expect(m.vincularCadastro).toHaveBeenCalledTimes(2);
+  });
+
+  it("troca de conta: o login novo é ligado e aparece", async () => {
+    m.emailDaSessao.mockResolvedValue("ana@x.test");
+    montar();
+    await screen.findByText("conteúdo do check-in");
+    await act(async () => avisarLogin("pai@x.test"));
+    expect(await screen.findByText("pai@x.test")).toBeInTheDocument();
+    expect(m.vincularCadastro).toHaveBeenCalledTimes(2);
+  });
+
+  it("sessão inicial falha depois que o aviso de login já trouxe alguém: não volta ao pedido de link", async () => {
+    let falhar: (e: unknown) => void = () => {};
+    m.emailDaSessao.mockReturnValue(new Promise((_, rej) => (falhar = rej)));
+    montar();
+    await act(async () => avisarLogin("ana@x.test"));
+    await act(async () => falhar(new Error("rede")));
+    expect(await screen.findByText("conteúdo do check-in")).toBeInTheDocument();
+    expect(screen.queryByRole("form", { name: "Entrar" })).not.toBeInTheDocument();
+  });
+
+  it("sessão inicial falha sem ninguém: pede o link", async () => {
+    m.emailDaSessao.mockRejectedValue(new Error("rede"));
+    montar();
+    expect(await screen.findByRole("form", { name: "Entrar" })).toBeInTheDocument();
+  });
+
+  it("'Usar outro e-mail' volta ao campo, com o foco nele", async () => {
+    m.emailDaSessao.mockResolvedValue(null);
+    m.enviarLinkDeAcesso.mockResolvedValue({ sucesso: true });
+    montar();
+    fireEvent.change(await screen.findByLabelText("E-mail"), { target: { value: "ana@x.test" } });
+    fireEvent.submit(screen.getByRole("form", { name: "Entrar" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Usar outro e-mail" }));
+    expect(await screen.findByLabelText("E-mail")).toHaveFocus();
+  });
+
+  it("sair: clique duplo sai uma vez só", async () => {
+    m.emailDaSessao.mockResolvedValue("ana@x.test");
+    let soltar: (v: boolean) => void = () => {};
+    m.sairDoPortal.mockReturnValue(new Promise((res) => (soltar = res)));
+    montar();
+    await screen.findByText("conteúdo do check-in");
+    const botao = screen.getByRole("button", { name: "Sair" });
+    fireEvent.click(botao);
+    fireEvent.click(botao);
+    await act(async () => soltar(true));
+    expect(m.sairDoPortal).toHaveBeenCalledTimes(1);
   });
 
   it("sair: volta ao pedido de link quando o login sai; falha avisa", async () => {
