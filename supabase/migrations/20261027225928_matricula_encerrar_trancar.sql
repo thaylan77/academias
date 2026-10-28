@@ -16,6 +16,9 @@
 -- Mesma permissão das políticas de matrículas: dono, admin e recepção, com a
 -- assinatura em dia (pode_gerir). Nenhuma política muda. As três travam o
 -- aluno antes da matrícula, na ordem de anonimizar_aluno e aprovar_matricula.
+-- A trava do aluno é "for no key update": conflita com a de anonimizar_aluno
+-- (for update), mas não com a conferência da chave estrangeira de cobrancas
+-- -> alunos que gerar_cobrancas faz ao gravar (ver o fim do arquivo).
 
 create or replace function public.encerrar_matricula(p_matricula_id uuid, p_data_fim date)
 returns integer
@@ -37,7 +40,7 @@ begin
       using hint = 'sem_permissao';
   end if;
 
-  perform 1 from public.alunos where academia_id = v_academia and id = v_aluno for update;
+  perform 1 from public.alunos where academia_id = v_academia and id = v_aluno for no key update;
   select * into v_mat from public.matriculas where id = p_matricula_id for update;
   -- Apagada entre a primeira leitura e a trava: a mesma resposta de inexistente.
   if not found then
@@ -85,7 +88,7 @@ begin
       using hint = 'sem_permissao';
   end if;
 
-  perform 1 from public.alunos where academia_id = v_academia and id = v_aluno for update;
+  perform 1 from public.alunos where academia_id = v_academia and id = v_aluno for no key update;
   select * into v_mat from public.matriculas where id = p_matricula_id for update;
   -- Apagada entre a primeira leitura e a trava: a mesma resposta de inexistente.
   if not found then
@@ -127,7 +130,7 @@ begin
       using hint = 'sem_permissao';
   end if;
 
-  perform 1 from public.alunos where academia_id = v_academia and id = v_aluno for update;
+  perform 1 from public.alunos where academia_id = v_academia and id = v_aluno for no key update;
   select * into v_mat from public.matriculas where id = p_matricula_id for update;
   -- Apagada entre a primeira leitura e a trava: a mesma resposta de inexistente.
   if not found then
@@ -156,3 +159,80 @@ revoke execute on function public.encerrar_matricula(uuid, date), public.trancar
   public.destrancar_matricula(uuid) from public, anon;
 grant execute on function public.encerrar_matricula(uuid, date), public.trancar_matricula(uuid),
   public.destrancar_matricula(uuid) to authenticated;
+
+-- gerar_cobrancas (revisão do Codex no PR #64; aprovado pelo dono do projeto
+-- na sessão): a mesma regra de 20261005120000_correcoes_e_financeiro.sql,
+-- agora com a matrícula travada (for share). Sem a trava, uma geração
+-- concorrente com trancar_matricula ou encerrar_matricula lia a matrícula
+-- ainda ativa, esperava o commit na chave estrangeira e gravava a cobrança
+-- que não devia existir, sem a tela saber. Permissões continuam as mesmas
+-- (create or replace as preserva).
+create or replace function public.gerar_cobrancas(
+  p_academia_id  uuid default null,
+  p_matricula_id uuid default null
+)
+returns integer
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_qtd integer;
+begin
+  insert into public.cobrancas
+    (academia_id, aluno_id, matricula_id, competencia, descricao, valor, vencimento)
+  select
+    m.academia_id, m.aluno_id, m.id, g.competencia,
+    p.nome || ' — ' || to_char(g.competencia, 'MM/YYYY'),
+    coalesce(m.valor, p.valor),
+    x.vencimento
+  from public.matriculas m
+  join public.academias a on a.id = m.academia_id
+  join public.planos p on p.academia_id = m.academia_id and p.id = m.plano_id
+  join public.alunos al on al.academia_id = m.academia_id and al.id = m.aluno_id
+  cross join lateral (
+    select
+      (now() at time zone a.fuso)::date as hoje,
+      case p.periodicidade
+        when 'mensal' then 1 when 'trimestral' then 3 when 'semestral' then 6 else 12
+      end as intervalo,
+      greatest(m.data_inicio, (m.created_at at time zone a.fuso)::date) as base
+  ) b
+  cross join lateral (
+    select s::date as competencia
+    from generate_series(
+      date_trunc('month', b.hoje::timestamp),
+      date_trunc('month', b.hoje::timestamp) + interval '1 month',
+      interval '1 month') s
+  ) g
+  cross join lateral (
+    select case
+             when g.competencia <> m.cobrar_a_partir
+               then g.competencia + (m.dia_vencimento - 1)
+             when m.cobrar_a_partir = date_trunc('month', b.base::timestamp)::date
+               then b.base
+             else greatest(g.competencia + (m.dia_vencimento - 1), b.base)
+           end as vencimento
+  ) x
+  where m.status = 'ativa'
+    and al.status = 'ativo'
+    and m.dia_vencimento is not null
+    and coalesce(m.valor, p.valor) > 0
+    and public.academia_ativa(a.id)
+    and (p_academia_id is null or m.academia_id = p_academia_id)
+    and (p_matricula_id is null or m.id = p_matricula_id)
+    and g.competencia >= m.cobrar_a_partir
+    and ((extract(year from g.competencia) - extract(year from m.cobrar_a_partir)) * 12
+         + extract(month from g.competencia) - extract(month from m.cobrar_a_partir))::int % b.intervalo = 0
+    and b.hoje >= x.vencimento - a.dias_antecedencia_cobranca
+    and (m.data_fim is null or x.vencimento <= m.data_fim)
+  -- Trava a matrícula: um trancamento, encerramento ou cancelamento em
+  -- andamento faz a geração esperar e reavaliar a matrícula já atualizada
+  -- (status, data_fim) antes de gravar, em vez de cobrar pela versão antiga.
+  for share of m
+  on conflict (matricula_id, competencia) do nothing;
+
+  get diagnostics v_qtd = row_count;
+  return v_qtd;
+end
+$$;
