@@ -148,6 +148,7 @@ Plano, status e slug da academia só mudam via `service_role` (billing do SaaS).
 | `baixar_cobranca_manual(cobranca_id, ...)` | secretaria   | baixa de cobrança não emitida no gateway (`baixa_por`, `baixa_em`) |
 | `cancelar_cobranca(cobranca_id)`       | secretaria   | cancela cobrança não emitida; cobrança nunca é apagada     |
 | `gerar_cobrancas_matricula(matricula_id)` | secretaria | gera na hora as cobranças recorrentes da matrícula         |
+| `gerar_cobrancas_agendado()` (procedure) | job pg_cron (service_role) | todo dia às 06:00 UTC gera as cobranças das academias ativas, uma por vez (`gerar_cobrancas_da_academia`, com commit e erro isolado); registra em `cobrancas_geracao_log` (dono e admin leem; 180 dias) |
 | `criar_matricula(academia_id, dados)`  | secretaria   | matrícula `ativa` e turmas numa transação, `cobrar_a_partir` opcional; com plano, exige dia de vencimento; não gera cobrança |
 | `aprovar_matricula(matricula_id, dia_vencimento?)` | secretaria | aprova matrícula `pendente` (da matrícula online), com início e cobrança a partir da aprovação; ativa o aluno |
 | `encerrar_matricula(matricula_id, data_fim)` | secretaria | define ou corrige o fim (não antes do início; pode ser no passado); devolve quantas pendentes vencem depois dele, sem cancelar |
@@ -296,8 +297,8 @@ Conta como **código que roda**:
 - Matrícula online atrás de Edge Function com captcha (Cloudflare Turnstile);
   depois revogar `matricula_online` de `anon`.
 - Convite de membros da equipe por e-mail (Edge Function com auth admin).
-- Financeiro: Edge Functions do gateway e do webhook, agendamento de
-  `gerar_cobrancas` no pg_cron (spec em `docs/specs/financeiro-gateway-webhook.md`;
+- Financeiro: Edge Functions do gateway e do webhook e emissão automática
+  das cobranças geradas pelo job diário (spec em `docs/specs/financeiro-gateway-webhook.md`;
   funções `*_interna` e `gateway_*` são só para `service_role`).
 - Lembretes no WhatsApp: vencimento, aluno sumido há X dias, apto a graduar.
 - Storage de fotos dos alunos: bucket privado, caminho `{academia_id}/{aluno_id}.jpg`.

@@ -111,6 +111,25 @@ isOneToOne: false
       referencedColumns: ["academia_id","id"]
     }
                   ]
+                },"cobrancas_geracao_log": {
+                  Row: {
+                    "academia_id": string,"erro": string | null,"executado_em": string,"geradas": number,"id": string
+                  }
+                  Insert: {
+                    "academia_id": string,"erro"?: string | null,"executado_em"?: string,"geradas"?: number,"id"?: string
+                  }
+                  Update: {
+                    "academia_id"?: string,"erro"?: string | null,"executado_em"?: string,"geradas"?: number,"id"?: string
+                  }
+                  Relationships: [
+                    {
+      foreignKeyName: "cobrancas_geracao_log_academia_id_fkey"
+      columns: ["academia_id"]
+isOneToOne: false
+      referencedRelation: "academias"
+      referencedColumns: ["id"]
+    }
+                  ]
                 },"faixas": {
                   Row: {
                     "academia_id": string,"cor": string | null,"created_at": string,"id": string,"max_graus": number,"min_aulas": number,"min_meses": number,"modalidade_id": string,"nome": string,"ordem": number
@@ -546,6 +565,9 @@ isOneToOne: false
                            },
 "gerar_cobrancas":
 { Args: { "p_academia_id"?: string,"p_matricula_id"?: string }; Returns: number
+                           },
+"gerar_cobrancas_da_academia":
+{ Args: { "p_academia_id": string }; Returns: number
                            },
 "gerar_cobrancas_matricula":
 { Args: { "p_matricula_id": string }; Returns: number
