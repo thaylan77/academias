@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { CheckinResultado, AlunoCheckinInfo } from "../../types/app";
 import { realizarCheckin } from "../../lib/supabase";
+import { AcessoDoAluno } from "./acesso-do-aluno";
 import { QRScanner } from "../../components/qr/qr-scanner";
 import { Card, CardContent, CardTitle, CardDescription } from "../../components/ui/card";
 import { Button } from "../../components/ui/button";
@@ -24,7 +25,7 @@ interface CheckinPageProps {
   initialToken?: string | null;
 }
 
-export const CheckinPage: React.FC<CheckinPageProps> = ({
+const CheckinConteudo: React.FC<CheckinPageProps> = ({
   slug,
   initialTurmaId,
   initialToken,
@@ -433,3 +434,10 @@ export const CheckinPage: React.FC<CheckinPageProps> = ({
     </div>
   );
 };
+
+/** Check-in do aluno: só com login (link mágico); ver AcessoDoAluno. */
+export const CheckinPage: React.FC<CheckinPageProps> = (props) => (
+  <AcessoDoAluno>
+    <CheckinConteudo {...props} />
+  </AcessoDoAluno>
+);
