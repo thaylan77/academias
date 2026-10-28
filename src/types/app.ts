@@ -46,6 +46,7 @@ export type MatriculaOnlinePayload = {
   responsavel_nome?: string;
   responsavel_cpf?: string;
   responsavel_telefone?: string;
+  responsavel_email?: string;
   contato_emergencia?: string;
   observacoes_medicas?: string;
   aceite_termo: boolean;

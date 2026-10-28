@@ -45,6 +45,8 @@ describe("Tela de Matrícula Online", () => {
       expect(screen.getByText(/Dados do Responsável Legal/i)).toBeInTheDocument();
       expect(screen.getByLabelText(/Nome Completo do Responsável/i)).toBeInTheDocument();
       expect(screen.getByLabelText(/CPF do Responsável/i)).toBeInTheDocument();
+      // O e-mail do responsável é o login dele no portal do aluno.
+      expect(screen.getByLabelText(/E-mail do Responsável/i)).toHaveAttribute("type", "email");
     });
   });
 });

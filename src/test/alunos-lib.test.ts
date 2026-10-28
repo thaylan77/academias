@@ -157,7 +157,7 @@ const filtros = (chamadas: Chamada[], tabela: string) =>
 
 const LINHA_ALUNO = {
   id: ALUNO, nome: "Ana", cpf: CPF_OK, data_nascimento: null, telefone: null, email: null,
-  responsavel_nome: null, responsavel_cpf: null, responsavel_telefone: null,
+  responsavel_nome: null, responsavel_cpf: null, responsavel_telefone: null, responsavel_email: null,
   contato_emergencia: null, observacoes_medicas: null, status: "ativo", anonimizado_em: null,
 };
 
@@ -311,7 +311,7 @@ describe("Cobertura pedida na primeira revisão", () => {
     const f = {
       ...formularioVazio(), nome: "Pedro", data_nascimento: "2015-05-01",
       responsavel_nome: " Maria ", responsavel_cpf: "111.444.777-35", responsavel_telefone: "(55) 99999-1234",
-      contato_emergencia: "   ", observacoes_medicas: "",
+      responsavel_email: " Maria@Exemplo.COM ", contato_emergencia: "   ", observacoes_medicas: "",
     };
     expect(validarAluno(f, "2026-10-18")).toMatchObject({
       ok: true,
@@ -319,12 +319,14 @@ describe("Cobertura pedida na primeira revisão", () => {
         responsavel_nome: "Maria", responsavel_cpf: CPF_RESP,
         // DDD 55 (RS) sem o código do país: vira 55 + 55 + número.
         responsavel_telefone: "5555999991234",
+        // Login do responsável no portal: sem espaços e em minúsculas.
+        responsavel_email: "maria@exemplo.com",
         contato_emergencia: null, observacoes_medicas: null,
       },
     });
-    const ruim = validarAluno({ ...f, responsavel_cpf: "11144477734", responsavel_telefone: "1234" }, "2026-10-18");
+    const ruim = validarAluno({ ...f, responsavel_cpf: "11144477734", responsavel_telefone: "1234", responsavel_email: "maria@" }, "2026-10-18");
     expect(ruim.ok).toBe(false);
-    if (!ruim.ok) expect(Object.keys(ruim.erros).sort()).toEqual(["responsavel_cpf", "responsavel_telefone"]);
+    if (!ruim.ok) expect(Object.keys(ruim.erros).sort()).toEqual(["responsavel_cpf", "responsavel_email", "responsavel_telefone"]);
   });
 
   it("permissões: ninguém cria ou edita com a academia suspensa; dono e admin veem o financeiro", () => {
@@ -422,7 +424,7 @@ describe("Cobertura pedida na primeira revisão", () => {
     expect(cliente.chamadas.some((c) => c.metodo === "insert")).toBe(false);
     expect(Object.keys(update?.args[0] as object).sort()).toEqual([
       "contato_emergencia", "cpf", "data_nascimento", "email", "nome", "observacoes_medicas",
-      "responsavel_cpf", "responsavel_nome", "responsavel_telefone", "status", "telefone",
+      "responsavel_cpf", "responsavel_email", "responsavel_nome", "responsavel_telefone", "status", "telefone",
     ]);
   });
 
