@@ -101,6 +101,7 @@ O código vai no `hint` do erro (`raise exception '<mensagem em português>' usi
 | `cobranca_emitida` | `baixar_cobranca_manual`, `cancelar_cobranca` | a cobrança foi emitida no gateway: baixa e cancelamento acontecem por lá |
 | `cobranca_nao_pendente` | `baixar_cobranca_manual`, `cancelar_cobranca` (e as `*_interna`) | baixa de cobrança paga ou cancelada; cancelamento de cobrança paga. Cancelar uma já cancelada, ou repetir a mesma baixa, não é erro (volta sem mudar nada) |
 | `cobranca_paga_gateway` | `baixar_cobranca_interna` | a cobrança já foi paga pelo gateway |
+| `email_nao_confirmado` | `vincular_meu_cadastro_aluno` | o login não tem e-mail confirmado (o link mágico confirma) |
 | `horario_invalido` | `salvar_turma` | dia fora de domingo a sábado, hora fora de `HH:MM` ou fim não depois do início |
 | `horario_sobreposto` | `salvar_turma` | dois horários da turma se sobrepõem no mesmo dia |
 | `turma_nao_encontrada` | `salvar_turma` | a turma editada não é da academia informada |

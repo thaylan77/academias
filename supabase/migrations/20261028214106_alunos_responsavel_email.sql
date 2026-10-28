@@ -9,7 +9,11 @@
 --      ativos cujo email OU responsavel_email é esse e-mail. Cada cadastro tem
 --      um login só (alunos.user_id): quem vincular primeiro fica com ele, e o
 --      vínculo existente nunca é trocado.
---   3. anonimizar_aluno e aluno_sem_dados_pessoais passam a limpar e conferir
+--   3. Trocar o e-mail desfaz o vínculo: se a equipe muda email ou
+--      responsavel_email e nenhum dos dois é mais o e-mail do login ligado, o
+--      cadastro sai desse login (e o login perde o papel aluno na academia se
+--      não tiver outro aluno lá). O e-mail novo vincula no próximo acesso.
+--   4. anonimizar_aluno e aluno_sem_dados_pessoais passam a limpar e conferir
 --      responsavel_email (LGPD).
 
 -- ---------------------------------------------------------------------
@@ -187,12 +191,13 @@ begin
   where u.id = auth.uid() and u.email_confirmed_at is not null;
 
   if v_email is null then
-    raise exception 'Confirme seu e-mail antes de acessar o portal do aluno';
+    raise exception 'Confirme seu e-mail antes de acessar o portal do aluno'
+      using hint = 'email_nao_confirmado';
   end if;
 
   update public.alunos a
      set user_id = auth.uid()
-   where (lower(a.email) = v_email or lower(a.responsavel_email) = v_email)
+   where (lower(trim(a.email)) = v_email or lower(trim(a.responsavel_email)) = v_email)
      and a.user_id is null
      and a.status = 'ativo';
   get diagnostics v_qtd = row_count;
@@ -208,7 +213,74 @@ end
 $$;
 
 -- ---------------------------------------------------------------------
--- 3. Anonimização (LGPD)
+-- 3. Trocar o e-mail desfaz o vínculo
+-- ---------------------------------------------------------------------
+-- Definer: lê auth.users e mexe em user_id, que a equipe não alcança. Só olha
+-- OLD e NEW, nada vindo de quem chama.
+create or replace function public.alunos_desfaz_vinculo_ao_trocar_email()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_email_login text;
+begin
+  if new.user_id is null
+     or (new.email is not distinct from old.email
+         and new.responsavel_email is not distinct from old.responsavel_email) then
+    return new;
+  end if;
+
+  select lower(u.email) into v_email_login from auth.users u where u.id = new.user_id;
+  if v_email_login is null
+     or v_email_login is distinct from lower(trim(new.email))
+        and v_email_login is distinct from lower(trim(new.responsavel_email)) then
+    new.user_id := null;
+  end if;
+  return new;
+end
+$$;
+
+create trigger alunos_desfaz_vinculo_ao_trocar_email
+  before update of email, responsavel_email on public.alunos
+  for each row execute function public.alunos_desfaz_vinculo_ao_trocar_email();
+
+-- O login que perdeu o último aluno da academia perde o papel aluno nela.
+create or replace function public.alunos_tira_papel_sem_aluno()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  if old.user_id is not null and new.user_id is distinct from old.user_id then
+    delete from public.membros_academia m
+     where m.academia_id = old.academia_id
+       and m.user_id = old.user_id
+       and m.papel = 'aluno'
+       and not exists (
+         select 1 from public.alunos a
+         where a.academia_id = old.academia_id and a.user_id = old.user_id
+       );
+  end if;
+  return null;
+end
+$$;
+
+-- Sem lista de colunas: "update of user_id" não dispara quando quem zera o
+-- user_id é o gatilho acima (ele não está no SET de quem gravou).
+create trigger alunos_tira_papel_sem_aluno
+  after update on public.alunos
+  for each row execute function public.alunos_tira_papel_sem_aluno();
+
+revoke execute on function
+  public.alunos_desfaz_vinculo_ao_trocar_email(),
+  public.alunos_tira_papel_sem_aluno()
+from public, anon, authenticated;
+
+-- ---------------------------------------------------------------------
+-- 4. Anonimização (LGPD)
 -- ---------------------------------------------------------------------
 create or replace function public.aluno_sem_dados_pessoais(p_aluno public.alunos)
 returns boolean

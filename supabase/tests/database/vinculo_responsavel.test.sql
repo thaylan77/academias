@@ -5,7 +5,7 @@
 -- anonimização o apaga. Academias A e B.
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(19);
+select plan(23);
 
 create function public.__como(p_user text)
 returns void
@@ -17,6 +17,21 @@ begin
 end
 $$;
 grant execute on function public.__como(text) to authenticated;
+
+create function public.__hint_de(p_sql text)
+returns text
+language plpgsql
+as $$
+declare v text;
+begin
+  execute p_sql;
+  return 'sem erro';
+exception when others then
+  get stacked diagnostics v = pg_exception_hint;
+  return coalesce(nullif(v, ''), 'sem hint: ' || sqlerrm);
+end
+$$;
+grant execute on function public.__hint_de(text) to authenticated;
 
 insert into auth.users (id, email, email_confirmed_at) values
   ('fe800000-0000-4000-8000-0000000000e1', 'ana@vinculo.test',     now()),
@@ -74,7 +89,8 @@ select is((select responsavel_email from public.alunos where id = 'fe800000-0000
 select is(public.vincular_meu_cadastro_aluno(), 0, 'rodar de novo não liga nada a mais');
 
 select public.__como('fe800000-0000-4000-8000-0000000000e3');
-select throws_ok($$select public.vincular_meu_cadastro_aluno()$$, 'P0001', null, 'e-mail não confirmado é recusado');
+select is(public.__hint_de($$select public.vincular_meu_cadastro_aluno()$$), 'email_nao_confirmado',
+          'e-mail não confirmado é recusado, com o código no hint');
 reset role;
 
 select is(pg_temp.dono_do_login('fe800000-0000-4000-8000-0000000001a1'), 'fe800000-0000-4000-8000-0000000000e1', 'a1 ficou com a Ana');
@@ -115,6 +131,26 @@ set local role authenticated;
 select public.__como('fe800000-0000-4000-8000-0000000000a1');
 select throws_ok($$update public.alunos set responsavel_email = 'volta@vinculo.test' where id = 'fe800000-0000-4000-8000-0000000001a2'$$,
                  'P0001', null, 'e o cadastro anonimizado não recebe o e-mail de volta');
+
+-- ---------------------------------------------------------------------
+-- Trocar o e-mail desfaz o vínculo
+-- ---------------------------------------------------------------------
+-- Mesmo e-mail com outra caixa e espaço: o vínculo fica.
+update public.alunos set email = ' ANA@vinculo.test ' where id = 'fe800000-0000-4000-8000-0000000001a1';
+-- O responsável da a3 mudou (o e-mail próprio dela também não é o do pai).
+update public.alunos set responsavel_email = 'novo@vinculo.test' where id = 'fe800000-0000-4000-8000-0000000001a3';
+reset role;
+select is(pg_temp.dono_do_login('fe800000-0000-4000-8000-0000000001a1'), 'fe800000-0000-4000-8000-0000000000e1',
+          'trocar só a caixa ou espaços do e-mail mantém o vínculo');
+select is(pg_temp.dono_do_login('fe800000-0000-4000-8000-0000000001a3'), '-',
+          'trocar o e-mail do responsável tira o cadastro do login antigo');
+select is((select string_agg(academia_id::text, ',' order by academia_id) from public.membros_academia
+            where user_id = 'fe800000-0000-4000-8000-0000000000e2' and papel = 'aluno'),
+          'fe800000-0000-4000-8000-00000000000b',
+          'sem aluno na academia A, o pai perde o papel lá e fica na B');
+set local role authenticated;
+select public.__como('fe800000-0000-4000-8000-0000000000e2');
+select is(public.sou_o_aluno('fe800000-0000-4000-8000-0000000001a3'), false, 'e não alcança mais o cadastro');
 reset role;
 
 select * from finish();

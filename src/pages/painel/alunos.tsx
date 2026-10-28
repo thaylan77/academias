@@ -319,7 +319,7 @@ const FichaAluno: React.FC<{ alunoId: string }> = ({ alunoId }) => {
             <Campo rotulo="Contato de emergência" valor={aluno.contato_emergencia ?? ""} />
             <Campo rotulo="Observações médicas" valor={aluno.observacoes_medicas ?? ""} />
           </Bloco>
-          {(aluno.responsavel_nome || (idade !== null && idade < 18)) && (
+          {(aluno.responsavel_nome || aluno.responsavel_email || (idade !== null && idade < 18)) && (
             <Bloco titulo="Responsável">
               <Campo rotulo="Nome" valor={aluno.responsavel_nome ?? ""} />
               <Campo rotulo="CPF" valor={formatarCpf(aluno.responsavel_cpf)} />
