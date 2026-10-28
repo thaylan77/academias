@@ -25,6 +25,7 @@ import { Shield, LogOut, Building2 } from "lucide-react";
 import { AlunosSecao } from "./alunos";
 import { TurmasSecao } from "./turmas";
 import { CobrancasSecao } from "./cobrancas";
+import { MatriculasSecao } from "./matriculas";
 import { GraduacoesSecao } from "./graduacoes";
 import { PainelContexto, PainelContextoValor } from "./contexto";
 
@@ -341,6 +342,8 @@ export const PainelApp: React.FC = () => {
               <AlunosSecao key={academia.academia_id} />
             ) : secaoVisivel === "turmas" ? (
               <TurmasSecao key={academia.academia_id} />
+            ) : secaoVisivel === "matriculas" ? (
+              <MatriculasSecao key={academia.academia_id} />
             ) : secaoVisivel === "cobrancas" ? (
               <CobrancasSecao key={academia.academia_id} />
             ) : secaoVisivel === "graduacoes" ? (
@@ -374,7 +377,6 @@ const Moldura: React.FC<{ aoSair: () => void; children: React.ReactNode }> = ({ 
 const ISSUE_DA_SECAO: Partial<Record<SecaoPainel, number>> = {
   alunos: 26,
   turmas: 27,
-  matriculas: 28,
   cobrancas: 29,
   graduacoes: 30,
 };

@@ -526,8 +526,14 @@ isOneToOne: false
 "criar_matricula":
 { Args: { "p_academia_id": string,"p_dados": Json }; Returns: string
                            },
+"destrancar_matricula":
+{ Args: { "p_matricula_id": string }; Returns: undefined
+                           },
 "emitir_token_checkin":
 { Args: { "p_turma_id": string }; Returns: Json
+                           },
+"encerrar_matricula":
+{ Args: { "p_data_fim": string,"p_matricula_id": string }; Returns: number
                            },
 "fazer_checkin":
 { Args: { "p_aluno_id"?: string,"p_token": string,"p_turma_id": string }; Returns: string
@@ -582,6 +588,9 @@ isOneToOne: false
                            },
 "totem_turmas_agora":
 { Args: { "p_academia_id": string }; Returns: Json
+                           },
+"trancar_matricula":
+{ Args: { "p_matricula_id": string }; Returns: number
                            },
 "vincular_meu_cadastro_aluno":
 { Args: Record<PropertyKey, never>; Returns: number
