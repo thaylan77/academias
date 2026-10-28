@@ -240,6 +240,7 @@ describe("Leitura e RPCs", () => {
 
   it.each([
     ["aprovar", "matricula_nao_pendente", "não está mais pendente"],
+    ["aprovar", "matricula_vencida", "já terminou: não dá para aprovar"],
     ["aprovar", "matricula_duplicada", "já tem matrícula nesta turma"],
     ["aprovar", "dia_vencimento_obrigatorio", "informe o dia de vencimento"],
     ["aprovar", "sem_permissao", "assinatura em dia"],
