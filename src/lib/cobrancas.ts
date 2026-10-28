@@ -6,11 +6,11 @@ import { PapelPainel } from "./painel";
  * geração imediata. Toda consulta filtra pela academia selecionada; quem
  * protege é o RLS (professor não lê cobranças).
  *
- * As RPCs de baixa e cancelamento ainda não têm código no `hint` e o front
- * não decide pelo texto do erro. Por isso a tela só oferece cada ação quando
- * as condições do banco já valem (cobrança pendente e nunca emitida no
- * gateway, papel e assinatura em dia, dados da baixa conferidos aqui) e
- * qualquer recusa vira uma mensagem genérica com a lista recarregada.
+ * A tela só oferece cada ação quando as condições do banco já valem
+ * (cobrança pendente e nunca emitida no gateway, papel e assinatura em dia,
+ * dados da baixa conferidos aqui). Se o banco recusar assim mesmo (a cobrança
+ * mudou entre a lista e o clique), a mensagem sai do código no `hint`, nunca
+ * do texto, e a lista recarrega.
  */
 
 // "desconhecido": status que o banco passou a usar e a tela ainda não conhece.
@@ -323,6 +323,24 @@ export type Resultado = { sucesso: true } | { sucesso: false; mensagem: string }
 const MSG_RECUSA =
   "Não foi possível concluir: a cobrança pode ter mudado (paga, cancelada ou emitida no gateway) ou a assinatura da academia está suspensa. A lista foi atualizada.";
 
+/** Mensagem da recusa pelo `hint`; código que a tela não conhece vira a genérica. */
+export function mensagemRecusa(hint: string | null | undefined, generica = MSG_RECUSA): string {
+  switch (hint) {
+    case "sem_permissao":
+      return "Só o dono, a administração e a recepção mexem nas cobranças desta academia, e só com a assinatura em dia. A lista foi atualizada.";
+    case "cobranca_emitida":
+      return "Esta cobrança já foi emitida no gateway: a baixa e o cancelamento acontecem por lá. A lista foi atualizada.";
+    case "cobranca_nao_pendente":
+      return "Esta cobrança não está mais pendente (já foi paga ou cancelada). A lista foi atualizada.";
+    case "cobranca_paga_gateway":
+      return "Esta cobrança já foi paga pelo gateway. A lista foi atualizada.";
+    case "dados_invalidos":
+      return "Confira a forma, a data (não pode ser no futuro) e o valor do pagamento.";
+    default:
+      return generica;
+  }
+}
+
 export interface DadosBaixa {
   forma: FormaPagamento;
   data: string; // AAAA-MM-DD, dia da academia
@@ -353,13 +371,13 @@ export async function baixarCobranca(cobrancaId: string, dados: DadosBaixa, fuso
     p_pago_em: meioDiaNoFuso(dados.data, fuso),
     ...(dados.valorPago !== null ? { p_valor_pago: dados.valorPago } : {}),
   });
-  return error ? { sucesso: false, mensagem: MSG_RECUSA } : { sucesso: true };
+  return error ? { sucesso: false, mensagem: mensagemRecusa(error.hint) } : { sucesso: true };
 }
 
 export async function cancelarCobranca(cobrancaId: string): Promise<Resultado> {
   if (!supabase) return { sucesso: false, mensagem: "O painel precisa de conexão com o servidor." };
   const { error } = await supabase.rpc("cancelar_cobranca", { p_cobranca_id: cobrancaId });
-  return error ? { sucesso: false, mensagem: MSG_RECUSA } : { sucesso: true };
+  return error ? { sucesso: false, mensagem: mensagemRecusa(error.hint) } : { sucesso: true };
 }
 
 export async function gerarCobrancasAgora(
@@ -370,7 +388,7 @@ export async function gerarCobrancasAgora(
   if (error || typeof data !== "number") {
     return {
       sucesso: false,
-      mensagem: "Não foi possível gerar: a matrícula pode ter mudado ou a assinatura da academia está suspensa.",
+      mensagem: mensagemRecusa(error?.hint, "Não foi possível gerar: a matrícula pode ter mudado ou a assinatura da academia está suspensa."),
     };
   }
   return { sucesso: true, geradas: data };
