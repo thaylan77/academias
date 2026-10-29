@@ -129,9 +129,7 @@ const ORIGEM: Record<MinhaPresenca["origem"], string> = {
 type Historico =
   | { fase: "carregando" }
   | { fase: "erro" }
-  // `lidas`: linhas já lidas do servidor (antes de tirar as repetidas); é o
-  // início da próxima página, para que ela sempre avance.
-  | { fase: "pronta"; itens: MinhaPresenca[]; lidas: number; temMais: boolean; maisFalhou: boolean };
+  | { fase: "pronta"; itens: MinhaPresenca[]; temMais: boolean; maisFalhou: boolean };
 
 const Presencas: React.FC<{ aluno: MeuAluno }> = ({ aluno }) => {
   const [historico, setHistorico] = useState<Historico>({ fase: "carregando" });
@@ -150,7 +148,7 @@ const Presencas: React.FC<{ aluno: MeuAluno }> = ({ aluno }) => {
     setBuscandoMais(false);
     setHistorico({ fase: "carregando" });
     minhasPresencas({ id, academia_id })
-      .then((r) => geracao.current === minha && setHistorico({ fase: "pronta", ...r, lidas: r.itens.length, maisFalhou: false }))
+      .then((r) => geracao.current === minha && setHistorico({ fase: "pronta", ...r, maisFalhou: false }))
       .catch(() => geracao.current === minha && setHistorico({ fase: "erro" }));
     return () => {
       geracao.current += 1;
@@ -162,22 +160,14 @@ const Presencas: React.FC<{ aluno: MeuAluno }> = ({ aluno }) => {
     emAndamento.current = true;
     setBuscandoMais(true);
     const minha = geracao.current;
-    const { itens: atuais, lidas } = historico;
+    const atuais = historico.itens;
     try {
-      const r = await minhasPresencas({ id, academia_id }, lidas);
+      // A página seguinte começa depois da última da lista (cursor).
+      const r = await minhasPresencas({ id, academia_id }, atuais[atuais.length - 1]);
       if (geracao.current !== minha) return;
-      // Presença registrada depois da primeira página empurra as antigas: a da
-      // borda pode vir repetida.
-      const vistas = new Set(atuais.map((p) => p.id));
-      setHistorico({
-        fase: "pronta",
-        itens: [...atuais, ...r.itens.filter((p) => !vistas.has(p.id))],
-        lidas: lidas + r.itens.length,
-        temMais: r.temMais,
-        maisFalhou: false,
-      });
+      setHistorico({ fase: "pronta", itens: [...atuais, ...r.itens], temMais: r.temMais, maisFalhou: false });
     } catch {
-      if (geracao.current === minha) setHistorico({ fase: "pronta", itens: atuais, lidas, temMais: true, maisFalhou: true });
+      if (geracao.current === minha) setHistorico({ fase: "pronta", itens: atuais, temMais: true, maisFalhou: true });
     } finally {
       if (geracao.current === minha) {
         emAndamento.current = false;

@@ -137,44 +137,45 @@ describe("Portal do aluno: tela", () => {
     expect(await screen.findByText("Nenhuma presença registrada ainda.")).toBeInTheDocument();
   });
 
-  it("presenças: 'Mostrar mais' traz a próxima página uma vez só, sem repetir a da borda", async () => {
+  it("presenças: 'Mostrar mais' traz a próxima página uma vez só, a partir da última da lista", async () => {
     m.meusAlunos.mockResolvedValue([ana]);
     m.minhaGraduacao.mockResolvedValue([]);
     let soltar: (v: unknown) => void = () => {};
+    const p3 = { id: "p3", data: "2026-10-28", checkin_em: "2026-10-28T22:00:00+00:00", turma: "T", origem: "qrcode" };
     m.minhasPresencas
-      .mockResolvedValueOnce({ itens: [{ id: "p3", data: "2026-10-28", turma: "T", origem: "qrcode" }], temMais: true })
+      .mockResolvedValueOnce({ itens: [p3], temMais: true })
       .mockReturnValueOnce(new Promise((r) => (soltar = r)));
     render(<PortalConteudo />);
     const botao = await screen.findByRole("button", { name: "Mostrar mais" });
     fireEvent.click(botao);
     fireEvent.click(botao);
     await act(async () => soltar({
-      itens: [{ id: "p3", data: "2026-10-28", turma: "T", origem: "qrcode" }, { id: "p2", data: "2026-10-21", turma: "T", origem: "professor" }],
+      itens: [{ id: "p2", data: "2026-10-21", checkin_em: "2026-10-21T22:00:00+00:00", turma: "T", origem: "professor" }],
       temMais: false,
     }));
     expect(m.minhasPresencas).toHaveBeenCalledTimes(2);
-    expect(m.minhasPresencas).toHaveBeenLastCalledWith({ id: "a1", academia_id: "acad-a" }, 1);
+    expect(m.minhasPresencas).toHaveBeenLastCalledWith({ id: "a1", academia_id: "acad-a" }, p3);
     expect(screen.getAllByRole("listitem")).toHaveLength(2);
     expect(screen.getByText("registrada pelo professor")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Mostrar mais" })).not.toBeInTheDocument();
   });
 
-  it("presenças: página só de repetidas (entraram presenças novas no topo) ainda avança o início da próxima", async () => {
+  it("presenças: cada 'Mostrar mais' parte da última presença já na lista", async () => {
     m.meusAlunos.mockResolvedValue([ana]);
     m.minhaGraduacao.mockResolvedValue([]);
-    const p = (id: string) => ({ id, data: "2026-10-01", turma: "T", origem: "qrcode" });
+    const p = (id: string, dia: string) => ({ id, data: dia, checkin_em: dia + "T22:00:00+00:00", turma: "T", origem: "qrcode" });
     m.minhasPresencas
-      .mockResolvedValueOnce({ itens: [p("p2"), p("p1")], temMais: true })
-      .mockResolvedValueOnce({ itens: [p("p2"), p("p1")], temMais: true })
-      .mockResolvedValueOnce({ itens: [p("p0")], temMais: false });
+      .mockResolvedValueOnce({ itens: [p("p5", "2026-10-28"), p("p4", "2026-10-27")], temMais: true })
+      .mockResolvedValueOnce({ itens: [p("p3", "2026-10-26"), p("p2", "2026-10-25")], temMais: true })
+      .mockResolvedValueOnce({ itens: [p("p1", "2026-10-24")], temMais: false });
     render(<PortalConteudo />);
     fireEvent.click(await screen.findByRole("button", { name: "Mostrar mais" }));
     await waitFor(() => expect(m.minhasPresencas).toHaveBeenCalledTimes(2));
-    expect(m.minhasPresencas).toHaveBeenLastCalledWith({ id: "a1", academia_id: "acad-a" }, 2);
+    expect(m.minhasPresencas).toHaveBeenLastCalledWith({ id: "a1", academia_id: "acad-a" }, p("p4", "2026-10-27"));
     fireEvent.click(await screen.findByRole("button", { name: "Mostrar mais" }));
     await waitFor(() => expect(m.minhasPresencas).toHaveBeenCalledTimes(3));
-    expect(m.minhasPresencas).toHaveBeenLastCalledWith({ id: "a1", academia_id: "acad-a" }, 4);
-    await waitFor(() => expect(screen.getAllByRole("listitem")).toHaveLength(3));
+    expect(m.minhasPresencas).toHaveBeenLastCalledWith({ id: "a1", academia_id: "acad-a" }, p("p2", "2026-10-25"));
+    await waitFor(() => expect(screen.getAllByRole("listitem")).toHaveLength(5));
   });
 
   it("presenças: falha ao trazer mais mantém a lista e deixa tentar de novo", async () => {

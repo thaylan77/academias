@@ -38,6 +38,7 @@ export interface MinhaGraduacao {
 export interface MinhaPresenca {
   id: string;
   data: string; // AAAA-MM-DD, dia da academia
+  checkin_em: string; // instante, só para a página seguinte começar depois desta
   turma: string;
   origem: "qrcode" | "recepcao" | "professor";
 }
@@ -119,25 +120,35 @@ export async function minhaGraduacao(aluno: Pick<MeuAluno, "id" | "academia_id">
 export const PRESENCAS_POR_PAGINA = 30;
 
 /**
- * Presenças do aluno, da mais recente para a mais antiga, a partir de
- * `inicio`. `temMais` diz se há outra página.
+ * Presenças do aluno, da mais recente para a mais antiga (data, check-in e
+ * id). Com `depoisDe`, a página começa logo depois dessa presença: por cursor,
+ * e não por posição, para que presença apagada ou registrada entre uma página
+ * e outra não faça pular nem repetir linhas. `temMais` diz se há outra página.
  */
 export async function minhasPresencas(
   aluno: Pick<MeuAluno, "id" | "academia_id">,
-  inicio = 0
+  depoisDe?: Pick<MinhaPresenca, "id" | "data" | "checkin_em">
 ): Promise<{ itens: MinhaPresenca[]; temMais: boolean }> {
   if (!supabase) return { itens: [], temMais: false };
+  let consulta = supabase
+    .from("presencas")
+    .select("id, data, checkin_em, turma_id, origem")
+    .eq("academia_id", aluno.academia_id)
+    .eq("aluno_id", aluno.id);
+  if (depoisDe) {
+    // Aspas: o instante tem ":" e ".", que a sintaxe do filtro reserva.
+    const { data: d, checkin_em: c, id } = depoisDe;
+    consulta = consulta.or(
+      `data.lt.${d},and(data.eq.${d},checkin_em.lt."${c}"),and(data.eq.${d},checkin_em.eq."${c}",id.lt.${id})`
+    );
+  }
   const [presencas, turmas] = await Promise.all([
-    supabase
-      .from("presencas")
-      .select("id, data, turma_id, origem")
-      .eq("academia_id", aluno.academia_id)
-      .eq("aluno_id", aluno.id)
+    consulta
       .order("data", { ascending: false })
       .order("checkin_em", { ascending: false })
-      .order("id")
+      .order("id", { ascending: false })
       // Uma linha a mais só para saber se há outra página.
-      .range(inicio, inicio + PRESENCAS_POR_PAGINA),
+      .limit(PRESENCAS_POR_PAGINA + 1),
     supabase.from("turmas").select("id, nome").eq("academia_id", aluno.academia_id),
   ]);
   if (presencas.error) throw presencas.error;
@@ -149,6 +160,7 @@ export async function minhasPresencas(
     itens: linhas.slice(0, PRESENCAS_POR_PAGINA).map((p) => ({
       id: p.id,
       data: p.data,
+      checkin_em: p.checkin_em,
       turma: nome.get(p.turma_id) ?? "Turma",
       origem: p.origem as MinhaPresenca["origem"],
     })),

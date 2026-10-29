@@ -4,7 +4,7 @@
 -- das turmas, nada da outra aluna de B.
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(8);
+select plan(9);
 
 create function public.__como(p_user text)
 returns void
@@ -85,6 +85,41 @@ select throws_ok($$insert into public.presencas (academia_id, aluno_id, turma_id
                    values ('fea00000-0000-4000-8000-00000000000b', 'fea00000-0000-4000-8000-0000000001b2',
                            'fea00000-0000-4000-8000-000000000302', '2026-10-29')$$,
   '42501', null, 'aluno não grava presença direto (só pela RPC de check-in)');
+reset role;
+
+-- Paginação por cursor (revisão do Codex no PR #79): mesmo predicado que a
+-- tela manda ao PostgREST (data, checkin_em, id, decrescentes). O filho em B
+-- passa a ter presenças em 21, 22, 23, 24 e 28/10; a primeira página (2)
+-- traz 28 e 24; a equipe apaga a de 24; a segunda página, a partir da última
+-- lida, traz 23 e 22 (por posição viriam 22 e 21, pulando a de 23).
+insert into public.presencas (academia_id, aluno_id, turma_id, data, origem) values
+  ('fea00000-0000-4000-8000-00000000000b', 'fea00000-0000-4000-8000-0000000001b1', 'fea00000-0000-4000-8000-000000000302', '2026-10-22', 'qrcode'),
+  ('fea00000-0000-4000-8000-00000000000b', 'fea00000-0000-4000-8000-0000000001b1', 'fea00000-0000-4000-8000-000000000302', '2026-10-23', 'qrcode'),
+  ('fea00000-0000-4000-8000-00000000000b', 'fea00000-0000-4000-8000-0000000001b1', 'fea00000-0000-4000-8000-000000000302', '2026-10-24', 'qrcode');
+
+create temp table pagina1 as
+select id, data, checkin_em from public.presencas
+ where academia_id = 'fea00000-0000-4000-8000-00000000000b' and aluno_id = 'fea00000-0000-4000-8000-0000000001b1'
+ order by data desc, checkin_em desc, id desc
+ limit 2;
+grant select on pagina1 to authenticated;
+
+delete from public.presencas
+ where aluno_id = 'fea00000-0000-4000-8000-0000000001b1' and data = '2026-10-24';
+
+set local role authenticated;
+select public.__como('fea00000-0000-4000-8000-0000000000e1');
+select results_eq(
+  $$with c as (select * from pagina1 order by data, checkin_em, id limit 1)
+    select p.data from public.presencas p, c
+     where p.academia_id = 'fea00000-0000-4000-8000-00000000000b' and p.aluno_id = 'fea00000-0000-4000-8000-0000000001b1'
+       and (p.data < c.data
+            or (p.data = c.data and p.checkin_em < c.checkin_em)
+            or (p.data = c.data and p.checkin_em = c.checkin_em and p.id < c.id))
+     order by p.data desc, p.checkin_em desc, p.id desc
+     limit 2$$,
+  $$values ('2026-10-23'::date), ('2026-10-22')$$,
+  'presença apagada da primeira página não faz a segunda pular nenhuma');
 reset role;
 
 select * from finish();
