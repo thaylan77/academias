@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { act, render, screen, fireEvent } from "@testing-library/react";
 
 // Com servidor (o cliente é um objeto qualquer); as leituras são trocadas.
 vi.mock("../lib/supabase", () => ({ supabase: {} }));
@@ -34,7 +34,7 @@ describe("Portal do aluno: tela", () => {
     expect(screen.getByText("desde 01/03/2026")).toBeInTheDocument();
     expect(screen.getByText(/12 de 40 aulas · 2 de 6 meses/)).toHaveTextContent("próximo: grau 3");
     expect(screen.queryByText("Tempo e aulas cumpridos")).not.toBeInTheDocument();
-    expect(m.minhaGraduacao).toHaveBeenCalledWith(ana);
+    expect(m.minhaGraduacao).toHaveBeenCalledWith({ id: "a1", academia_id: "acad-a" });
   });
 
   it("apto: avisa que cumpriu o tempo e as aulas, e que quem decide é o professor", async () => {
@@ -56,7 +56,34 @@ describe("Portal do aluno: tela", () => {
     expect(await screen.findByText("Amarela")).toBeInTheDocument();
     expect(screen.queryByText("Azul, grau 2")).not.toBeInTheDocument();
     expect(screen.getByText("Este cadastro não está ativo na academia.")).toBeInTheDocument();
-    expect(m.minhaGraduacao).toHaveBeenLastCalledWith(beto);
+    expect(m.minhaGraduacao).toHaveBeenLastCalledWith({ id: "b1", academia_id: "acad-b" });
+    expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("Beto");
+  });
+
+  it("troca rápida de aluno: a resposta atrasada do anterior é descartada", async () => {
+    m.meusAlunos.mockResolvedValue([ana, beto]);
+    let soltarAna: (v: unknown) => void = () => {};
+    m.minhaGraduacao.mockImplementation((a: { id: string }) =>
+      a.id === "a1"
+        ? new Promise((r) => (soltarAna = r))
+        : Promise.resolve([{ ...azul, faixa: "Amarela", grau: 0, progresso: null }]));
+    render(<PortalConteudo />);
+    fireEvent.change(await screen.findByLabelText("Aluno"), { target: { value: "b1" } });
+    expect(await screen.findByText("Amarela")).toBeInTheDocument();
+    await act(async () => soltarAna([azul]));
+    expect(screen.queryByText("Azul, grau 2")).not.toBeInTheDocument();
+    expect(screen.getByText("Amarela")).toBeInTheDocument();
+  });
+
+  it("erro na graduação de um aluno não fica ao trocar para outro", async () => {
+    m.meusAlunos.mockResolvedValue([ana, beto]);
+    m.minhaGraduacao.mockImplementation((a: { id: string }) =>
+      a.id === "a1" ? Promise.reject(new Error("rede")) : Promise.resolve([azul]));
+    render(<PortalConteudo />);
+    expect(await screen.findByRole("alert")).toHaveTextContent("Não foi possível carregar a graduação");
+    fireEvent.change(screen.getByLabelText("Aluno"), { target: { value: "b1" } });
+    expect(await screen.findByText("Azul, grau 2")).toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
   it("nenhum cadastro ligado: explica o que conferir", async () => {

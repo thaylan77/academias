@@ -4,7 +4,7 @@
 -- user_id da tela é o que separa). Um aluno qualquer de A fica de fora.
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(10);
+select plan(13);
 
 create function public.__como(p_user text)
 returns void
@@ -38,16 +38,21 @@ insert into public.faixas (id, academia_id, modalidade_id, nome, ordem, max_grau
   ('fe900000-0000-4000-8000-000000000301', 'fe900000-0000-4000-8000-00000000000a', 'fe900000-0000-4000-8000-000000000201', 'Azul', 2, 4, 0, 0),
   ('fe900000-0000-4000-8000-000000000302', 'fe900000-0000-4000-8000-00000000000b', 'fe900000-0000-4000-8000-000000000202', 'Amarela', 2, 4, 0, 0);
 
--- a1: filho do pai em A; a2: aluna de outro login em A; b1: filho do pai em B.
+-- a1: filho do pai em A; a3: filho inativo do pai em A; a2: aluna de outro
+-- login em A; b1: filho do pai em B; b2: aluna de outro login em B.
 insert into public.alunos (id, academia_id, nome, status, user_id) values
-  ('fe900000-0000-4000-8000-0000000001a1', 'fe900000-0000-4000-8000-00000000000a', 'Filho A',  'ativo', 'fe900000-0000-4000-8000-0000000000e1'),
-  ('fe900000-0000-4000-8000-0000000001a2', 'fe900000-0000-4000-8000-00000000000a', 'Outra A',  'ativo', 'fe900000-0000-4000-8000-0000000000e2'),
-  ('fe900000-0000-4000-8000-0000000001b1', 'fe900000-0000-4000-8000-00000000000b', 'Filho B',  'ativo', 'fe900000-0000-4000-8000-0000000000e1');
+  ('fe900000-0000-4000-8000-0000000001a1', 'fe900000-0000-4000-8000-00000000000a', 'Filho A',   'ativo',   'fe900000-0000-4000-8000-0000000000e1'),
+  ('fe900000-0000-4000-8000-0000000001a3', 'fe900000-0000-4000-8000-00000000000a', 'Inativo A', 'inativo', 'fe900000-0000-4000-8000-0000000000e1'),
+  ('fe900000-0000-4000-8000-0000000001a2', 'fe900000-0000-4000-8000-00000000000a', 'Outra A',   'ativo',   'fe900000-0000-4000-8000-0000000000e2'),
+  ('fe900000-0000-4000-8000-0000000001b1', 'fe900000-0000-4000-8000-00000000000b', 'Filho B',   'ativo',   'fe900000-0000-4000-8000-0000000000e1'),
+  ('fe900000-0000-4000-8000-0000000001b2', 'fe900000-0000-4000-8000-00000000000b', 'Outra B',   'ativo',   null);
 
 insert into public.graduacoes (academia_id, aluno_id, faixa_id, grau, data) values
   ('fe900000-0000-4000-8000-00000000000a', 'fe900000-0000-4000-8000-0000000001a1', 'fe900000-0000-4000-8000-000000000301', 1, '2026-01-10'),
+  ('fe900000-0000-4000-8000-00000000000a', 'fe900000-0000-4000-8000-0000000001a3', 'fe900000-0000-4000-8000-000000000301', 0, '2025-06-10'),
   ('fe900000-0000-4000-8000-00000000000a', 'fe900000-0000-4000-8000-0000000001a2', 'fe900000-0000-4000-8000-000000000301', 3, '2026-01-10'),
-  ('fe900000-0000-4000-8000-00000000000b', 'fe900000-0000-4000-8000-0000000001b1', 'fe900000-0000-4000-8000-000000000302', 2, '2026-02-10');
+  ('fe900000-0000-4000-8000-00000000000b', 'fe900000-0000-4000-8000-0000000001b1', 'fe900000-0000-4000-8000-000000000302', 2, '2026-02-10'),
+  ('fe900000-0000-4000-8000-00000000000b', 'fe900000-0000-4000-8000-0000000001b2', 'fe900000-0000-4000-8000-000000000302', 4, '2026-02-10');
 
 set local role authenticated;
 select public.__como('fe900000-0000-4000-8000-0000000000e1');
@@ -56,10 +61,18 @@ select public.__como('fe900000-0000-4000-8000-0000000000e1');
 select results_eq(
   $$select a.nome, ac.nome from public.alunos a join public.academias ac on ac.id = a.academia_id
      where a.user_id = 'fe900000-0000-4000-8000-0000000000e1' order by a.nome$$,
-  $$values ('Filho A'::text, 'Portal Grad A'::text), ('Filho B', 'Portal Grad B')$$,
-  'pai: a lista da tela traz os dois filhos, nas duas academias, com o nome da academia');
-select is((select count(*) from public.alunos where academia_id = 'fe900000-0000-4000-8000-00000000000a'), 2::bigint,
-  'como recepção de A, o RLS deixa ler os dois alunos de A (o filtro da tela é que separa)');
+  $$values ('Filho A'::text, 'Portal Grad A'::text), ('Filho B', 'Portal Grad B'), ('Inativo A', 'Portal Grad A')$$,
+  'pai: a lista da tela traz os três filhos, nas duas academias, com o nome da academia');
+select is((select count(*) from public.alunos where academia_id = 'fe900000-0000-4000-8000-00000000000a'), 3::bigint,
+  'como recepção de A, o RLS deixa ler todos os alunos de A (o filtro da tela é que separa)');
+
+-- Filho inativo: a faixa aparece, o progresso não (a view só traz ativo).
+select is((select faixa from public.vw_graduacao_atual
+            where academia_id = 'fe900000-0000-4000-8000-00000000000a' and aluno_id = 'fe900000-0000-4000-8000-0000000001a3'),
+  'Azul', 'pai lê a faixa do filho inativo');
+select is((select count(*) from public.vw_progresso_graduacao
+            where academia_id = 'fe900000-0000-4000-8000-00000000000a' and aluno_id = 'fe900000-0000-4000-8000-0000000001a3'),
+  0::bigint, 'e não há progresso para o filho inativo');
 
 -- Graduação do filho em B: o pai lê como aluno.
 select results_eq(
@@ -71,8 +84,13 @@ select is((select proximo_passo from public.vw_progresso_graduacao
   'grau 3', 'pai lê o progresso do filho em B');
 select is((select nome from public.modalidades where academia_id = 'fe900000-0000-4000-8000-00000000000b'),
   'Judô B', 'pai lê o nome da modalidade em B (catálogo)');
-select is((select count(*) from public.vw_graduacao_atual where academia_id = 'fe900000-0000-4000-8000-00000000000b'), 1::bigint,
-  'em B, só a graduação do filho');
+select results_eq(
+  $$select aluno_id from public.vw_graduacao_atual where academia_id = 'fe900000-0000-4000-8000-00000000000b'$$,
+  $$values ('fe900000-0000-4000-8000-0000000001b1'::uuid)$$,
+  'em B, onde é só aluno, o pai não lê a graduação da outra aluna');
+select is((select count(*) from public.vw_progresso_graduacao where academia_id = 'fe900000-0000-4000-8000-00000000000b'
+            and aluno_id = 'fe900000-0000-4000-8000-0000000001b2'), 0::bigint,
+  'nem o progresso dela');
 
 -- Outra login: só o próprio cadastro, nada do pai nem de B.
 select public.__como('fe900000-0000-4000-8000-0000000000e2');

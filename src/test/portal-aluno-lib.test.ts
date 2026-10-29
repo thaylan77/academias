@@ -65,13 +65,18 @@ describe("Portal do aluno: leituras", () => {
     ]);
   });
 
-  it("cadastros: sem login, lista vazia sem consultar; erro da consulta sobe", async () => {
+  it("cadastros: sem login, lista vazia sem consultar; erro do login ou da consulta sobe", async () => {
     const semLogin = clienteFalso({}, null);
     expect(await (await carregarComCliente(semLogin)).meusAlunos()).toEqual([]);
     expect(semLogin.from).not.toHaveBeenCalled();
 
     const comErro = clienteFalso({ alunos: { data: null, error: { message: "x" } } });
     await expect((await carregarComCliente(comErro)).meusAlunos()).rejects.toEqual({ message: "x" });
+
+    const loginFalhou = clienteFalso({});
+    loginFalhou.auth.getUser.mockResolvedValue({ data: { user: null }, error: { message: "jwt" } });
+    await expect((await carregarComCliente(loginFalhou)).meusAlunos()).rejects.toEqual({ message: "jwt" });
+    expect(loginFalhou.from).not.toHaveBeenCalled();
   });
 
   it("graduação: filtra pela academia e pelo aluno; junta modalidade e progresso; sem progresso (inativo) mostra só a faixa", async () => {
@@ -104,9 +109,9 @@ describe("Portal do aluno: leituras", () => {
     ]);
   });
 
-  it("graduação: erro em qualquer das leituras sobe", async () => {
-    const cliente = clienteFalso({ vw_progresso_graduacao: { data: null, error: { message: "falhou" } } });
+  it.each(["vw_graduacao_atual", "vw_progresso_graduacao", "modalidades"])("graduação: erro em %s sobe", async (tabela) => {
+    const cliente = clienteFalso({ [tabela]: { data: null, error: { message: "falhou " + tabela } } });
     const lib = await carregarComCliente(cliente);
-    await expect(lib.minhaGraduacao({ id: "a1", academia_id: "acad-a" })).rejects.toEqual({ message: "falhou" });
+    await expect(lib.minhaGraduacao({ id: "a1", academia_id: "acad-a" })).rejects.toEqual({ message: "falhou " + tabela });
   });
 });

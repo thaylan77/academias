@@ -90,7 +90,7 @@ export const PortalConteudo: React.FC = () => {
   const aluno = lista.alunos.find((a) => a.id === escolhido) ?? lista.alunos[0];
   return (
     <div className="container mx-auto max-w-xl space-y-6 px-4 py-6">
-      {lista.alunos.length > 1 ? (
+      {lista.alunos.length > 1 && (
         <div className="space-y-1.5">
           <Label htmlFor="portal-aluno">Aluno</Label>
           <select id="portal-aluno" className={SELECT} value={aluno.id} onChange={(e) => setEscolhido(e.target.value)}>
@@ -99,12 +99,11 @@ export const PortalConteudo: React.FC = () => {
             ))}
           </select>
         </div>
-      ) : (
-        <div>
-          <h1 className="text-lg font-bold text-white">{aluno.nome}</h1>
-          <p className="text-xs text-zinc-400">{aluno.academia}</p>
-        </div>
       )}
+      <div>
+        <h1 className="text-lg font-bold text-white">{aluno.nome}</h1>
+        <p className="text-xs text-zinc-400">{aluno.academia}</p>
+      </div>
       {aluno.status !== "ativo" && (
         <p className="text-xs text-zinc-400">Este cadastro não está ativo na academia.</p>
       )}
@@ -118,16 +117,17 @@ type Leitura = { fase: "carregando" } | { fase: "erro" } | { fase: "pronta"; ite
 const Graduacao: React.FC<{ aluno: MeuAluno }> = ({ aluno }) => {
   const [leitura, setLeitura] = useState<Leitura>({ fase: "carregando" });
   const [tentativa, setTentativa] = useState(0);
+  const { id, academia_id } = aluno;
   useEffect(() => {
     let vale = true;
     setLeitura({ fase: "carregando" });
-    minhaGraduacao(aluno)
+    minhaGraduacao({ id, academia_id })
       .then((itens) => vale && setLeitura({ fase: "pronta", itens }))
       .catch(() => vale && setLeitura({ fase: "erro" }));
     return () => {
       vale = false;
     };
-  }, [aluno, tentativa]);
+  }, [id, academia_id, tentativa]);
 
   return (
     <section aria-labelledby="portal-graduacao" className="space-y-3">
