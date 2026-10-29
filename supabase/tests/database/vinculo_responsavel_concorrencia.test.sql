@@ -10,7 +10,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 create extension if not exists dblink with schema extensions;
-select plan(12);
+select plan(13);
 
 -- Mesmo jeito de conectar de matricula/concorrencia.test.sql.
 create function pg_temp.conexao() returns text language sql as $$
@@ -133,7 +133,7 @@ select is(extensions.dblink_send_query('s1', 'select public.vincular_meu_cadastr
   'C: s1 envia o vínculo de R2');
 select ok(pg_temp.esperando(), 'C: s1 espera o desvínculo aberto de s2');
 select extensions.dblink_exec('s2', 'commit');
-select pg_temp.resultado('s1');
+select is(pg_temp.resultado('s1'), 'ok', 'C: depois do commit, o vínculo termina');
 select ok(pg_temp.tem_papel_aluno('fc000000-0000-4000-8000-0000000000e3'),
   'C: o vínculo de R2 recria o papel que o desvínculo de R1 tirou');
 select extensions.dblink_exec('s1', 'reset role');
