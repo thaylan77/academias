@@ -54,6 +54,7 @@ export const MatriculaPage: React.FC<MatriculaPageProps> = ({ slug }) => {
   const [responsavelNome, setResponsavelNome] = useState("");
   const [responsavelCpf, setResponsavelCpf] = useState("");
   const [responsavelTelefone, setResponsavelTelefone] = useState("");
+  const [responsavelEmail, setResponsavelEmail] = useState("");
 
   // Saúde e emergência
   const [contatoEmergencia, setContatoEmergencia] = useState("");
@@ -129,6 +130,7 @@ export const MatriculaPage: React.FC<MatriculaPageProps> = ({ slug }) => {
       responsavel_nome: isMenor ? responsavelNome.trim() : undefined,
       responsavel_cpf: isMenor ? responsavelCpf.trim() : undefined,
       responsavel_telefone: isMenor ? responsavelTelefone.trim() : undefined,
+      responsavel_email: isMenor ? responsavelEmail.trim() || undefined : undefined,
       contato_emergencia: contatoEmergencia.trim() || undefined,
       observacoes_medicas: observacoesMedicas.trim() || undefined,
       aceite_termo: true,
@@ -510,6 +512,21 @@ export const MatriculaPage: React.FC<MatriculaPageProps> = ({ slug }) => {
                       maxLength={15}
                       className="mt-1"
                     />
+                  </div>
+                  <div className="md:col-span-3">
+                    <Label htmlFor="responsavelEmail">E-mail do Responsável</Label>
+                    <Input
+                      id="responsavelEmail"
+                      type="email"
+                      placeholder="nome@exemplo.com"
+                      value={responsavelEmail}
+                      onChange={(e) => setResponsavelEmail(e.target.value)}
+                      className="mt-1"
+                      aria-describedby="responsavelEmailAjuda"
+                    />
+                    <p id="responsavelEmailAjuda" className="mt-1 text-xs text-zinc-500">
+                      Com ele, o responsável entra no portal do aluno para fazer o check-in.
+                    </p>
                   </div>
                 </div>
               </div>

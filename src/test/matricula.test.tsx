@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { MatriculaPage } from "../pages/matricula/matricula-page";
+import * as supabaseLib from "../lib/supabase";
 
 describe("Tela de Matrícula Online", () => {
   it("deve carregar e renderizar os dados da academia", async () => {
@@ -45,6 +46,27 @@ describe("Tela de Matrícula Online", () => {
       expect(screen.getByText(/Dados do Responsável Legal/i)).toBeInTheDocument();
       expect(screen.getByLabelText(/Nome Completo do Responsável/i)).toBeInTheDocument();
       expect(screen.getByLabelText(/CPF do Responsável/i)).toBeInTheDocument();
+      // O e-mail do responsável é o login dele no portal do aluno.
+      expect(screen.getByLabelText(/E-mail do Responsável/i)).toHaveAttribute("type", "email");
     });
+  });
+
+  it("envia o e-mail do responsável do aluno menor", async () => {
+    const enviar = vi.spyOn(supabaseLib, "submeterMatriculaOnline").mockResolvedValue({ sucesso: true, matricula_id: "m1" } as never);
+    render(<MatriculaPage slug="honor-demo-a" />);
+    await screen.findByText("Honor Team — Matriz Centro");
+
+    const anoAtual = new Date().getFullYear();
+    fireEvent.change(screen.getByLabelText(/Nome Completo do Aluno/i), { target: { value: "Pedro Souza" } });
+    fireEvent.change(screen.getByLabelText(/Data de Nascimento/i), { target: { value: `${anoAtual - 10}-05-15` } });
+    fireEvent.change(await screen.findByLabelText(/Nome Completo do Responsável/i), { target: { value: "Maria Souza" } });
+    fireEvent.change(screen.getByLabelText(/CPF do Responsável/i), { target: { value: "11144477735" } });
+    fireEvent.change(screen.getByLabelText(/E-mail do Responsável/i), { target: { value: " maria@exemplo.com " } });
+    fireEvent.click(screen.getByRole("checkbox", { name: /Li e concordo/i }));
+    fireEvent.submit(screen.getByLabelText(/Nome Completo do Aluno/i).closest("form")!);
+
+    await waitFor(() => expect(enviar).toHaveBeenCalled());
+    expect(enviar.mock.calls[0][1]).toMatchObject({ responsavel_email: "maria@exemplo.com" });
+    vi.restoreAllMocks();
   });
 });

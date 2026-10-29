@@ -27,6 +27,7 @@ export interface DadosAluno {
   responsavel_nome: string | null;
   responsavel_cpf: string | null;
   responsavel_telefone: string | null;
+  responsavel_email: string | null;
   contato_emergencia: string | null;
   observacoes_medicas: string | null;
   status: "pendente" | "ativo" | "inativo";
@@ -159,7 +160,7 @@ export type ErrosAluno = Partial<Record<keyof DadosAluno, string>>;
 export function formularioVazio(): FormularioAluno {
   return {
     nome: "", cpf: "", data_nascimento: "", telefone: "", email: "",
-    responsavel_nome: "", responsavel_cpf: "", responsavel_telefone: "",
+    responsavel_nome: "", responsavel_cpf: "", responsavel_telefone: "", responsavel_email: "",
     contato_emergencia: "", observacoes_medicas: "", status: "ativo",
   };
 }
@@ -174,6 +175,7 @@ export function formularioDoAluno(a: DadosAluno): FormularioAluno {
     responsavel_nome: a.responsavel_nome ?? "",
     responsavel_cpf: a.responsavel_cpf ?? "",
     responsavel_telefone: a.responsavel_telefone ?? "",
+    responsavel_email: a.responsavel_email ?? "",
     contato_emergencia: a.contato_emergencia ?? "",
     observacoes_medicas: a.observacoes_medicas ?? "",
     status: a.status,
@@ -222,6 +224,12 @@ export function validarAluno(
     if (!responsavelTelefone) erros.responsavel_telefone = "Telefone com DDD, por exemplo (85) 99999-9999.";
   }
 
+  // O e-mail do responsável é o login dele no portal do aluno.
+  const responsavelEmail = texto(f.responsavel_email)?.toLowerCase() ?? null;
+  if (responsavelEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(responsavelEmail)) {
+    erros.responsavel_email = "E-mail do responsável inválido.";
+  }
+
   const idade = !erros.data_nascimento ? idadeEm(data, hoje) : null;
   if (idade !== null && idade < 18) {
     if (!responsavelNome) erros.responsavel_nome = "Aluno menor de idade: informe o responsável.";
@@ -242,6 +250,7 @@ export function validarAluno(
       responsavel_nome: responsavelNome,
       responsavel_cpf: responsavelCpf,
       responsavel_telefone: responsavelTelefone,
+      responsavel_email: responsavelEmail,
       contato_emergencia: texto(f.contato_emergencia),
       observacoes_medicas: texto(f.observacoes_medicas),
       status,
@@ -321,7 +330,7 @@ export async function lerFichaDoAluno(academiaId: string, alunoId: string, verFi
   const { data: a, error } = await supabase
     .from("alunos")
     .select(
-      "id, nome, cpf, data_nascimento, telefone, email, responsavel_nome, responsavel_cpf, responsavel_telefone, contato_emergencia, observacoes_medicas, status, anonimizado_em"
+      "id, nome, cpf, data_nascimento, telefone, email, responsavel_nome, responsavel_cpf, responsavel_telefone, responsavel_email, contato_emergencia, observacoes_medicas, status, anonimizado_em"
     )
     .eq("academia_id", academiaId)
     .eq("id", alunoId)
@@ -376,6 +385,7 @@ export async function lerFichaDoAluno(academiaId: string, alunoId: string, verFi
       responsavel_nome: a.responsavel_nome,
       responsavel_cpf: a.responsavel_cpf,
       responsavel_telefone: a.responsavel_telefone,
+      responsavel_email: a.responsavel_email,
       contato_emergencia: a.contato_emergencia,
       observacoes_medicas: a.observacoes_medicas,
       status,

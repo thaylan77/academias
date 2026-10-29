@@ -319,11 +319,12 @@ const FichaAluno: React.FC<{ alunoId: string }> = ({ alunoId }) => {
             <Campo rotulo="Contato de emergência" valor={aluno.contato_emergencia ?? ""} />
             <Campo rotulo="Observações médicas" valor={aluno.observacoes_medicas ?? ""} />
           </Bloco>
-          {(aluno.responsavel_nome || (idade !== null && idade < 18)) && (
+          {(aluno.responsavel_nome || aluno.responsavel_email || (idade !== null && idade < 18)) && (
             <Bloco titulo="Responsável">
               <Campo rotulo="Nome" valor={aluno.responsavel_nome ?? ""} />
               <Campo rotulo="CPF" valor={formatarCpf(aluno.responsavel_cpf)} />
               <Campo rotulo="Telefone" valor={formatarTelefone(aluno.responsavel_telefone)} />
+              <Campo rotulo="E-mail" valor={aluno.responsavel_email ?? ""} />
             </Bloco>
           )}
         </>
@@ -436,6 +437,7 @@ const CAMPOS_RESPONSAVEL: Array<{ campo: keyof FormularioAluno; rotulo: string; 
   { campo: "responsavel_nome", rotulo: "Nome do responsável" },
   { campo: "responsavel_cpf", rotulo: "CPF do responsável" },
   { campo: "responsavel_telefone", rotulo: "Telefone do responsável", tipo: "tel" },
+  { campo: "responsavel_email", rotulo: "E-mail do responsável", tipo: "email" },
 ];
 
 const EdicaoDoAluno: React.FC<{
