@@ -18,11 +18,18 @@ const CheckinPage = lazy(() =>
 const PainelApp = lazy(() =>
   import("./pages/painel/painel-app").then((m) => ({ default: m.PainelApp }))
 );
+const PortalApp = lazy(() =>
+  import("./pages/portal/portal-app").then((m) => ({ default: m.PortalApp }))
+);
 
-// "painel" é o primeiro segmento reservado: /painel/... é o painel da equipe,
-// não o slug de uma academia.
+// "painel" e "portal" são segmentos reservados (slug_reservado): /painel/... é
+// o painel da equipe e /portal o portal do aluno, não o slug de uma academia.
+function primeiroSegmento(pathname: string): string | undefined {
+  return pathname.split("/").filter(Boolean)[0];
+}
+
 function ehCaminhoDoPainel(pathname: string): boolean {
-  return pathname.split("/").filter(Boolean)[0] === "painel";
+  return primeiroSegmento(pathname) === "painel";
 }
 
 function CarregandoTela() {
@@ -56,6 +63,15 @@ export function App() {
       <FalhaAoCarregar>
         <Suspense fallback={<CarregandoTela />}>
           <PainelApp />
+        </Suspense>
+      </FalhaAoCarregar>
+    );
+  }
+  if (primeiroSegmento(window.location.pathname) === "portal") {
+    return (
+      <FalhaAoCarregar>
+        <Suspense fallback={<CarregandoTela />}>
+          <PortalApp />
         </Suspense>
       </FalhaAoCarregar>
     );

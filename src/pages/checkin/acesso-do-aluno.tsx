@@ -26,14 +26,21 @@ type Estado =
  * Portão do check-in: sem login, pede o e-mail e manda o link mágico de volta
  * para esta mesma página (com a turma e o token do QR); com login, liga o
  * cadastro uma vez e mostra o check-in. Sem servidor (demonstração), mostra o
- * check-in direto.
+ * check-in direto. O portal do aluno usa o mesmo portão, com outro texto.
  */
-export const AcessoDoAluno: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  if (!supabase) return <>{children}</>;
-  return <Portao>{children}</Portao>;
+type Textos = { titulo: string; explicacao: string };
+
+const TEXTOS_CHECKIN: Textos = {
+  titulo: "Entrar para fazer o check-in",
+  explicacao: "Mandamos um link de acesso: abra no mesmo aparelho e o check-in continua daqui.",
 };
 
-const Portao: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+export const AcessoDoAluno: React.FC<{ children: React.ReactNode; textos?: Textos }> = ({ children, textos = TEXTOS_CHECKIN }) => {
+  if (!supabase) return <>{children}</>;
+  return <Portao textos={textos}>{children}</Portao>;
+};
+
+const Portao: React.FC<{ children: React.ReactNode; textos: Textos }> = ({ children, textos }) => {
   const [estado, setEstado] = useState<Estado>({ fase: "carregando" });
   // O último e-mail já ligado: o aviso de login de outra aba não liga de novo.
   const ligado = useRef<string | null>(null);
@@ -83,7 +90,7 @@ const Portao: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   if (estado.fase === "carregando") {
     return <p role="status" className="container mx-auto px-4 py-16 text-center text-sm text-zinc-500">Carregando...</p>;
   }
-  if (estado.fase === "sem_login") return <PedirLink />;
+  if (estado.fase === "sem_login") return <PedirLink textos={textos} />;
 
   return (
     <div>
@@ -132,7 +139,7 @@ const BotaoSair: React.FC = () => {
   );
 };
 
-const PedirLink: React.FC = () => {
+const PedirLink: React.FC<{ textos: Textos }> = ({ textos }) => {
   const [email, setEmail] = useState("");
   const [erro, setErro] = useState<string | null>(null);
   const [enviadoPara, setEnviadoPara] = useState<string | null>(null);
@@ -168,10 +175,9 @@ const PedirLink: React.FC = () => {
       <Card className="border-zinc-800 bg-zinc-950/80">
         <CardContent className="space-y-4 p-6">
           <div>
-            <CardTitle className="text-xl text-white">Entrar para fazer o check-in</CardTitle>
+            <CardTitle className="text-xl text-white">{textos.titulo}</CardTitle>
             <CardDescription className="mt-1 text-xs text-zinc-400">
-              Use o e-mail do seu cadastro na academia (ou o do responsável, para alunos menores). Mandamos um link de
-              acesso: abra no mesmo aparelho e o check-in continua daqui.
+              Use o e-mail do seu cadastro na academia (ou o do responsável, para alunos menores). {textos.explicacao}
             </CardDescription>
           </div>
           {enviadoPara ? (
