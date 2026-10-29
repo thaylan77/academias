@@ -2,15 +2,18 @@ name: Banco
 
 on: [pull_request, push]
 
+# Imagem e actions em versão exata: a troca não cai sozinha no meio de um PR.
+# As actions vão pelo sha do commit da tag (a tag pode ser movida; o sha, não).
+
 jobs:
   testes:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
       # Versão fixa: a saída de `gen types` muda entre versões da CLI.
       # Os agentes usam a mesma (`npx supabase@2.119.0`, ver AGENTS.md).
-      - uses: supabase/setup-cli@v1
+      - uses: supabase/setup-cli@afb1b15109756ea5cf9d8985a359d9095235ca2b # v2.1.2
         with:
           version: 2.119.0
 
@@ -19,7 +22,7 @@ jobs:
       - name: Gera os tipos a partir do banco local
         run: supabase gen types typescript --local > "$RUNNER_TEMP/database.ts"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: database-types
           path: ${{ runner.temp }}/database.ts
@@ -38,11 +41,11 @@ jobs:
   # a mesma dos agentes, lida do .nvmrc (o "engines" do package.json repete
   # o número); as dependências vêm do package-lock.json (npm ci).
   front:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version-file: .nvmrc
           cache: npm
