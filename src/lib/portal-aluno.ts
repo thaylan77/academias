@@ -35,6 +35,13 @@ export interface MinhaGraduacao {
   } | null;
 }
 
+export interface MinhaPresenca {
+  id: string;
+  data: string; // AAAA-MM-DD, dia da academia
+  turma: string;
+  origem: "qrcode" | "recepcao" | "professor";
+}
+
 /** Cadastros ligados ao login da sessão, em ordem de nome. Sem sessão, lista vazia. */
 export async function meusAlunos(): Promise<MeuAluno[]> {
   if (!supabase) return [];
@@ -107,4 +114,44 @@ export async function minhaGraduacao(aluno: Pick<MeuAluno, "id" | "academia_id">
       };
     })
     .sort((a, b) => a.modalidade.localeCompare(b.modalidade, "pt-BR"));
+}
+
+export const PRESENCAS_POR_PAGINA = 30;
+
+/**
+ * Presenças do aluno, da mais recente para a mais antiga, a partir de
+ * `inicio`. `temMais` diz se há outra página.
+ */
+export async function minhasPresencas(
+  aluno: Pick<MeuAluno, "id" | "academia_id">,
+  inicio = 0
+): Promise<{ itens: MinhaPresenca[]; temMais: boolean }> {
+  if (!supabase) return { itens: [], temMais: false };
+  const [presencas, turmas] = await Promise.all([
+    supabase
+      .from("presencas")
+      .select("id, data, turma_id, origem")
+      .eq("academia_id", aluno.academia_id)
+      .eq("aluno_id", aluno.id)
+      .order("data", { ascending: false })
+      .order("checkin_em", { ascending: false })
+      .order("id")
+      // Uma linha a mais só para saber se há outra página.
+      .range(inicio, inicio + PRESENCAS_POR_PAGINA),
+    supabase.from("turmas").select("id, nome").eq("academia_id", aluno.academia_id),
+  ]);
+  if (presencas.error) throw presencas.error;
+  if (turmas.error) throw turmas.error;
+
+  const nome = new Map((turmas.data ?? []).map((t) => [t.id, t.nome]));
+  const linhas = presencas.data ?? [];
+  return {
+    itens: linhas.slice(0, PRESENCAS_POR_PAGINA).map((p) => ({
+      id: p.id,
+      data: p.data,
+      turma: nome.get(p.turma_id) ?? "Turma",
+      origem: p.origem as MinhaPresenca["origem"],
+    })),
+    temMais: linhas.length > PRESENCAS_POR_PAGINA,
+  };
 }

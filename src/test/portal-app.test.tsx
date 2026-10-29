@@ -3,7 +3,7 @@ import { act, render, screen, fireEvent } from "@testing-library/react";
 
 // Com servidor (o cliente é um objeto qualquer); as leituras são trocadas.
 vi.mock("../lib/supabase", () => ({ supabase: {} }));
-vi.mock("../lib/portal-aluno", () => ({ meusAlunos: vi.fn(), minhaGraduacao: vi.fn() }));
+vi.mock("../lib/portal-aluno", () => ({ meusAlunos: vi.fn(), minhaGraduacao: vi.fn(), minhasPresencas: vi.fn() }));
 
 import * as dados from "../lib/portal-aluno";
 import { PortalConteudo } from "../pages/portal/portal-app";
@@ -20,7 +20,8 @@ const azul = {
 
 describe("Portal do aluno: tela", () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    vi.resetAllMocks();
+    m.minhasPresencas.mockResolvedValue({ itens: [], temMais: false });
   });
 
   it("um cadastro: sem seletor, mostra faixa, grau, data e progresso", async () => {
@@ -107,6 +108,95 @@ describe("Portal do aluno: tela", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("Não foi possível carregar seus cadastros");
     fireEvent.click(screen.getByRole("button", { name: "Tentar de novo" }));
     expect(await screen.findByText("Azul, grau 2")).toBeInTheDocument();
+  });
+
+  it("presenças: data, turma e como foi registrada", async () => {
+    m.meusAlunos.mockResolvedValue([ana]);
+    m.minhaGraduacao.mockResolvedValue([]);
+    m.minhasPresencas.mockResolvedValue({
+      itens: [
+        { id: "p2", data: "2026-10-28", turma: "Adulto Noite", origem: "qrcode" },
+        { id: "p1", data: "2026-10-21", turma: "Adulto Noite", origem: "recepcao" },
+      ],
+      temMais: false,
+    });
+    render(<PortalConteudo />);
+    const lista = await screen.findByRole("list", { name: "Presenças" });
+    expect(lista).toHaveTextContent("28/10/2026 · Adulto Noite");
+    expect(lista).toHaveTextContent("check-in pelo QR");
+    expect(lista).toHaveTextContent("21/10/2026 · Adulto Noite");
+    expect(lista).toHaveTextContent("registrada pela recepção");
+    expect(screen.queryByRole("button", { name: "Mostrar mais" })).not.toBeInTheDocument();
+    expect(m.minhasPresencas).toHaveBeenCalledWith({ id: "a1", academia_id: "acad-a" });
+  });
+
+  it("presenças: sem nenhuma, avisa", async () => {
+    m.meusAlunos.mockResolvedValue([ana]);
+    m.minhaGraduacao.mockResolvedValue([]);
+    render(<PortalConteudo />);
+    expect(await screen.findByText("Nenhuma presença registrada ainda.")).toBeInTheDocument();
+  });
+
+  it("presenças: 'Mostrar mais' traz a próxima página uma vez só, sem repetir a da borda", async () => {
+    m.meusAlunos.mockResolvedValue([ana]);
+    m.minhaGraduacao.mockResolvedValue([]);
+    let soltar: (v: unknown) => void = () => {};
+    m.minhasPresencas
+      .mockResolvedValueOnce({ itens: [{ id: "p3", data: "2026-10-28", turma: "T", origem: "qrcode" }], temMais: true })
+      .mockReturnValueOnce(new Promise((r) => (soltar = r)));
+    render(<PortalConteudo />);
+    const botao = await screen.findByRole("button", { name: "Mostrar mais" });
+    fireEvent.click(botao);
+    fireEvent.click(botao);
+    await act(async () => soltar({
+      itens: [{ id: "p3", data: "2026-10-28", turma: "T", origem: "qrcode" }, { id: "p2", data: "2026-10-21", turma: "T", origem: "professor" }],
+      temMais: false,
+    }));
+    expect(m.minhasPresencas).toHaveBeenCalledTimes(2);
+    expect(m.minhasPresencas).toHaveBeenLastCalledWith({ id: "a1", academia_id: "acad-a" }, 1);
+    expect(screen.getAllByRole("listitem")).toHaveLength(2);
+    expect(screen.getByText("registrada pelo professor")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Mostrar mais" })).not.toBeInTheDocument();
+  });
+
+  it("presenças: falha ao trazer mais mantém a lista e deixa tentar de novo", async () => {
+    m.meusAlunos.mockResolvedValue([ana]);
+    m.minhaGraduacao.mockResolvedValue([]);
+    m.minhasPresencas
+      .mockResolvedValueOnce({ itens: [{ id: "p3", data: "2026-10-28", turma: "T", origem: "qrcode" }], temMais: true })
+      .mockRejectedValueOnce(new Error("rede"));
+    render(<PortalConteudo />);
+    fireEvent.click(await screen.findByRole("button", { name: "Mostrar mais" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Não foi possível carregar mais presenças");
+    expect(screen.getByText("28/10/2026 · T")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Mostrar mais" })).toBeEnabled();
+  });
+
+  it("presenças: falha na primeira página, aviso e 'Tentar de novo' carrega", async () => {
+    m.meusAlunos.mockResolvedValue([ana]);
+    m.minhaGraduacao.mockResolvedValue([]);
+    m.minhasPresencas
+      .mockRejectedValueOnce(new Error("rede"))
+      .mockResolvedValueOnce({ itens: [{ id: "p1", data: "2026-10-28", turma: "T", origem: "qrcode" }], temMais: false });
+    render(<PortalConteudo />);
+    expect(await screen.findByRole("alert")).toHaveTextContent("Não foi possível carregar as presenças");
+    fireEvent.click(screen.getByRole("button", { name: "Tentar de novo" }));
+    expect(await screen.findByText("28/10/2026 · T")).toBeInTheDocument();
+  });
+
+  it("presenças: ao trocar de aluno, a resposta atrasada do anterior é descartada", async () => {
+    m.meusAlunos.mockResolvedValue([ana, beto]);
+    m.minhaGraduacao.mockResolvedValue([]);
+    let soltarAna: (v: unknown) => void = () => {};
+    m.minhasPresencas.mockImplementation((a: { id: string }) =>
+      a.id === "a1"
+        ? new Promise((r) => (soltarAna = r))
+        : Promise.resolve({ itens: [{ id: "pb", data: "2026-10-20", turma: "Judô", origem: "professor" }], temMais: false }));
+    render(<PortalConteudo />);
+    fireEvent.change(await screen.findByLabelText("Aluno"), { target: { value: "b1" } });
+    expect(await screen.findByText("20/10/2026 · Judô")).toBeInTheDocument();
+    await act(async () => soltarAna({ itens: [{ id: "pa", data: "2026-10-28", turma: "Adulto", origem: "qrcode" }], temMais: false }));
+    expect(screen.queryByText("28/10/2026 · Adulto")).not.toBeInTheDocument();
   });
 
   it("falha na graduação: aviso e 'Tentar de novo' carrega", async () => {

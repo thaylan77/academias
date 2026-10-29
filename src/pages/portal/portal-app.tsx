@@ -1,7 +1,14 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { Shield } from "lucide-react";
 import { supabase } from "../../lib/supabase";
-import { MeuAluno, MinhaGraduacao, meusAlunos, minhaGraduacao } from "../../lib/portal-aluno";
+import {
+  MeuAluno,
+  MinhaGraduacao,
+  MinhaPresenca,
+  meusAlunos,
+  minhaGraduacao,
+  minhasPresencas,
+} from "../../lib/portal-aluno";
 import { AcessoDoAluno } from "../checkin/acesso-do-aluno";
 import { Label } from "../../components/ui/label";
 import { Button } from "../../components/ui/button";
@@ -13,7 +20,7 @@ const dataBr = (d: string) => d.slice(0, 10).split("-").reverse().join("/");
 
 const TEXTOS = {
   titulo: "Entrar no portal do aluno",
-  explicacao: "Mandamos um link de acesso: abra no mesmo aparelho para ver a graduação.",
+  explicacao: "Mandamos um link de acesso: abra no mesmo aparelho para ver a graduação e as presenças.",
 };
 
 /**
@@ -108,7 +115,100 @@ export const PortalConteudo: React.FC = () => {
         <p className="text-xs text-zinc-400">Este cadastro não está ativo na academia.</p>
       )}
       <Graduacao key={aluno.id} aluno={aluno} />
+      <Presencas key={`presencas-${aluno.id}`} aluno={aluno} />
     </div>
+  );
+};
+
+const ORIGEM: Record<MinhaPresenca["origem"], string> = {
+  qrcode: "check-in pelo QR",
+  recepcao: "registrada pela recepção",
+  professor: "registrada pelo professor",
+};
+
+type Historico =
+  | { fase: "carregando" }
+  | { fase: "erro" }
+  | { fase: "pronta"; itens: MinhaPresenca[]; temMais: boolean; maisFalhou: boolean };
+
+const Presencas: React.FC<{ aluno: MeuAluno }> = ({ aluno }) => {
+  const [historico, setHistorico] = useState<Historico>({ fase: "carregando" });
+  const [tentativa, setTentativa] = useState(0);
+  const [buscandoMais, setBuscandoMais] = useState(false);
+  // Trava síncrona contra clique duplo em "Mostrar mais".
+  const emAndamento = useRef(false);
+  // Cada carga do início abre uma geração; resposta de geração antiga (inclusive
+  // de "Mostrar mais") é descartada.
+  const geracao = useRef(0);
+  const { id, academia_id } = aluno;
+
+  useEffect(() => {
+    const minha = ++geracao.current;
+    setHistorico({ fase: "carregando" });
+    minhasPresencas({ id, academia_id })
+      .then((r) => geracao.current === minha && setHistorico({ fase: "pronta", ...r, maisFalhou: false }))
+      .catch(() => geracao.current === minha && setHistorico({ fase: "erro" }));
+    return () => {
+      geracao.current += 1;
+    };
+  }, [id, academia_id, tentativa]);
+
+  const mostrarMais = async () => {
+    if (historico.fase !== "pronta" || emAndamento.current) return;
+    emAndamento.current = true;
+    setBuscandoMais(true);
+    const minha = geracao.current;
+    const atuais = historico.itens;
+    try {
+      const r = await minhasPresencas({ id, academia_id }, atuais.length);
+      if (geracao.current !== minha) return;
+      // Uma presença registrada no meio da leitura pode repetir a da borda.
+      const vistas = new Set(atuais.map((p) => p.id));
+      setHistorico({ fase: "pronta", itens: [...atuais, ...r.itens.filter((p) => !vistas.has(p.id))], temMais: r.temMais, maisFalhou: false });
+    } catch {
+      if (geracao.current === minha) setHistorico({ fase: "pronta", itens: atuais, temMais: true, maisFalhou: true });
+    } finally {
+      emAndamento.current = false;
+      setBuscandoMais(false);
+    }
+  };
+
+  return (
+    <section aria-labelledby="portal-presencas" className="space-y-3">
+      <h2 id="portal-presencas" className="text-base font-semibold text-white">Presenças</h2>
+      {historico.fase === "carregando" && <p role="status" className="text-sm text-zinc-500">Carregando as presenças...</p>}
+      {historico.fase === "erro" && (
+        <div>
+          <Alert variant="destructive" role="alert">
+            <AlertDescription>Não foi possível carregar as presenças.</AlertDescription>
+          </Alert>
+          <Button size="sm" variant="outline" className="mt-3" onClick={() => setTentativa((t) => t + 1)}>Tentar de novo</Button>
+        </div>
+      )}
+      {historico.fase === "pronta" &&
+        (historico.itens.length === 0 ? (
+          <p className="text-sm text-zinc-400">Nenhuma presença registrada ainda.</p>
+        ) : (
+          <>
+            <ul aria-label="Presenças" className="divide-y divide-zinc-800 rounded-xl border border-zinc-800">
+              {historico.itens.map((p) => (
+                <li key={p.id} className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5 px-4 py-2.5">
+                  <span className="text-sm text-white">{dataBr(p.data)} · {p.turma}</span>
+                  <span className="text-xs text-zinc-500">{ORIGEM[p.origem] ?? ""}</span>
+                </li>
+              ))}
+            </ul>
+            {historico.maisFalhou && (
+              <p role="alert" className="text-xs text-red-400">Não foi possível carregar mais presenças. Tente de novo.</p>
+            )}
+            {historico.temMais && (
+              <Button size="sm" variant="outline" disabled={buscandoMais} onClick={mostrarMais}>
+                {buscandoMais ? "Carregando..." : "Mostrar mais"}
+              </Button>
+            )}
+          </>
+        ))}
+    </section>
   );
 };
 
