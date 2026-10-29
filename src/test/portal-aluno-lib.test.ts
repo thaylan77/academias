@@ -9,7 +9,7 @@ function clienteFalso(respostas: Record<string, Resposta>, usuario: { id: string
   const chamadas: Chamada[] = [];
   const from = vi.fn((tabela: string) => {
     const q: Record<string, unknown> = {};
-    for (const metodo of ["select", "eq", "order"]) {
+    for (const metodo of ["select", "eq", "or", "order", "limit"]) {
       q[metodo] = (...args: unknown[]) => {
         chamadas.push({ tabela, metodo, args });
         return q;
@@ -107,6 +107,55 @@ describe("Portal do aluno: leituras", () => {
       },
       { modalidade_id: "mt", modalidade: "Muay Thai", faixa: "Branca", cor: null, grau: 0, graduado_em: "2025-01-10", progresso: null },
     ]);
+  });
+
+  it("presenças: filtra pela academia e pelo aluno, mais recente primeiro, com o nome da turma e uma linha a mais para saber se há outra página", async () => {
+    const linhas = Array.from({ length: 31 }, (_, i) => ({
+      id: "p" + i, data: "2026-10-01", checkin_em: "2026-10-01T22:00:00.123456+00:00", turma_id: i === 0 ? "t-sumiu" : "t1", origem: "qrcode",
+    }));
+    const cliente = clienteFalso({
+      presencas: { data: linhas, error: null },
+      turmas: { data: [{ id: "t1", nome: "Adulto Noite" }], error: null },
+    });
+    const lib = await carregarComCliente(cliente);
+    const r = await lib.minhasPresencas({ id: "a1", academia_id: "acad-a" });
+
+    expect(filtros(cliente.chamadas, "presencas")).toEqual([["academia_id", "acad-a"], ["aluno_id", "a1"]]);
+    expect(filtros(cliente.chamadas, "turmas")).toEqual([["academia_id", "acad-a"]]);
+    const de = (metodo: string) => cliente.chamadas.filter((c) => c.tabela === "presencas" && c.metodo === metodo).map((c) => c.args);
+    expect(de("order")).toEqual([["data", { ascending: false }], ["checkin_em", { ascending: false }], ["id", { ascending: false }]]);
+    expect(de("limit")).toEqual([[31]]);
+    expect(de("or")).toEqual([]);
+    expect(r.temMais).toBe(true);
+    expect(r.itens).toHaveLength(30);
+    expect(r.itens[0]).toEqual({ id: "p0", data: "2026-10-01", checkin_em: "2026-10-01T22:00:00.123456+00:00", turma: "Turma", origem: "qrcode" });
+    expect(r.itens[1].turma).toBe("Adulto Noite");
+  });
+
+  it("presenças: a página seguinte começa depois da última lida (cursor por data, check-in e id, não por posição)", async () => {
+    const cliente = clienteFalso({});
+    const lib = await carregarComCliente(cliente);
+    await lib.minhasPresencas(
+      { id: "a1", academia_id: "acad-a" },
+      { id: "p9", data: "2026-10-21", checkin_em: "2026-10-21T22:05:00.5+00:00" }
+    );
+    const or = cliente.chamadas.filter((c) => c.tabela === "presencas" && c.metodo === "or").map((c) => c.args);
+    expect(or).toEqual([[
+      'data.lt.2026-10-21,and(data.eq.2026-10-21,checkin_em.lt."2026-10-21T22:05:00.5+00:00"),' +
+        'and(data.eq.2026-10-21,checkin_em.eq."2026-10-21T22:05:00.5+00:00",id.lt.p9)',
+    ]]);
+    // O cursor soma aos filtros de academia e aluno, nunca os troca.
+    expect(filtros(cliente.chamadas, "presencas")).toEqual([["academia_id", "acad-a"], ["aluno_id", "a1"]]);
+  });
+
+  it("presenças: última página sem linha a mais; erro de qualquer leitura sobe", async () => {
+    const ultima = clienteFalso({ presencas: { data: [{ id: "p1", data: "2026-10-01", turma_id: "t1", origem: "recepcao" }], error: null } });
+    expect((await (await carregarComCliente(ultima)).minhasPresencas({ id: "a1", academia_id: "acad-a" })).temMais).toBe(false);
+    for (const tabela of ["presencas", "turmas"]) {
+      const cliente = clienteFalso({ [tabela]: { data: null, error: { message: "falhou " + tabela } } });
+      await expect((await carregarComCliente(cliente)).minhasPresencas({ id: "a1", academia_id: "acad-a" }))
+        .rejects.toEqual({ message: "falhou " + tabela });
+    }
   });
 
   it.each(["vw_graduacao_atual", "vw_progresso_graduacao", "modalidades"])("graduação: erro em %s sobe", async (tabela) => {
