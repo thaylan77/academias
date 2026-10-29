@@ -49,6 +49,19 @@ describe("Carregamento sob demanda das telas", () => {
     expect(carregados.has("qrcode.react")).toBe(false);
   });
 
+  it("/portal abre o portal do aluno, sem bibliotecas de QR nem telas públicas", async () => {
+    abrir("/portal");
+    const { App } = await import("../App");
+    render(<App />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Portal do aluno")).toBeInTheDocument();
+    });
+    expect(screen.queryByText(/Ficha de Matrícula|Matrícula Online/i)).not.toBeInTheDocument();
+    expect(carregados.has("html5-qrcode")).toBe(false);
+    expect(carregados.has("qrcode.react")).toBe(false);
+  });
+
   it("sub-rotas do painel também abrem o painel; slug que só começa com 'painel' é público", async () => {
     abrir("/painel/honor-demo-a/turmas");
     let { App } = await import("../App");
