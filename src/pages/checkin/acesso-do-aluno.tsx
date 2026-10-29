@@ -37,6 +37,10 @@ const Portao: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [estado, setEstado] = useState<Estado>({ fase: "carregando" });
   // O último e-mail já ligado: o aviso de login de outra aba não liga de novo.
   const ligado = useRef<string | null>(null);
+  // Cada tentativa de vínculo tem uma geração; sair ou trocar de login abre
+  // outra, e a resposta de uma tentativa antiga (mesmo do mesmo e-mail, depois
+  // de sair e entrar de novo) é descartada.
+  const geracao = useRef(0);
   const religar = useRef<(email: string) => void>(() => {});
 
   useEffect(() => {
@@ -44,15 +48,17 @@ const Portao: React.FC<{ children: React.ReactNode }> = ({ children }) => {
     const ligar = async (email: string | null) => {
       if (!vale) return;
       if (!email) {
+        geracao.current += 1;
         ligado.current = null;
         setEstado({ fase: "sem_login" });
         return;
       }
       if (ligado.current === email) return;
       ligado.current = email;
+      const minha = ++geracao.current;
       setEstado({ fase: "ligando", email });
       const res = await vincularCadastro();
-      if (!vale || ligado.current !== email) return;
+      if (!vale || geracao.current !== minha) return;
       if (res.sucesso) {
         setEstado({ fase: "pronto", email });
       } else {

@@ -127,6 +127,39 @@ describe("Portal do aluno: portão do check-in", () => {
     expect(m.vincularCadastro).toHaveBeenCalledTimes(2);
   });
 
+  it("saiu e entrou com o mesmo e-mail durante o vínculo: o sucesso antigo não libera o check-in", async () => {
+    m.emailDaSessao.mockResolvedValue("ana@x.test");
+    const soltar: Array<(r: unknown) => void> = [];
+    m.vincularCadastro.mockImplementation(() => new Promise((r) => soltar.push(r)));
+    montar();
+    await screen.findByText("Ligando seu cadastro...");
+    await act(async () => avisarLogin(null));
+    await act(async () => avisarLogin("ana@x.test"));
+    expect(m.vincularCadastro).toHaveBeenCalledTimes(2);
+    await act(async () => soltar[0]({ sucesso: true, ligados: 1 }));
+    expect(screen.queryByText("conteúdo do check-in")).not.toBeInTheDocument();
+    expect(screen.getByText("Ligando seu cadastro...")).toBeInTheDocument();
+    await act(async () => soltar[1]({ sucesso: true, ligados: 0 }));
+    expect(await screen.findByText("conteúdo do check-in")).toBeInTheDocument();
+  });
+
+  it("saiu e entrou com o mesmo e-mail durante o vínculo: a falha antiga não derruba o vínculo novo", async () => {
+    m.emailDaSessao.mockResolvedValue("ana@x.test");
+    const soltar: Array<(r: unknown) => void> = [];
+    m.vincularCadastro.mockImplementation(() => new Promise((r) => soltar.push(r)));
+    montar();
+    await screen.findByText("Ligando seu cadastro...");
+    await act(async () => avisarLogin(null));
+    await act(async () => avisarLogin("ana@x.test"));
+    await act(async () => soltar[0]({ sucesso: false, mensagem: "Não foi possível ligar seu cadastro agora." }));
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    await act(async () => soltar[1]({ sucesso: true, ligados: 1 }));
+    expect(await screen.findByText("conteúdo do check-in")).toBeInTheDocument();
+    // E o aviso seguinte do mesmo login não liga de novo.
+    await act(async () => avisarLogin("ana@x.test"));
+    expect(m.vincularCadastro).toHaveBeenCalledTimes(2);
+  });
+
   it("sessão inicial falha depois que o aviso de login já trouxe alguém: não volta ao pedido de link", async () => {
     let falhar: (e: unknown) => void = () => {};
     m.emailDaSessao.mockReturnValue(new Promise((_, rej) => (falhar = rej)));
