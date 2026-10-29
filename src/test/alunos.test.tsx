@@ -17,7 +17,7 @@ function ficha(situacao: lib.SituacaoAluno = "ativo"): lib.FichaDoAluno {
     aluno: {
       id: ALUNO, nome: situacao === "anonimizado" ? "Aluno anonimizado" : "Ana Souza",
       cpf: situacao === "anonimizado" ? null : "52998224725", data_nascimento: null, telefone: "5585999991234",
-      email: null, responsavel_nome: null, responsavel_cpf: null, responsavel_telefone: null,
+      email: null, responsavel_nome: null, responsavel_cpf: null, responsavel_telefone: null, responsavel_email: null,
       contato_emergencia: null, observacoes_medicas: null,
       status: situacao === "anonimizado" ? "inativo" : "ativo", situacao,
     },
