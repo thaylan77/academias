@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { act, render, screen, fireEvent } from "@testing-library/react";
+import { act, render, screen, fireEvent, waitFor } from "@testing-library/react";
 
 // Com servidor (o cliente é um objeto qualquer); as leituras são trocadas.
 vi.mock("../lib/supabase", () => ({ supabase: {} }));
@@ -157,6 +157,24 @@ describe("Portal do aluno: tela", () => {
     expect(screen.getAllByRole("listitem")).toHaveLength(2);
     expect(screen.getByText("registrada pelo professor")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Mostrar mais" })).not.toBeInTheDocument();
+  });
+
+  it("presenças: página só de repetidas (entraram presenças novas no topo) ainda avança o início da próxima", async () => {
+    m.meusAlunos.mockResolvedValue([ana]);
+    m.minhaGraduacao.mockResolvedValue([]);
+    const p = (id: string) => ({ id, data: "2026-10-01", turma: "T", origem: "qrcode" });
+    m.minhasPresencas
+      .mockResolvedValueOnce({ itens: [p("p2"), p("p1")], temMais: true })
+      .mockResolvedValueOnce({ itens: [p("p2"), p("p1")], temMais: true })
+      .mockResolvedValueOnce({ itens: [p("p0")], temMais: false });
+    render(<PortalConteudo />);
+    fireEvent.click(await screen.findByRole("button", { name: "Mostrar mais" }));
+    await waitFor(() => expect(m.minhasPresencas).toHaveBeenCalledTimes(2));
+    expect(m.minhasPresencas).toHaveBeenLastCalledWith({ id: "a1", academia_id: "acad-a" }, 2);
+    fireEvent.click(await screen.findByRole("button", { name: "Mostrar mais" }));
+    await waitFor(() => expect(m.minhasPresencas).toHaveBeenCalledTimes(3));
+    expect(m.minhasPresencas).toHaveBeenLastCalledWith({ id: "a1", academia_id: "acad-a" }, 4);
+    await waitFor(() => expect(screen.getAllByRole("listitem")).toHaveLength(3));
   });
 
   it("presenças: falha ao trazer mais mantém a lista e deixa tentar de novo", async () => {
