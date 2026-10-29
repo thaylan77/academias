@@ -202,6 +202,13 @@ begin
      and a.status = 'ativo';
   get diagnostics v_qtd = row_count;
 
+  -- Mesma trava do gatilho alunos_tira_papel_sem_aluno: um desvínculo
+  -- concorrente espera este commit (e vê os cadastros ligados agora) ou
+  -- termina antes, e o insert abaixo recria o papel.
+  perform 1 from public.membros_academia m
+   where m.user_id = auth.uid() and m.papel = 'aluno'
+     for update;
+
   insert into public.membros_academia (academia_id, user_id, papel)
   select distinct a.academia_id, auth.uid(), 'aluno'
   from public.alunos a
@@ -247,6 +254,11 @@ create trigger alunos_desfaz_vinculo_ao_trocar_email
   for each row execute function public.alunos_desfaz_vinculo_ao_trocar_email();
 
 -- O login que perdeu o último aluno da academia perde o papel aluno nela.
+-- Concorrência (revisão do Codex no PR #73): dois desvínculos dos últimos
+-- alunos do mesmo login, cada um contando com o outro ainda ligado, deixariam
+-- o papel para trás. A linha do papel é travada antes da contagem; quem chega
+-- depois espera o commit do outro e conta de novo (em read committed, cada
+-- comando vê o que já foi confirmado).
 create or replace function public.alunos_tira_papel_sem_aluno()
 returns trigger
 language plpgsql
@@ -255,6 +267,12 @@ set search_path = ''
 as $$
 begin
   if old.user_id is not null and new.user_id is distinct from old.user_id then
+    perform 1 from public.membros_academia m
+     where m.academia_id = old.academia_id
+       and m.user_id = old.user_id
+       and m.papel = 'aluno'
+       for update;
+
     delete from public.membros_academia m
      where m.academia_id = old.academia_id
        and m.user_id = old.user_id
