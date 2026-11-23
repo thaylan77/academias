@@ -125,7 +125,7 @@ nas `*_interna`.
 | `cancelar_convite(p_convite_id)` | dono, admin | Ver abaixo. |
 | `meus_convites()` | logado | Convites pendentes e não vencidos para o e-mail confirmado do login, com o nome da academia, o papel e a validade. Com e-mail não confirmado, devolve a lista vazia. |
 | `aceitar_convite(p_convite_id)` | logado | Ver abaixo. |
-| `recusar_convite(p_convite_id)` | logado | Mesmos passos 1 a 4 do aceite. Marca `recusado`, com `encerrado_por` e `encerrado_em`. |
+| `recusar_convite(p_convite_id)` | logado | Passos 1, 3, 4 e 6 do aceite (e-mail confirmado, travas, convite válido, academia ativa). Não exige a senha definida. Marca `recusado`, com `encerrado_por` e `encerrado_em`. |
 
 O front **não cria convites**: não existe uma RPC de criação para
 `authenticated`. A Edge Function confere o JWT e chama
