@@ -5,7 +5,10 @@
 --   C. dois donos saindo (delete) ao mesmo tempo: sobra um;
 --   D. dois donos se desativando (update) ao mesmo tempo: sobra um;
 --   E. o dono desativa o admin enquanto o convidado dele aceita: o aceite
---      espera a revogação e é recusado.
+--      espera a revogação e é recusado;
+--   F. o mesmo, trocando o titular do vínculo de admin (user_id);
+--   G. o e-mail do convidado muda no Auth enquanto o aceite espera a trava:
+--      o aceite relê o e-mail e é recusado.
 -- A espera é provada pelo pid: s2 está bloqueada e s1 está entre os que a
 -- bloqueiam. As fixtures são gravadas e confirmadas por uma conexão própria,
 -- apagadas antes (se uma execução anterior parou no meio) e depois, pela
@@ -13,7 +16,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 create extension if not exists dblink with schema extensions;
-select plan(24);
+select plan(34);
 
 create function pg_temp.conexao(p_nome text) returns text language sql as $$
   select format('host=%s port=%s dbname=%s user=postgres password=postgres application_name=%s',
@@ -94,6 +97,8 @@ begin
       'e7d00000-0000-4000-8000-0000000000a1', 'e7d00000-0000-4000-8000-0000000000a2',
       'e7d00000-0000-4000-8000-0000000000b1', 'e7d00000-0000-4000-8000-0000000000b2',
       'e7d00000-0000-4000-8000-0000000000b3', 'e7d00000-0000-4000-8000-0000000000d3',
+      'e7d00000-0000-4000-8000-0000000000b4', 'e7d00000-0000-4000-8000-0000000000d4',
+      'e7d00000-0000-4000-8000-0000000000d5', 'e7d00000-0000-4000-8000-0000000000d6',
       'e7d00000-0000-4000-8000-0000000000d1', 'e7d00000-0000-4000-8000-0000000000d2');
   $f$);
 end
@@ -102,7 +107,8 @@ $$;
 -- ---------------------------------------------------------------------
 -- Fixtures confirmadas.
 --   K: donos a1 e a2; convite c1 (professor) para u1 e c3 (recepção) para u2.
---   L: donos b1 e b2 (cenário D), admin b3 e o convite c5 dele para u3 (E).
+--   L: donos b1 e b2 (cenário D); admin b3 e o convite c5 dele para u3 (E);
+--      admin b4 e o convite c6 dele para u4 (F); convite c7 de b2 para u6 (G).
 -- ---------------------------------------------------------------------
 select pg_temp.limpa();
 select extensions.dblink_exec('prep', $f$
@@ -114,7 +120,11 @@ select extensions.dblink_exec('prep', $f$
     ('e7d00000-0000-4000-8000-0000000000d1', 'u1@concorre.test',    now()),
     ('e7d00000-0000-4000-8000-0000000000d2', 'u2@concorre.test',    now()),
     ('e7d00000-0000-4000-8000-0000000000b3', 'admin3@concorre.test', now()),
-    ('e7d00000-0000-4000-8000-0000000000d3', 'u3@concorre.test',    now());
+    ('e7d00000-0000-4000-8000-0000000000d3', 'u3@concorre.test',    now()),
+    ('e7d00000-0000-4000-8000-0000000000b4', 'admin4@concorre.test', now()),
+    ('e7d00000-0000-4000-8000-0000000000d4', 'u4@concorre.test',    now()),
+    ('e7d00000-0000-4000-8000-0000000000d5', 'u5@concorre.test',    now()),
+    ('e7d00000-0000-4000-8000-0000000000d6', 'u6@concorre.test',    now());
   insert into public.academias (id, nome, slug, status) values
     ('e7d00000-0000-4000-8000-00000000000a', 'Concorre K', 'convite-concorre-k', 'ativa'),
     ('e7d00000-0000-4000-8000-00000000000b', 'Concorre L', 'convite-concorre-l', 'ativa');
@@ -123,14 +133,19 @@ select extensions.dblink_exec('prep', $f$
     ('e7d00000-0000-4000-8000-00000000000a', 'e7d00000-0000-4000-8000-0000000000a2', 'dono'),
     ('e7d00000-0000-4000-8000-00000000000b', 'e7d00000-0000-4000-8000-0000000000b1', 'dono'),
     ('e7d00000-0000-4000-8000-00000000000b', 'e7d00000-0000-4000-8000-0000000000b2', 'dono'),
-    ('e7d00000-0000-4000-8000-00000000000b', 'e7d00000-0000-4000-8000-0000000000b3', 'admin');
+    ('e7d00000-0000-4000-8000-00000000000b', 'e7d00000-0000-4000-8000-0000000000b3', 'admin'),
+    ('e7d00000-0000-4000-8000-00000000000b', 'e7d00000-0000-4000-8000-0000000000b4', 'admin');
   insert into public.convites_equipe (id, academia_id, email, papel, convidado_por, expira_em) values
     ('e7d00000-0000-4000-8000-0000000002c1', 'e7d00000-0000-4000-8000-00000000000a', 'u1@concorre.test', 'professor',
      'e7d00000-0000-4000-8000-0000000000a1', now() + interval '7 days'),
     ('e7d00000-0000-4000-8000-0000000002c3', 'e7d00000-0000-4000-8000-00000000000a', 'u2@concorre.test', 'recepcao',
      'e7d00000-0000-4000-8000-0000000000a1', now() + interval '7 days'),
     ('e7d00000-0000-4000-8000-0000000002c5', 'e7d00000-0000-4000-8000-00000000000b', 'u3@concorre.test', 'professor',
-     'e7d00000-0000-4000-8000-0000000000b3', now() + interval '7 days');
+     'e7d00000-0000-4000-8000-0000000000b3', now() + interval '7 days'),
+    ('e7d00000-0000-4000-8000-0000000002c6', 'e7d00000-0000-4000-8000-00000000000b', 'u4@concorre.test', 'professor',
+     'e7d00000-0000-4000-8000-0000000000b4', now() + interval '7 days'),
+    ('e7d00000-0000-4000-8000-0000000002c7', 'e7d00000-0000-4000-8000-00000000000b', 'u6@concorre.test', 'professor',
+     'e7d00000-0000-4000-8000-0000000000b2', now() + interval '7 days');
 $f$);
 
 -- ---------------------------------------------------------------------
@@ -226,6 +241,45 @@ select matches(pg_temp.resultado_s2(), 'HINT: +convite_invalido', 'E: depois da 
 select is((select count(*) from public.membros_academia
            where academia_id = 'e7d00000-0000-4000-8000-00000000000b' and user_id = 'e7d00000-0000-4000-8000-0000000000d3'),
   0::bigint, 'E: u3 não entrou na equipe');
+
+-- ---------------------------------------------------------------------
+-- F. b2 passa o vínculo de admin de b4 para u5 em s1 (sem confirmar); u4
+--    aceita em s2 o convite que b4 fez.
+-- ---------------------------------------------------------------------
+select pg_temp.como('s1', 'e7d00000-0000-4000-8000-0000000000b2');
+select pg_temp.como('s2', 'e7d00000-0000-4000-8000-0000000000d4');
+select ok(pg_temp.ninguem_esperando(), 'F: antes do envio, s2 não espera ninguém');
+select extensions.dblink_exec('s1', 'begin');
+select extensions.dblink_exec('s1', $$update public.membros_academia set user_id = 'e7d00000-0000-4000-8000-0000000000d5'
+  where academia_id = 'e7d00000-0000-4000-8000-00000000000b' and user_id = 'e7d00000-0000-4000-8000-0000000000b4'$$);
+select is(extensions.dblink_send_query('s2', $$select public.aceitar_convite('e7d00000-0000-4000-8000-0000000002c6')$$),
+  1, 'F: s2 envia o aceite');
+select ok(pg_temp.s2_espera_s1(), 'F: o aceite espera a troca de titular de s1');
+select extensions.dblink_exec('s1', 'commit');
+select matches(pg_temp.resultado_s2(), 'HINT: +convite_invalido', 'F: depois da troca, o aceite é recusado (convite_invalido)');
+select is((select count(*) from public.membros_academia
+           where academia_id = 'e7d00000-0000-4000-8000-00000000000b' and user_id = 'e7d00000-0000-4000-8000-0000000000d4'),
+  0::bigint, 'F: u4 não entrou na equipe');
+
+-- ---------------------------------------------------------------------
+-- G. s1 segura a academia L (conexão administrativa); u6 aceita em s2 e
+--    espera; enquanto isso, o e-mail de u6 muda no Auth.
+-- ---------------------------------------------------------------------
+select extensions.dblink_exec('s1', 'reset role');
+select extensions.dblink_exec('s1', $q$set request.jwt.claim.sub = ''; set request.jwt.claim.role = ''; set request.jwt.claims = ''$q$);
+select pg_temp.como('s2', 'e7d00000-0000-4000-8000-0000000000d6');
+select ok(pg_temp.ninguem_esperando(), 'G: antes do envio, s2 não espera ninguém');
+select extensions.dblink_exec('s1', 'begin');
+select extensions.dblink_exec('s1', $$update public.academias set updated_at = updated_at where id = 'e7d00000-0000-4000-8000-00000000000b'$$);
+select is(extensions.dblink_send_query('s2', $$select public.aceitar_convite('e7d00000-0000-4000-8000-0000000002c7')$$),
+  1, 'G: s2 envia o aceite');
+select ok(pg_temp.s2_espera_s1(), 'G: o aceite espera a trava da academia');
+select extensions.dblink_exec('prep', $$update auth.users set email = 'u6-novo@concorre.test' where id = 'e7d00000-0000-4000-8000-0000000000d6'$$);
+select extensions.dblink_exec('s1', 'commit');
+select matches(pg_temp.resultado_s2(), 'HINT: +convite_invalido', 'G: com o e-mail trocado, o aceite é recusado (convite_invalido)');
+select is((select count(*) from public.membros_academia
+           where academia_id = 'e7d00000-0000-4000-8000-00000000000b' and user_id = 'e7d00000-0000-4000-8000-0000000000d6'),
+  0::bigint, 'G: u6 não entrou na equipe');
 
 -- ---------------------------------------------------------------------
 -- Limpeza.

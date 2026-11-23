@@ -438,6 +438,22 @@ begin
   if v_academia is not null then
     perform 1 from public.academias a where a.id = v_academia for update;
     select c.* into v_conv from public.convites_equipe c where c.id = p_convite_id for update;
+    -- Trava a própria conta (uma troca de e-mail no Auth espera o aceite) e
+    -- relê e-mail e senha: podem ter mudado enquanto esperava as travas.
+    perform 1 from auth.users u where u.id = auth.uid() for share;
+    v_email := public.convite_email_do_login();
+    if v_email is null then
+      raise exception 'Confirme o seu e-mail antes de responder ao convite.'
+        using hint = 'email_nao_confirmado';
+    end if;
+    if p_exige_senha and exists (
+      select 1 from auth.users u
+      where u.id = auth.uid()
+        and coalesce(u.raw_app_meta_data ->> 'definir_senha', 'false') = 'true'
+    ) then
+      raise exception 'Defina a sua senha antes de aceitar o convite.'
+        using hint = 'senha_pendente';
+    end if;
   end if;
 
   if v_conv.id is null
@@ -583,10 +599,10 @@ grant execute on function public.equipe_da_academia(uuid) to authenticated;
 -- =====================================================================
 -- 7. ÚLTIMO DONO E REVOGAÇÃO
 -- =====================================================================
--- Quando um dono ou admin ativo perde poder (delete, desativação ou
--- rebaixamento), trava a linha da academia, a mesma que as funções de
--- convite travam: a revogação e o aceite de um convite feito por essa pessoa
--- se serializam.
+-- Quando um dono ou admin ativo perde poder (delete, desativação,
+-- rebaixamento ou troca do titular do vínculo), trava a linha da academia,
+-- a mesma que as funções de convite travam: a revogação e o aceite de um
+-- convite feito por essa pessoa se serializam.
 --
 -- Recusa o update ou delete que deixe a academia sem nenhum dono ativo.
 -- Passa:
@@ -614,12 +630,13 @@ as $$
 declare
   v_papel_req text := nullif(auth.role(), '');
 begin
-  -- Só importa quando um dono ou admin ativo perde poder: sai, é desativado
-  -- ou rebaixado (admin promovido a dono não perde nada).
+  -- Só importa quando um dono ou admin ativo perde poder: sai, é desativado,
+  -- é rebaixado ou o vínculo passa para outra pessoa (admin promovido a dono
+  -- não perde nada).
   if not old.ativo or old.papel not in ('dono', 'admin') then
     return coalesce(new, old);
   end if;
-  if tg_op = 'UPDATE' and new.ativo
+  if tg_op = 'UPDATE' and new.ativo and new.user_id = old.user_id
      and (new.papel = old.papel or (old.papel = 'admin' and new.papel = 'dono')) then
     return new;
   end if;
@@ -632,7 +649,7 @@ begin
   end if;
 
   if old.papel <> 'dono'
-     or (tg_op = 'UPDATE' and new.papel = 'dono' and new.ativo) then
+     or (tg_op = 'UPDATE' and new.papel = 'dono' and new.ativo and new.user_id = old.user_id) then
     return coalesce(new, old);
   end if;
 
