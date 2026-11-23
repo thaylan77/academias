@@ -30,10 +30,10 @@ create table public.convites_equipe (
                        check (status in ('pendente', 'aceito', 'cancelado', 'recusado')),
   convidado_por        uuid references auth.users (id) on delete set null,
   expira_em            timestamptz not null,
-  -- Envios de e-mail (C10): o último, e a janela de 24 horas com a contagem.
+  -- Envios de e-mail (C10): o último, e o horário de cada envio das últimas
+  -- 24 horas (os mais antigos saem a cada novo envio).
   ultimo_envio_em      timestamptz,
-  envios_janela_inicio timestamptz,
-  envios_na_janela     integer not null default 0 check (envios_na_janela >= 0),
+  envios_recentes      timestamptz[] not null default '{}',
   aceito_por           uuid references auth.users (id) on delete set null,
   aceito_em            timestamptz,
   encerrado_por        uuid references auth.users (id) on delete set null,
@@ -242,11 +242,12 @@ begin
     raise exception 'O convite acabou de ser enviado. Espere um minuto para reenviar.'
       using hint = 'convite_reenvio_cedo';
   end if;
-  if (select coalesce(sum(c.envios_na_janela), 0)
+  if (select count(*)
       from public.convites_equipe c
+      cross join lateral unnest(c.envios_recentes) as e(enviado_em)
       where c.academia_id = p_academia_id
         and c.email = v_email
-        and c.envios_janela_inicio > now() - interval '24 hours') >= 5 then
+        and e.enviado_em > now() - interval '24 hours') >= 5 then
     raise exception 'Este e-mail já recebeu 5 convites da academia nas últimas 24 horas.'
       using hint = 'limite_convites';
   end if;
@@ -271,19 +272,17 @@ begin
            expira_em = now() + interval '7 days',
            convidado_por = p_user_id,
            ultimo_envio_em = now(),
-           envios_janela_inicio = case
-             when c.envios_janela_inicio > now() - interval '24 hours' then c.envios_janela_inicio
-             else now() end,
-           envios_na_janela = case
-             when c.envios_janela_inicio > now() - interval '24 hours' then c.envios_na_janela + 1
-             else 1 end
+           envios_recentes = array(
+             select e from unnest(c.envios_recentes) as e
+             where e > now() - interval '24 hours'
+             order by e) || now()
      where c.id = v_pendente.id;
     v_id := v_pendente.id;
   else
     -- 8b. Convite novo.
     insert into public.convites_equipe (academia_id, email, papel, convidado_por, expira_em,
-                                        ultimo_envio_em, envios_janela_inicio, envios_na_janela)
-    values (p_academia_id, v_email, p_papel, p_user_id, now() + interval '7 days', now(), now(), 1)
+                                        ultimo_envio_em, envios_recentes)
+    values (p_academia_id, v_email, p_papel, p_user_id, now() + interval '7 days', now(), array[now()])
     returning id into v_id;
   end if;
 

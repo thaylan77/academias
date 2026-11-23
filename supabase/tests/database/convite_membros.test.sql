@@ -4,7 +4,7 @@
 -- Academias A e B (ativas) e S (suspensa).
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(72);
+select plan(73);
 
 -- ---------------------------------------------------------------------
 -- Auxiliares
@@ -142,9 +142,9 @@ insert into public.convites_equipe (id, academia_id, email, papel, convidado_por
 update public.academias set status = 'suspensa' where id = 'e7c00000-0000-4000-8000-00000000000c';
 
 -- 30 convites recentes em B, para o limite diário.
-insert into public.convites_equipe (academia_id, email, papel, convidado_por, expira_em, ultimo_envio_em, envios_janela_inicio, envios_na_janela)
+insert into public.convites_equipe (academia_id, email, papel, convidado_por, expira_em, ultimo_envio_em, envios_recentes)
 select 'e7c00000-0000-4000-8000-00000000000b', 'lote' || g || '@conv.test', 'professor',
-       'e7c00000-0000-4000-8000-0000000000b1', now() + interval '7 days', now() - interval '1 hour', now() - interval '1 hour', 1
+       'e7c00000-0000-4000-8000-0000000000b1', now() + interval '7 days', now() - interval '1 hour', array[now() - interval '1 hour']
 from generate_series(1, 30) g;
 
 -- Leitura de apoio, sem RLS: o convidado não lê convites_equipe nem a linha
@@ -243,11 +243,27 @@ select public.__como_servico();
 select is(public.__hint_de($$select public.__cc('e7c00000-0000-4000-8000-0000000000a1', 'e7c00000-0000-4000-8000-00000000000a', 'ciclo@conv.test', 'professor')$$),
   'convite_reenvio_cedo', 'C10: cancelar e recriar logo em seguida esbarra nos 60 segundos');
 reset role;
-update public.convites_equipe set ultimo_envio_em = now() - interval '2 minutes', envios_na_janela = 5 where email = 'ciclo@conv.test';
+-- O primeiro envio está quase saindo da janela e os outros quatro são de
+-- agora: a janela é móvel, e o sexto continua recusado.
+update public.convites_equipe
+   set ultimo_envio_em = now() - interval '7 minutes',
+       envios_recentes = array[now() - interval '23 hours 50 minutes', now() - interval '10 minutes',
+                               now() - interval '9 minutes', now() - interval '8 minutes', now() - interval '7 minutes']
+ where email = 'ciclo@conv.test';
 set local role service_role;
 select public.__como_servico();
 select is(public.__hint_de($$select public.__cc('e7c00000-0000-4000-8000-0000000000a1', 'e7c00000-0000-4000-8000-00000000000a', 'ciclo@conv.test', 'professor')$$),
   'limite_convites', 'C10: o 6º e-mail para o mesmo endereço em 24 horas é recusado');
+reset role;
+update public.convites_equipe
+   set ultimo_envio_em = now() - interval '3 minutes',
+       envios_recentes = array[now() - interval '25 hours', now() - interval '25 hours', now() - interval '25 hours',
+                               now() - interval '25 hours', now() - interval '3 minutes']
+ where email = 'ciclo@conv.test';
+set local role service_role;
+select public.__como_servico();
+select is(public.__cc('e7c00000-0000-4000-8000-0000000000a1', 'e7c00000-0000-4000-8000-00000000000a', 'ciclo@conv.test', 'professor') ->> 'conta',
+  'nenhuma', 'C10: envios com mais de 24 horas saem da conta');
 
 -- Convites usados mais adiante.
 select public.__cc('e7c00000-0000-4000-8000-0000000000a1', 'e7c00000-0000-4000-8000-00000000000a', 'senha@conv.test',    'professor');
