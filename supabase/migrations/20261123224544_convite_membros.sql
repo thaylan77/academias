@@ -581,8 +581,13 @@ revoke execute on function public.equipe_da_academia(uuid) from public, anon;
 grant execute on function public.equipe_da_academia(uuid) to authenticated;
 
 -- =====================================================================
--- 7. ÚLTIMO DONO
+-- 7. ÚLTIMO DONO E REVOGAÇÃO
 -- =====================================================================
+-- Quando um dono ou admin ativo perde poder (delete, desativação ou
+-- rebaixamento), trava a linha da academia, a mesma que as funções de
+-- convite travam: a revogação e o aceite de um convite feito por essa pessoa
+-- se serializam.
+--
 -- Recusa o update ou delete que deixe a academia sem nenhum dono ativo.
 -- Passa:
 --   * requisição com papel service_role (billing, Edge Functions);
@@ -609,21 +614,30 @@ as $$
 declare
   v_papel_req text := nullif(auth.role(), '');
 begin
-  -- Só importa quando a linha antiga é dono ativo e deixa de ser.
-  if old.papel <> 'dono' or not old.ativo then
+  -- Só importa quando um dono ou admin ativo perde poder: sai, é desativado
+  -- ou rebaixado (admin promovido a dono não perde nada).
+  if not old.ativo or old.papel not in ('dono', 'admin') then
     return coalesce(new, old);
   end if;
-  if tg_op = 'UPDATE' and new.papel = 'dono' and new.ativo then
+  if tg_op = 'UPDATE' and new.ativo
+     and (new.papel = old.papel or (old.papel = 'admin' and new.papel = 'dono')) then
     return new;
+  end if;
+
+  -- Trava a academia: a revogação espera o aceite em andamento, e o aceite
+  -- que vier depois já vê quem convidou sem o acesso.
+  perform 1 from public.academias a where a.id = old.academia_id for update;
+  if not found then
+    return coalesce(new, old);  -- academia sendo apagada (cascata)
+  end if;
+
+  if old.papel <> 'dono'
+     or (tg_op = 'UPDATE' and new.papel = 'dono' and new.ativo) then
+    return coalesce(new, old);
   end if;
 
   if v_papel_req = 'service_role'
      or (v_papel_req is null and session_user in ('postgres', 'supabase_admin')) then
-    return coalesce(new, old);
-  end if;
-
-  perform 1 from public.academias a where a.id = old.academia_id for update;
-  if not found then
     return coalesce(new, old);
   end if;
 

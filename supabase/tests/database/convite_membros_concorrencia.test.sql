@@ -3,7 +3,9 @@
 --   A. dois aceites do mesmo convite: um membro só;
 --   B. convidar o mesmo e-mail enquanto ele aceita outro convite: ja_membro;
 --   C. dois donos saindo (delete) ao mesmo tempo: sobra um;
---   D. dois donos se desativando (update) ao mesmo tempo: sobra um.
+--   D. dois donos se desativando (update) ao mesmo tempo: sobra um;
+--   E. o dono desativa o admin enquanto o convidado dele aceita: o aceite
+--      espera a revogação e é recusado.
 -- A espera é provada pelo pid: s2 está bloqueada e s1 está entre os que a
 -- bloqueiam. As fixtures são gravadas e confirmadas por uma conexão própria,
 -- apagadas antes (se uma execução anterior parou no meio) e depois, pela
@@ -11,7 +13,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 create extension if not exists dblink with schema extensions;
-select plan(19);
+select plan(24);
 
 create function pg_temp.conexao(p_nome text) returns text language sql as $$
   select format('host=%s port=%s dbname=%s user=postgres password=postgres application_name=%s',
@@ -91,6 +93,7 @@ begin
     delete from auth.users where id in (
       'e7d00000-0000-4000-8000-0000000000a1', 'e7d00000-0000-4000-8000-0000000000a2',
       'e7d00000-0000-4000-8000-0000000000b1', 'e7d00000-0000-4000-8000-0000000000b2',
+      'e7d00000-0000-4000-8000-0000000000b3', 'e7d00000-0000-4000-8000-0000000000d3',
       'e7d00000-0000-4000-8000-0000000000d1', 'e7d00000-0000-4000-8000-0000000000d2');
   $f$);
 end
@@ -99,7 +102,7 @@ $$;
 -- ---------------------------------------------------------------------
 -- Fixtures confirmadas.
 --   K: donos a1 e a2; convite c1 (professor) para u1 e c3 (recepção) para u2.
---   L: donos b1 e b2 (cenário D).
+--   L: donos b1 e b2 (cenário D), admin b3 e o convite c5 dele para u3 (E).
 -- ---------------------------------------------------------------------
 select pg_temp.limpa();
 select extensions.dblink_exec('prep', $f$
@@ -109,7 +112,9 @@ select extensions.dblink_exec('prep', $f$
     ('e7d00000-0000-4000-8000-0000000000b1', 'dono3@concorre.test', now()),
     ('e7d00000-0000-4000-8000-0000000000b2', 'dono4@concorre.test', now()),
     ('e7d00000-0000-4000-8000-0000000000d1', 'u1@concorre.test',    now()),
-    ('e7d00000-0000-4000-8000-0000000000d2', 'u2@concorre.test',    now());
+    ('e7d00000-0000-4000-8000-0000000000d2', 'u2@concorre.test',    now()),
+    ('e7d00000-0000-4000-8000-0000000000b3', 'admin3@concorre.test', now()),
+    ('e7d00000-0000-4000-8000-0000000000d3', 'u3@concorre.test',    now());
   insert into public.academias (id, nome, slug, status) values
     ('e7d00000-0000-4000-8000-00000000000a', 'Concorre K', 'convite-concorre-k', 'ativa'),
     ('e7d00000-0000-4000-8000-00000000000b', 'Concorre L', 'convite-concorre-l', 'ativa');
@@ -117,12 +122,15 @@ select extensions.dblink_exec('prep', $f$
     ('e7d00000-0000-4000-8000-00000000000a', 'e7d00000-0000-4000-8000-0000000000a1', 'dono'),
     ('e7d00000-0000-4000-8000-00000000000a', 'e7d00000-0000-4000-8000-0000000000a2', 'dono'),
     ('e7d00000-0000-4000-8000-00000000000b', 'e7d00000-0000-4000-8000-0000000000b1', 'dono'),
-    ('e7d00000-0000-4000-8000-00000000000b', 'e7d00000-0000-4000-8000-0000000000b2', 'dono');
+    ('e7d00000-0000-4000-8000-00000000000b', 'e7d00000-0000-4000-8000-0000000000b2', 'dono'),
+    ('e7d00000-0000-4000-8000-00000000000b', 'e7d00000-0000-4000-8000-0000000000b3', 'admin');
   insert into public.convites_equipe (id, academia_id, email, papel, convidado_por, expira_em) values
     ('e7d00000-0000-4000-8000-0000000002c1', 'e7d00000-0000-4000-8000-00000000000a', 'u1@concorre.test', 'professor',
      'e7d00000-0000-4000-8000-0000000000a1', now() + interval '7 days'),
     ('e7d00000-0000-4000-8000-0000000002c3', 'e7d00000-0000-4000-8000-00000000000a', 'u2@concorre.test', 'recepcao',
-     'e7d00000-0000-4000-8000-0000000000a1', now() + interval '7 days');
+     'e7d00000-0000-4000-8000-0000000000a1', now() + interval '7 days'),
+    ('e7d00000-0000-4000-8000-0000000002c5', 'e7d00000-0000-4000-8000-00000000000b', 'u3@concorre.test', 'professor',
+     'e7d00000-0000-4000-8000-0000000000b3', now() + interval '7 days');
 $f$);
 
 -- ---------------------------------------------------------------------
@@ -199,6 +207,25 @@ select is((select string_agg(a.slug || '=' || (select count(*) from public.membr
                                                 where m.academia_id = a.id and m.papel = 'dono' and m.ativo), ',' order by a.slug)
            from public.academias a where a.id in ('e7d00000-0000-4000-8000-00000000000a', 'e7d00000-0000-4000-8000-00000000000b')),
   'convite-concorre-k=1,convite-concorre-l=1', 'C e D: cada academia ficou com um dono ativo');
+
+-- ---------------------------------------------------------------------
+-- E. b2 (dono) desativa o admin b3 em s1 (sem confirmar); u3 aceita em s2 o
+--    convite que b3 fez.
+-- ---------------------------------------------------------------------
+select pg_temp.como('s1', 'e7d00000-0000-4000-8000-0000000000b2');
+select pg_temp.como('s2', 'e7d00000-0000-4000-8000-0000000000d3');
+select ok(pg_temp.ninguem_esperando(), 'E: antes do envio, s2 não espera ninguém');
+select extensions.dblink_exec('s1', 'begin');
+select extensions.dblink_exec('s1', $$update public.membros_academia set ativo = false
+  where academia_id = 'e7d00000-0000-4000-8000-00000000000b' and user_id = 'e7d00000-0000-4000-8000-0000000000b3'$$);
+select is(extensions.dblink_send_query('s2', $$select public.aceitar_convite('e7d00000-0000-4000-8000-0000000002c5')$$),
+  1, 'E: s2 envia o aceite');
+select ok(pg_temp.s2_espera_s1(), 'E: o aceite espera a revogação de s1');
+select extensions.dblink_exec('s1', 'commit');
+select matches(pg_temp.resultado_s2(), 'HINT: +convite_invalido', 'E: depois da revogação, o aceite é recusado (convite_invalido)');
+select is((select count(*) from public.membros_academia
+           where academia_id = 'e7d00000-0000-4000-8000-00000000000b' and user_id = 'e7d00000-0000-4000-8000-0000000000d3'),
+  0::bigint, 'E: u3 não entrou na equipe');
 
 -- ---------------------------------------------------------------------
 -- Limpeza.

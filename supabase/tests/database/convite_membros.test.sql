@@ -4,7 +4,7 @@
 -- Academias A e B (ativas) e S (suspensa).
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(73);
+select plan(76);
 
 -- ---------------------------------------------------------------------
 -- Auxiliares
@@ -264,6 +264,27 @@ set local role service_role;
 select public.__como_servico();
 select is(public.__cc('e7c00000-0000-4000-8000-0000000000a1', 'e7c00000-0000-4000-8000-00000000000a', 'ciclo@conv.test', 'professor') ->> 'conta',
   'nenhuma', 'C10: envios com mais de 24 horas saem da conta');
+
+-- O reenvio do mesmo pendente registra cada envio na janela.
+select public.__cc('e7c00000-0000-4000-8000-0000000000a1', 'e7c00000-0000-4000-8000-00000000000a', 'reenvio@conv.test', 'professor');
+reset role;
+update public.convites_equipe
+   set ultimo_envio_em = now() - interval '2 minutes',
+       envios_recentes = array[now() - interval '5 hours', now() - interval '4 hours',
+                               now() - interval '3 hours', now() - interval '2 minutes']
+ where email = 'reenvio@conv.test';
+set local role service_role;
+select public.__como_servico();
+select is((public.__cc('e7c00000-0000-4000-8000-0000000000a1', 'e7c00000-0000-4000-8000-00000000000a', 'reenvio@conv.test', 'admin') ->> 'convite_id')::uuid,
+  (public.__conv('e7c00000-0000-4000-8000-00000000000a', 'reenvio@conv.test')).id, 'C10: o quinto envio é o reenvio do mesmo pendente');
+select is(cardinality((public.__conv('e7c00000-0000-4000-8000-00000000000a', 'reenvio@conv.test')).envios_recentes),
+  5, 'C10: o reenvio registrou o envio (cinco na janela)');
+reset role;
+update public.convites_equipe set ultimo_envio_em = now() - interval '2 minutes' where email = 'reenvio@conv.test';
+set local role service_role;
+select public.__como_servico();
+select is(public.__hint_de($$select public.__cc('e7c00000-0000-4000-8000-0000000000a1', 'e7c00000-0000-4000-8000-00000000000a', 'reenvio@conv.test', 'admin')$$),
+  'limite_convites', 'C10: o sexto envio do mesmo pendente é recusado');
 
 -- Convites usados mais adiante.
 select public.__cc('e7c00000-0000-4000-8000-0000000000a1', 'e7c00000-0000-4000-8000-00000000000a', 'senha@conv.test',    'professor');
