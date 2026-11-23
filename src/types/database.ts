@@ -520,6 +520,9 @@ isOneToOne: false
 "academia_publica":
 { Args: { "p_slug": string }; Returns: Json
                            },
+"academia_tem_outro_dono":
+{ Args: { "p_academia_id": string,"p_user_id": string }; Returns: boolean
+                           },
 "aceitar_convite":
 { Args: { "p_convite_id": string }; Returns: string
                            },
