@@ -606,24 +606,30 @@ grant execute on function public.equipe_da_academia(uuid) to authenticated;
 -- 7. ÚLTIMO DONO E REVOGAÇÃO
 -- =====================================================================
 -- Outro dono ativo, com a conta do Auth existente e não apagada (exclusão
--- lógica também conta como apagada).
+-- lógica também conta como apagada). Trava as contas desses donos no Auth
+-- (for share): uma exclusão lógica em andamento é esperada, e a linha é
+-- reavaliada depois do commit dela. Assim, promover um admin cuja conta está
+-- sendo apagada não abre caminho para o dono atual sair.
 create or replace function public.academia_tem_outro_dono(p_academia_id uuid, p_user_id uuid)
 returns boolean
-language sql
-stable
+language plpgsql
+volatile
 security definer
 set search_path = ''
 as $$
-  select exists (
-    select 1
-    from public.membros_academia m
-    join auth.users u on u.id = m.user_id
-    where m.academia_id = p_academia_id
-      and m.papel = 'dono'
-      and m.ativo
-      and m.user_id <> p_user_id
-      and u.deleted_at is null
-  )
+begin
+  perform 1
+  from public.membros_academia m
+  join auth.users u on u.id = m.user_id
+  where m.academia_id = p_academia_id
+    and m.papel = 'dono'
+    and m.ativo
+    and m.user_id <> p_user_id
+    and u.deleted_at is null
+  order by u.id
+  for share of u;
+  return found;
+end
 $$;
 
 revoke execute on function public.academia_tem_outro_dono(uuid, uuid) from public, anon, authenticated;
