@@ -29,14 +29,10 @@ create function pg_temp.como(p_conn text, p_user text) returns void language plp
 begin
   perform extensions.dblink_exec(p_conn, 'reset role');
   if p_user = 'service_role' then
-    perform extensions.dblink_exec(p_conn, $q$select set_config('request.jwt.claim.sub', '', false),
-      set_config('request.jwt.claim.role', 'service_role', false),
-      set_config('request.jwt.claims', '{"role":"service_role"}', false)$q$);
+    perform extensions.dblink_exec(p_conn, $q$set request.jwt.claim.sub = ''; set request.jwt.claim.role = 'service_role'; set request.jwt.claims = '{"role":"service_role"}'$q$);
     perform extensions.dblink_exec(p_conn, 'set role service_role');
   else
-    perform extensions.dblink_exec(p_conn, format($q$select set_config('request.jwt.claim.sub', %L, false),
-      set_config('request.jwt.claim.role', 'authenticated', false),
-      set_config('request.jwt.claims', %L, false)$q$,
+    perform extensions.dblink_exec(p_conn, format($q$set request.jwt.claim.sub = %L; set request.jwt.claim.role = 'authenticated'; set request.jwt.claims = %L$q$,
       p_user, json_build_object('sub', p_user, 'role', 'authenticated')::text));
     perform extensions.dblink_exec(p_conn, 'set role authenticated');
   end if;
@@ -101,7 +97,7 @@ select ok(not exists (select 1 from pg_stat_activity
                       where application_name = 'teste_convite' and wait_event_type = 'Lock'),
   'A: antes do envio, ninguém espera');
 select extensions.dblink_exec('s1', 'begin');
-select extensions.dblink_exec('s1', $$select public.aceitar_convite('e7d00000-0000-4000-8000-0000000002c1')$$);
+select extensions.dblink_exec('s1', $q$do $d$ begin perform public.aceitar_convite('e7d00000-0000-4000-8000-0000000002c1'); end $d$$q$);
 select is(extensions.dblink_send_query('s2', $$select public.aceitar_convite('e7d00000-0000-4000-8000-0000000002c1')$$),
   1, 'A: s2 envia o segundo aceite');
 select ok(pg_temp.s2_esperando(), 'A: s2 espera o aceite aberto de s1');
@@ -118,7 +114,7 @@ select is((select count(*) from public.membros_academia
 select pg_temp.como('s1', 'e7d00000-0000-4000-8000-0000000000d2');
 select pg_temp.como('s2', 'service_role');
 select extensions.dblink_exec('s1', 'begin');
-select extensions.dblink_exec('s1', $$select public.aceitar_convite('e7d00000-0000-4000-8000-0000000002c3')$$);
+select extensions.dblink_exec('s1', $q$do $d$ begin perform public.aceitar_convite('e7d00000-0000-4000-8000-0000000002c3'); end $d$$q$);
 select is(extensions.dblink_send_query('s2', $$select public.criar_convite_interna(
     'e7d00000-0000-4000-8000-0000000000a1', 'e7d00000-0000-4000-8000-00000000000a', 'u2@concorre.test', 'admin')::text$$),
   1, 'B: s2 envia o convite novo');

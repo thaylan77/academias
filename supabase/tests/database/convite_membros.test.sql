@@ -372,6 +372,7 @@ select is(public.__hint_de($$select public.cancelar_convite('e7c00000-0000-4000-
 -- ---------------------------------------------------------------------
 -- Último dono
 -- ---------------------------------------------------------------------
+reset role;
 create function public.__apaga_membro_definer(p_acad uuid, p_user uuid)
 returns void
 language sql
@@ -381,6 +382,7 @@ as $$
   delete from public.membros_academia where academia_id = p_acad and user_id = p_user
 $$;
 grant execute on function public.__apaga_membro_definer(uuid, uuid) to authenticated;
+set local role authenticated;
 
 -- B tem um dono só.
 select public.__como('e7c00000-0000-4000-8000-0000000000b1');
