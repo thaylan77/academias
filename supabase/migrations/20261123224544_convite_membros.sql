@@ -708,13 +708,17 @@ create trigger membros_academia_ultimo_dono
   before update or delete on public.membros_academia
   for each row execute function public.membros_ultimo_dono();
 
--- Exclusão lógica no Auth (auth.users.deleted_at) não passa pelo delete em
--- cascata de membros_academia: este gatilho aplica a mesma trava. Recusa
--- apagar logicamente a conta do último dono com acesso de alguma academia.
--- O Auth roda como supabase_auth_admin e é barrado, como na exclusão de
--- verdade (spec, 4.5); passam o service_role e a sessão administrativa sem
--- JWT.
-create or replace function public.auth_conta_ultimo_dono()
+-- Exclusão lógica no Auth (auth.users.deleted_at). Não passa pelo delete em
+-- cascata de membros_academia, então este gatilho faz as duas coisas que a
+-- cascata faria:
+--   1. a trava do último dono: recusa apagar logicamente a conta do último
+--      dono com acesso de alguma academia. O Auth roda como
+--      supabase_auth_admin e é barrado, como na exclusão de verdade (spec,
+--      4.5); passam o service_role e a sessão administrativa sem JWT;
+--   2. desativa todos os vínculos da conta. Sem isso, um JWT emitido antes
+--      continuaria autorizado pelo RLS (tem_papel olha o vínculo, não a
+--      conta). Restaurar a conta não reativa os vínculos.
+create or replace function public.auth_exclusao_logica()
 returns trigger
 language plpgsql
 security definer
@@ -727,30 +731,31 @@ begin
   if old.deleted_at is not null or new.deleted_at is null then
     return new;
   end if;
-  if v_papel_req = 'service_role'
-     or (v_papel_req is null and session_user in ('postgres', 'supabase_admin')) then
-    return new;
+  if not (v_papel_req = 'service_role'
+          or (v_papel_req is null and session_user in ('postgres', 'supabase_admin'))) then
+    for v_academia in
+      select m.academia_id
+      from public.membros_academia m
+      where m.user_id = old.id and m.papel = 'dono' and m.ativo
+      order by m.academia_id
+    loop
+      perform 1 from public.academias a where a.id = v_academia for update;
+      if not public.academia_tem_outro_dono(v_academia, old.id) then
+        raise exception 'Esta conta é a última dona ativa de uma academia. Passe a academia para outro dono antes de apagá-la.'
+          using hint = 'ultimo_dono';
+      end if;
+    end loop;
   end if;
 
-  for v_academia in
-    select m.academia_id
-    from public.membros_academia m
-    where m.user_id = old.id and m.papel = 'dono' and m.ativo
-    order by m.academia_id
-  loop
-    perform 1 from public.academias a where a.id = v_academia for update;
-    if not public.academia_tem_outro_dono(v_academia, old.id) then
-      raise exception 'Esta conta é a última dona ativa de uma academia. Passe a academia para outro dono antes de apagá-la.'
-        using hint = 'ultimo_dono';
-    end if;
-  end loop;
+  update public.membros_academia m set ativo = false
+   where m.user_id = old.id and m.ativo;
 
   return new;
 end
 $$;
 
-revoke execute on function public.auth_conta_ultimo_dono() from public, anon, authenticated;
+revoke execute on function public.auth_exclusao_logica() from public, anon, authenticated;
 
-create trigger auth_users_ultimo_dono
+create trigger auth_users_exclusao_logica
   before update of deleted_at on auth.users
-  for each row execute function public.auth_conta_ultimo_dono();
+  for each row execute function public.auth_exclusao_logica();

@@ -4,7 +4,7 @@
 -- Academias A e B (ativas) e S (suspensa).
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(81);
+select plan(85);
 
 -- ---------------------------------------------------------------------
 -- Auxiliares
@@ -414,7 +414,18 @@ select is((select count(*) from public.meus_convites()), 0::bigint,
 select is(public.__hint_de(format('select public.aceitar_convite(%L)', (public.__conv('e7c00000-0000-4000-8000-00000000000a', 'quemapagou@conv.test')).id)),
   'convite_invalido', 'conta de quem convidou apagada logicamente: o convite morre');
 reset role;
+select is(public.__membro('e7c00000-0000-4000-8000-00000000000a', 'e7c00000-0000-4000-8000-0000000000a2'), 'admin (inativo)',
+  'exclusão lógica desativa os vínculos da conta');
+set local role authenticated;
+select public.__como('e7c00000-0000-4000-8000-0000000000a2');
+select is((select count(*) from public.convites_equipe), 0::bigint,
+  'conta apagada logicamente, com o JWT ainda válido, não lê convites');
+select is(public.__hint_de($$select * from public.equipe_da_academia('e7c00000-0000-4000-8000-00000000000a')$$),
+  'sem_permissao', 'conta apagada logicamente não lista a equipe');
+reset role;
 update auth.users set deleted_at = null where id = 'e7c00000-0000-4000-8000-0000000000a2';
+update public.membros_academia set ativo = true
+ where academia_id = 'e7c00000-0000-4000-8000-00000000000a' and user_id = 'e7c00000-0000-4000-8000-0000000000a2';
 set local role authenticated;
 
 -- O admin que convidou é desativado pelo dono; e o inativo2 é reativado pela
@@ -513,6 +524,8 @@ reset role;
 select public.__como_auth();
 select is(public.__hint_de($$update auth.users set deleted_at = now() where id = 'e7c00000-0000-4000-8000-0000000000f2'$$),
   'sem erro', 'Auth apaga logicamente um dono quando sobra outro');
+select is(public.__membro('e7c00000-0000-4000-8000-00000000000d', 'e7c00000-0000-4000-8000-0000000000f2'), 'dono (inativo)',
+  'o vínculo do dono apagado logicamente fica inativo');
 set local role authenticated;
 select public.__como('e7c00000-0000-4000-8000-0000000000f1');
 select is(public.__hint_de($$update public.membros_academia set papel = 'admin'

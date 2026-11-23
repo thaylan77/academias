@@ -12,7 +12,8 @@
 --   H. a conta de quem convidou é apagada logicamente no Auth durante o
 --      aceite: o aceite espera e é recusado;
 --   I. a conta de um admin está sendo apagada logicamente; o dono o promove
---      a dono e tenta sair: a saída espera a exclusão e é recusada.
+--      a dono (espera a exclusão, que desativa o vínculo) e tenta sair: a
+--      saída é recusada.
 -- A espera é provada pelo pid: s2 está bloqueada e s1 está entre os que a
 -- bloqueiam. As fixtures são gravadas e confirmadas por uma conexão própria,
 -- apagadas antes (se uma execução anterior parou no meio) e depois, pela
@@ -20,7 +21,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 create extension if not exists dblink with schema extensions;
-select plan(44);
+select plan(46);
 
 create function pg_temp.conexao(p_nome text) returns text language sql as $$
   select format('host=%s port=%s dbname=%s user=postgres password=postgres application_name=%s',
@@ -317,21 +318,24 @@ select is((select count(*) from public.membros_academia
   0::bigint, 'H: u7 não entrou na equipe');
 
 -- ---------------------------------------------------------------------
--- I. s1, como o Auth, apaga logicamente a conta do admin b7 sem confirmar;
---    o dono b6 promove b7 a dono (s2, confirma) e tenta sair (s2).
+-- I. s1, como o Auth, apaga logicamente a conta do admin b7 sem confirmar
+--    (o gatilho desativa o vínculo dele); o dono b6 promove b7 a dono em s2 e
+--    depois tenta sair.
 -- ---------------------------------------------------------------------
 select extensions.dblink_exec('s1', $q$set request.jwt.claim.sub = ''; set request.jwt.claim.role = 'supabase_auth_admin'; set request.jwt.claims = '{"role":"supabase_auth_admin"}'$q$);
 select pg_temp.como('s2', 'e7d00000-0000-4000-8000-0000000000b6');
 select ok(pg_temp.ninguem_esperando(), 'I: antes do envio, s2 não espera ninguém');
 select extensions.dblink_exec('s1', 'begin');
 select extensions.dblink_exec('s1', $$update auth.users set deleted_at = now() where id = 'e7d00000-0000-4000-8000-0000000000b7'$$);
-select extensions.dblink_exec('s2', $$update public.membros_academia set papel = 'dono'
-  where academia_id = 'e7d00000-0000-4000-8000-00000000000c' and user_id = 'e7d00000-0000-4000-8000-0000000000b7'$$);
+select is(extensions.dblink_send_query('s2', $$update public.membros_academia set papel = 'dono'
+  where academia_id = 'e7d00000-0000-4000-8000-00000000000c' and user_id = 'e7d00000-0000-4000-8000-0000000000b7'$$),
+  1, 'I: s2 envia a promoção de b7');
+select ok(pg_temp.s2_espera_s1(), 'I: a promoção espera a exclusão lógica em andamento');
+select extensions.dblink_exec('s1', 'commit');
+select is(pg_temp.resultado_s2(), 'ok', 'I: a promoção passa, mas o vínculo de b7 já está inativo');
 select is(extensions.dblink_send_query('s2', $$update public.membros_academia set ativo = false
   where academia_id = 'e7d00000-0000-4000-8000-00000000000c' and user_id = 'e7d00000-0000-4000-8000-0000000000b6'$$),
   1, 'I: s2 envia a saída do dono atual');
-select ok(pg_temp.s2_espera_s1(), 'I: a saída espera a exclusão lógica em andamento');
-select extensions.dblink_exec('s1', 'commit');
 select matches(pg_temp.resultado_s2(), 'HINT: +ultimo_dono', 'I: com o promovido apagado, a saída é recusada (ultimo_dono)');
 select is((select count(*) from public.membros_academia m join auth.users u on u.id = m.user_id
            where m.academia_id = 'e7d00000-0000-4000-8000-00000000000c' and m.papel = 'dono' and m.ativo and u.deleted_at is null),
