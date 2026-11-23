@@ -23,13 +23,24 @@ O que já existe em `main`:
   - páginas públicas: matrícula online, check-in do aluno e totem com o QR
     da turma;
   - **painel da equipe**: login e escolha de academia, alunos (lista,
-    ficha, cadastro, edição e anonimização) e turmas (horários,
-    matriculados, modalidades e professores). Cada papel vê só o que pode.
+    ficha, cadastro, edição e anonimização), turmas (horários,
+    matriculados, check-ins da aula, modalidades e professores),
+    matrículas (pendentes da matrícula online, matrícula pela recepção,
+    encerrar e trancar), cobranças (lista, inadimplentes, baixa manual,
+    cancelamento, geração na hora e resultado da geração automática) e
+    graduações (progresso, registro e catálogo de faixas). Cada papel vê
+    só o que pode;
+  - **portal do aluno** (`/portal`): o aluno ou o responsável entra por
+    link mágico (pela tela de check-in) e vê a graduação dos cadastros
+    ligados ao e-mail dele.
+- **Geração diária de cobranças** pelo `pg_cron`, com registro de cada
+  execução e das falhas por academia.
 
-Em andamento ou ainda não existe: telas de matrículas, cobranças e
-graduações no painel, portal do aluno, integração com gateway de pagamento,
-lembretes por WhatsApp e convite de membros. O backlog está no fim do
-[AGENTS.md](AGENTS.md) e nas issues.
+Ainda não existe: integração com gateway de pagamento (o schema já está
+pronto; faltam as Edge Functions, o webhook e as telas, conforme
+[a spec](docs/specs/financeiro-gateway-webhook.md)), convite de membros da
+equipe por e-mail, pagamentos no portal do aluno e lembretes por WhatsApp.
+O backlog está no fim do [AGENTS.md](AGENTS.md) e nas issues.
 
 ## Telas
 
@@ -71,6 +82,27 @@ mesma seção. Só dono e admin cadastram e editam; professor e recepção
 consultam.
 
 ![Ficha da turma com horários e alunos matriculados](docs/imagens/painel-turma-ficha.png)
+
+**Matrículas**: pedidos pendentes da matrícula online para aprovar,
+matrícula feita pela recepção (turmas e plano numa transação só, com dia
+de vencimento quando há plano), encerramento e trancamento. Dono, admin e
+recepção; o menu esconde a seção do professor.
+
+**Cobranças**: inadimplentes, lista das cobranças com baixa manual e
+cancelamento, e geração na hora das cobranças de uma matrícula. Dono e
+admin também veem a última geração automática e as falhas. Dono, admin e
+recepção; professor não acessa o financeiro.
+
+**Graduações**: progresso de cada aluno desde a última graduação (aulas,
+meses e se está apto), registro de graduação e catálogo de faixas por
+modalidade. Dono, admin e professor registram; só dono e admin editam as
+faixas; recepção consulta.
+
+### Portal do aluno
+
+Em `/portal`, o aluno ou o responsável entra pelo link mágico enviado na
+tela de check-in e vê a faixa e o grau atuais dos cadastros ligados ao
+e-mail, em qualquer academia.
 
 ### Totem de presença
 
@@ -114,8 +146,9 @@ Rotas:
 | `/{slug}/checkin`            | check-in do aluno pelo QR da turma         |
 | `/{slug}/totem`              | totem da academia (login da equipe ou do papel `totem`) |
 | `/painel`                    | painel da equipe: login e escolha de academia |
-| `/painel/{slug}/{seção}`     | seções do painel (`alunos`, `turmas`...)   |
+| `/painel/{slug}/{seção}`     | seções do painel (`alunos`, `turmas`, `matriculas`, `cobrancas`, `graduacoes`) |
 | `/painel/{slug}/{seção}/{id}`| registro aberto na seção (ou `novo`)       |
+| `/portal`                    | portal do aluno (login por link mágico)    |
 
 `painel` é um slug reservado: nenhuma academia pode usá-lo (nem `portal`,
 `api`, `admin`, `entrar` e `assets`).
@@ -172,7 +205,8 @@ docs/imagens/          capturas de tela do README
   regra que impede duas matrículas não canceladas do mesmo aluno na mesma
   turma com períodos sobrepostos.
 - [docs/specs/financeiro-gateway-webhook.md](docs/specs/financeiro-gateway-webhook.md):
-  gateway de pagamento e webhook (ainda não implementado).
+  gateway de pagamento e webhook (schema e RLS implementados; Edge
+  Functions e telas ainda não).
 
 ## Como contribuir
 
