@@ -4,7 +4,7 @@
 -- Academias A e B (ativas) e S (suspensa).
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(67);
+select plan(72);
 
 -- ---------------------------------------------------------------------
 -- Auxiliares
@@ -108,7 +108,8 @@ insert into auth.users (id, email, email_confirmed_at, raw_app_meta_data) values
   ('e7c00000-0000-4000-8000-0000000000d6', 'vencido@conv.test',    now(), '{}'),
   ('e7c00000-0000-4000-8000-0000000000d7', 'semquem@conv.test',    now(), '{}'),
   ('e7c00000-0000-4000-8000-0000000000d8', 'saiu@conv.test',       now(), '{}'),
-  ('e7c00000-0000-4000-8000-0000000000d9', 'recusa@conv.test',     now(), '{}');
+  ('e7c00000-0000-4000-8000-0000000000d9', 'recusa@conv.test',     now(), '{}'),
+  ('e7c00000-0000-4000-8000-0000000000e1', 'totem-a@conv.test',    now(), '{}');
 
 insert into public.academias (id, nome, slug, status) values
   ('e7c00000-0000-4000-8000-00000000000a', 'Convite A', 'convite-a', 'ativa'),
@@ -125,6 +126,7 @@ insert into public.membros_academia (academia_id, user_id, papel, ativo) values
   ('e7c00000-0000-4000-8000-00000000000a', 'e7c00000-0000-4000-8000-0000000000a7', 'admin',     true),
   ('e7c00000-0000-4000-8000-00000000000a', 'e7c00000-0000-4000-8000-0000000000a8', 'professor', false),
   ('e7c00000-0000-4000-8000-00000000000a', 'e7c00000-0000-4000-8000-0000000000d4', 'aluno',     true),
+  ('e7c00000-0000-4000-8000-00000000000a', 'e7c00000-0000-4000-8000-0000000000e1', 'totem',     true),
   ('e7c00000-0000-4000-8000-00000000000b', 'e7c00000-0000-4000-8000-0000000000b1', 'dono',      true),
   ('e7c00000-0000-4000-8000-00000000000b', 'e7c00000-0000-4000-8000-0000000000b2', 'admin',     true),
   ('e7c00000-0000-4000-8000-00000000000c', 'e7c00000-0000-4000-8000-0000000000c1', 'dono',      true);
@@ -140,9 +142,9 @@ insert into public.convites_equipe (id, academia_id, email, papel, convidado_por
 update public.academias set status = 'suspensa' where id = 'e7c00000-0000-4000-8000-00000000000c';
 
 -- 30 convites recentes em B, para o limite diário.
-insert into public.convites_equipe (academia_id, email, papel, convidado_por, expira_em)
+insert into public.convites_equipe (academia_id, email, papel, convidado_por, expira_em, ultimo_envio_em, envios_janela_inicio, envios_na_janela)
 select 'e7c00000-0000-4000-8000-00000000000b', 'lote' || g || '@conv.test', 'professor',
-       'e7c00000-0000-4000-8000-0000000000b1', now() + interval '7 days'
+       'e7c00000-0000-4000-8000-0000000000b1', now() + interval '7 days', now() - interval '1 hour', now() - interval '1 hour', 1
 from generate_series(1, 30) g;
 
 -- Leitura de apoio, sem RLS: o convidado não lê convites_equipe nem a linha
@@ -229,6 +231,23 @@ select is(public.__hint_de($$select public.__cc('e7c00000-0000-4000-8000-0000000
   'academia_suspensa', 'C6: academia suspensa não convida');
 select is(public.__hint_de($$select public.__cc('e7c00000-0000-4000-8000-0000000000b1', 'e7c00000-0000-4000-8000-00000000000b', 'y@conv.test', 'professor')$$),
   'limite_convites', 'C10: o 31º convite em 24 horas é recusado');
+select is(public.__hint_de($$select public.__cc('e7c00000-0000-4000-8000-0000000000a1', 'e7c00000-0000-4000-8000-00000000000a', 'totem-a@conv.test', 'professor')$$),
+  'ja_membro', 'o login do totem não é convidado para a equipe');
+
+-- Cancelar e recriar não fura os 60 segundos nem o teto por endereço.
+select public.__cc('e7c00000-0000-4000-8000-0000000000a1', 'e7c00000-0000-4000-8000-00000000000a', 'ciclo@conv.test', 'professor');
+reset role;
+update public.convites_equipe set status = 'cancelado', encerrado_em = now() where email = 'ciclo@conv.test';
+set local role service_role;
+select public.__como_servico();
+select is(public.__hint_de($$select public.__cc('e7c00000-0000-4000-8000-0000000000a1', 'e7c00000-0000-4000-8000-00000000000a', 'ciclo@conv.test', 'professor')$$),
+  'convite_reenvio_cedo', 'C10: cancelar e recriar logo em seguida esbarra nos 60 segundos');
+reset role;
+update public.convites_equipe set ultimo_envio_em = now() - interval '2 minutes', envios_na_janela = 5 where email = 'ciclo@conv.test';
+set local role service_role;
+select public.__como_servico();
+select is(public.__hint_de($$select public.__cc('e7c00000-0000-4000-8000-0000000000a1', 'e7c00000-0000-4000-8000-00000000000a', 'ciclo@conv.test', 'professor')$$),
+  'limite_convites', 'C10: o 6º e-mail para o mesmo endereço em 24 horas é recusado');
 
 -- Convites usados mais adiante.
 select public.__cc('e7c00000-0000-4000-8000-0000000000a1', 'e7c00000-0000-4000-8000-00000000000a', 'senha@conv.test',    'professor');
@@ -275,6 +294,14 @@ select public.__como('e7c00000-0000-4000-8000-0000000000d2');
 select is((select count(*) from public.meus_convites()), 0::bigint, 'meus_convites: e-mail não confirmado vê lista vazia');
 select public.__como('e7c00000-0000-4000-8000-0000000000d6');
 select is((select count(*) from public.meus_convites()), 0::bigint, 'meus_convites: vencido não aparece');
+select public.__como('e7c00000-0000-4000-8000-0000000000d7');
+select is((select count(*) from public.meus_convites()), 0::bigint, 'meus_convites: convite de quem perdeu o acesso não aparece');
+reset role;
+insert into public.convites_equipe (academia_id, email, papel, convidado_por, expira_em) values
+  ('e7c00000-0000-4000-8000-00000000000a', 'prof-a@conv.test', 'admin', 'e7c00000-0000-4000-8000-0000000000a1', now() + interval '7 days');
+set local role authenticated;
+select public.__como('e7c00000-0000-4000-8000-0000000000a3');
+select is((select count(*) from public.meus_convites()), 0::bigint, 'meus_convites: academia em que o login já é equipe não aparece');
 
 -- ---------------------------------------------------------------------
 -- Aceitar e recusar

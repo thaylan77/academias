@@ -7,31 +7,39 @@
 --    recusar_convite e equipe_da_academia.
 -- 3. Gatilho do último dono em membros_academia.
 --
--- Ordem das travas, em todo lugar: primeiro a linha da academia, depois a
--- do convite. Assim criar, aceitar e o gatilho do último dono se
--- serializam por academia, sem deadlock.
+-- Ordem das travas nas funções: primeiro a linha da academia, depois a do
+-- convite e a do membro. Assim criar, aceitar e o gatilho do último dono se
+-- serializam por academia. Papel e assinatura são relidos depois da trava.
+-- Nenhuma função trava a academia de outro tenant: antes da trava, uma
+-- consulta sem trava confere se quem chama tem motivo para mexer nela.
+--
+-- "Equipe" é dono, admin, professor e recepção. Aluno e totem não são equipe
+-- e não entram por convite.
 
 -- =====================================================================
 -- 1. TABELA
 -- =====================================================================
 
 create table public.convites_equipe (
-  id              uuid primary key default gen_random_uuid(),
-  academia_id     uuid not null references public.academias (id) on delete cascade,
-  email           text not null,
-  papel           text not null
-                  check (papel in ('dono', 'admin', 'professor', 'recepcao')),
-  status          text not null default 'pendente'
-                  check (status in ('pendente', 'aceito', 'cancelado', 'recusado')),
-  convidado_por   uuid references auth.users (id) on delete set null,
-  expira_em       timestamptz not null,
-  ultimo_envio_em timestamptz,
-  aceito_por      uuid references auth.users (id) on delete set null,
-  aceito_em       timestamptz,
-  encerrado_por   uuid references auth.users (id) on delete set null,
-  encerrado_em    timestamptz,
-  created_at      timestamptz not null default now(),
-  updated_at      timestamptz not null default now(),
+  id                   uuid primary key default gen_random_uuid(),
+  academia_id          uuid not null references public.academias (id) on delete cascade,
+  email                text not null,
+  papel                text not null
+                       check (papel in ('dono', 'admin', 'professor', 'recepcao')),
+  status               text not null default 'pendente'
+                       check (status in ('pendente', 'aceito', 'cancelado', 'recusado')),
+  convidado_por        uuid references auth.users (id) on delete set null,
+  expira_em            timestamptz not null,
+  -- Envios de e-mail (C10): o último, e a janela de 24 horas com a contagem.
+  ultimo_envio_em      timestamptz,
+  envios_janela_inicio timestamptz,
+  envios_na_janela     integer not null default 0 check (envios_na_janela >= 0),
+  aceito_por           uuid references auth.users (id) on delete set null,
+  aceito_em            timestamptz,
+  encerrado_por        uuid references auth.users (id) on delete set null,
+  encerrado_em         timestamptz,
+  created_at           timestamptz not null default now(),
+  updated_at           timestamptz not null default now(),
   unique (academia_id, id),
   constraint convites_equipe_email_check
     check (email = lower(btrim(email))
@@ -48,8 +56,10 @@ create unique index convites_equipe_pendente_uidx
   on public.convites_equipe (academia_id, email) where status = 'pendente';
 create index convites_equipe_email_idx
   on public.convites_equipe (email) where status = 'pendente';
-create index convites_equipe_academia_criado_idx
-  on public.convites_equipe (academia_id, created_at);
+create index convites_equipe_academia_email_envio_idx
+  on public.convites_equipe (academia_id, email, ultimo_envio_em);
+create index convites_equipe_academia_envio_idx
+  on public.convites_equipe (academia_id, ultimo_envio_em);
 
 create trigger convites_equipe_updated_at
   before update on public.convites_equipe
@@ -70,7 +80,7 @@ revoke all on public.convites_equipe from anon, authenticated;
 grant select on public.convites_equipe to authenticated;
 
 -- =====================================================================
--- 2. AUXILIARES
+-- 2. AUXILIARES (nenhuma é chamável pela API)
 -- =====================================================================
 
 -- E-mail do login, normalizado, só se confirmado. Null caso contrário.
@@ -85,9 +95,11 @@ as $$
   from auth.users u
   where u.id = auth.uid()
     and u.email_confirmed_at is not null
+    and u.deleted_at is null
 $$;
 
--- O membro é dono ou admin ativo da academia (sem olhar a assinatura)?
+-- Papel de quem convida: dono ou admin ativo da academia (sem olhar a
+-- assinatura). Null se não for.
 create or replace function public.convite_papel_ativo(p_user_id uuid, p_academia_id uuid)
 returns text
 language sql
@@ -103,12 +115,35 @@ as $$
     and m.papel in ('dono', 'admin')
 $$;
 
+-- O convite ainda pode ser aceito do lado de quem convidou (passo 5 do
+-- aceite): quem convidou é dono ou admin ativo, e dono se o convite é de dono.
+create or replace function public.convite_de_quem_pode(p_convite public.convites_equipe)
+returns boolean
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select coalesce(
+    (select case when p_convite.papel = 'dono' then q.papel = 'dono' else true end
+     from (select public.convite_papel_ativo(p_convite.convidado_por, p_convite.academia_id) as papel) q
+     where q.papel is not null),
+    false)
+$$;
+
 revoke execute on function public.convite_email_do_login() from public, anon, authenticated;
 revoke execute on function public.convite_papel_ativo(uuid, uuid) from public, anon, authenticated;
+revoke execute on function public.convite_de_quem_pode(public.convites_equipe) from public, anon, authenticated;
 
 -- =====================================================================
 -- 3. CRIAR (Edge Function convidar-membro, com o user_id do JWT)
 -- =====================================================================
+-- Limites de envio (C10):
+--   * 60 segundos entre dois e-mails para o mesmo endereço na academia,
+--     contando convites cancelados ou recusados (cancelar e recriar não fura);
+--   * no máximo 5 e-mails para o mesmo endereço na academia em 24 horas;
+--   * no máximo 30 convites com envio nas últimas 24 horas por academia
+--     (convite novo ou reenvio de um que não teve envio nesse período).
 
 create or replace function public.criar_convite_interna(
   p_user_id     uuid,
@@ -124,7 +159,6 @@ as $$
 declare
   v_email     text := lower(btrim(coalesce(p_email, '')));
   v_papel_eu  text;
-  v_membro    public.membros_academia;
   v_pendente  public.convites_equipe;
   v_id        uuid;
   v_conta     text;
@@ -138,7 +172,14 @@ begin
       using hint = 'dados_invalidos';
   end if;
 
-  -- 2. Quem convida: dono ou admin ativo, com a assinatura em dia.
+  -- 2. Antes de travar: quem não é dono nem admin da academia sai aqui.
+  if public.convite_papel_ativo(p_user_id, p_academia_id) is null then
+    raise exception 'Só o dono ou um admin da academia convida para a equipe.'
+      using hint = 'sem_permissao';
+  end if;
+
+  -- 3. Trava a academia e relê papel e assinatura.
+  perform 1 from public.academias a where a.id = p_academia_id for update;
   v_papel_eu := public.convite_papel_ativo(p_user_id, p_academia_id);
   if v_papel_eu is null then
     raise exception 'Só o dono ou um admin da academia convida para a equipe.'
@@ -148,79 +189,114 @@ begin
     raise exception 'A assinatura da academia está suspensa: não é possível convidar.'
       using hint = 'academia_suspensa';
   end if;
-
-  -- 3. Só o dono convida outro dono.
   if p_papel = 'dono' and v_papel_eu <> 'dono' then
     raise exception 'Só o dono convida outro dono.'
       using hint = 'sem_permissao';
   end if;
 
-  -- 4. Serializa com o aceite e com o gatilho do último dono.
-  perform 1 from public.academias a where a.id = p_academia_id for update;
-
-  -- 5. O e-mail já é da equipe?
-  select m.* into v_membro
-  from public.membros_academia m
-  join auth.users u on u.id = m.user_id
-  where m.academia_id = p_academia_id
-    and lower(btrim(u.email)) = v_email;
-
-  if found then
-    if v_membro.ativo and v_membro.papel <> 'aluno' then
-      raise exception 'Este e-mail já faz parte da equipe da academia.'
-        using hint = 'ja_membro';
-    end if;
-    if not v_membro.ativo and v_membro.papel = 'dono' and v_papel_eu <> 'dono' then
-      raise exception 'Só o dono convida de volta um dono inativo.'
-        using hint = 'sem_permissao';
-    end if;
+  -- 4. O e-mail já está na academia? (contas apagadas no Auth não contam)
+  if exists (
+    select 1
+    from public.membros_academia m
+    join auth.users u on u.id = m.user_id
+    where m.academia_id = p_academia_id
+      and lower(btrim(u.email)) = v_email
+      and u.deleted_at is null
+      and (m.papel = 'totem' or (m.ativo and m.papel <> 'aluno'))
+  ) then
+    raise exception 'Este e-mail já faz parte da academia.'
+      using hint = 'ja_membro';
+  end if;
+  if v_papel_eu <> 'dono' and exists (
+    select 1
+    from public.membros_academia m
+    join auth.users u on u.id = m.user_id
+    where m.academia_id = p_academia_id
+      and lower(btrim(u.email)) = v_email
+      and u.deleted_at is null
+      and m.papel = 'dono'
+  ) then
+    raise exception 'Só o dono convida de volta um dono inativo.'
+      using hint = 'sem_permissao';
   end if;
 
-  -- 6. Pendente para o mesmo e-mail: atualiza (C9), respeitando o intervalo
-  --    de reenvio (C10).
+  -- 5. Pendente para o mesmo e-mail: o admin não mexe no de dono (C9).
   select c.* into v_pendente
   from public.convites_equipe c
   where c.academia_id = p_academia_id
     and c.email = v_email
     and c.status = 'pendente'
   for update;
+  if v_pendente.papel = 'dono' and v_papel_eu <> 'dono' then
+    raise exception 'Este e-mail tem um convite de dono pendente; só o dono pode alterá-lo.'
+      using hint = 'sem_permissao';
+  end if;
 
-  if found then
-    if v_pendente.papel = 'dono' and v_papel_eu <> 'dono' then
-      raise exception 'Este e-mail tem um convite de dono pendente; só o dono pode alterá-lo.'
-        using hint = 'sem_permissao';
-    end if;
-    if v_pendente.ultimo_envio_em > now() - interval '60 seconds' then
-      raise exception 'O convite acabou de ser enviado. Espere um minuto para reenviar.'
-        using hint = 'convite_reenvio_cedo';
-    end if;
+  -- 6. Limites por endereço (C10), contando todos os convites do e-mail.
+  if exists (
+    select 1 from public.convites_equipe c
+    where c.academia_id = p_academia_id
+      and c.email = v_email
+      and c.ultimo_envio_em > now() - interval '60 seconds'
+  ) then
+    raise exception 'O convite acabou de ser enviado. Espere um minuto para reenviar.'
+      using hint = 'convite_reenvio_cedo';
+  end if;
+  if (select coalesce(sum(c.envios_na_janela), 0)
+      from public.convites_equipe c
+      where c.academia_id = p_academia_id
+        and c.email = v_email
+        and c.envios_janela_inicio > now() - interval '24 hours') >= 5 then
+    raise exception 'Este e-mail já recebeu 5 convites da academia nas últimas 24 horas.'
+      using hint = 'limite_convites';
+  end if;
+
+
+  -- 7. Limite da academia (C10): convites com envio nas últimas 24 horas,
+  --    sem contar o pendente que está sendo reenviado se ele já está nelas.
+  if (select count(*) from public.convites_equipe c
+      where c.academia_id = p_academia_id
+        and c.ultimo_envio_em > now() - interval '24 hours'
+        and c.id is distinct from v_pendente.id) >= 30
+     and (v_pendente.id is null or v_pendente.ultimo_envio_em is null
+          or v_pendente.ultimo_envio_em <= now() - interval '24 hours') then
+    raise exception 'A academia chegou ao limite de 30 convites em 24 horas.'
+      using hint = 'limite_convites';
+  end if;
+
+  if v_pendente.id is not null then
+    -- 8a. Reenvio do pendente: atualiza papel, validade e quem convidou (C9).
     update public.convites_equipe c
        set papel = p_papel,
            expira_em = now() + interval '7 days',
            convidado_por = p_user_id,
-           ultimo_envio_em = now()
+           ultimo_envio_em = now(),
+           envios_janela_inicio = case
+             when c.envios_janela_inicio > now() - interval '24 hours' then c.envios_janela_inicio
+             else now() end,
+           envios_na_janela = case
+             when c.envios_janela_inicio > now() - interval '24 hours' then c.envios_na_janela + 1
+             else 1 end
      where c.id = v_pendente.id;
     v_id := v_pendente.id;
   else
-    -- 7. Convite novo, com o limite diário da academia (C10).
-    if (select count(*) from public.convites_equipe c
-        where c.academia_id = p_academia_id
-          and c.created_at > now() - interval '24 hours') >= 30 then
-      raise exception 'A academia chegou ao limite de 30 convites em 24 horas.'
-        using hint = 'limite_convites';
-    end if;
-    insert into public.convites_equipe (academia_id, email, papel, convidado_por, expira_em, ultimo_envio_em)
-    values (p_academia_id, v_email, p_papel, p_user_id, now() + interval '7 days', now())
+    -- 8b. Convite novo.
+    insert into public.convites_equipe (academia_id, email, papel, convidado_por, expira_em,
+                                        ultimo_envio_em, envios_janela_inicio, envios_na_janela)
+    values (p_academia_id, v_email, p_papel, p_user_id, now() + interval '7 days', now(), now(), 1)
     returning id into v_id;
   end if;
 
-  -- Estado da conta com esse e-mail: só para a Edge Function escolher o envio.
+  -- Estado da conta com esse e-mail, só para a Edge Function escolher o
+  -- envio. Conta apagada no Auth não conta; havendo mais de uma, a
+  -- confirmada vem primeiro.
   select u.id,
          case when u.email_confirmed_at is null then 'nao_confirmada' else 'confirmada' end
     into v_conta_id, v_conta
   from auth.users u
   where lower(btrim(u.email)) = v_email
-  order by u.created_at
+    and u.deleted_at is null
+  order by (u.email_confirmed_at is null), u.created_at
   limit 1;
 
   return jsonb_build_object(
@@ -250,16 +326,20 @@ declare
   v_conv     public.convites_equipe;
   v_papel_eu text;
 begin
+  -- 1. Inexistente ou de academia que quem chama não gere: o mesmo código,
+  --    e sem travar nada.
   select c.academia_id into v_academia from public.convites_equipe c where c.id = p_convite_id;
-  v_papel_eu := public.convite_papel_ativo(auth.uid(), v_academia);
-
-  -- 1. Inexistente ou de academia que quem chama não gere: o mesmo código.
-  if v_academia is null or v_papel_eu is null then
+  if v_academia is null or public.convite_papel_ativo(auth.uid(), v_academia) is null then
     raise exception 'Convite não encontrado.' using hint = 'convite_invalido';
   end if;
 
+  -- Trava e relê.
   perform 1 from public.academias a where a.id = v_academia for update;
   select c.* into v_conv from public.convites_equipe c where c.id = p_convite_id for update;
+  v_papel_eu := public.convite_papel_ativo(auth.uid(), v_academia);
+  if v_conv.id is null or v_papel_eu is null then
+    raise exception 'Convite não encontrado.' using hint = 'convite_invalido';
+  end if;
 
   -- 2. Só pendente (vencido também, que continua pendente).
   if v_conv.status <> 'pendente' then
@@ -290,6 +370,8 @@ grant execute on function public.cancelar_convite(uuid) to authenticated;
 -- 5. CONVIDADO: listar, aceitar e recusar
 -- =====================================================================
 
+-- Só os convites que o login ainda pode aceitar: pendentes, não vencidos,
+-- de quem ainda pode dar o acesso, e de academias em que ele não é equipe.
 create or replace function public.meus_convites()
 returns table (
   convite_id    uuid,
@@ -309,15 +391,22 @@ as $$
   where c.email = public.convite_email_do_login()
     and c.status = 'pendente'
     and c.expira_em > now()
+    and public.convite_de_quem_pode(c)
+    and not exists (
+      select 1 from public.membros_academia m
+      where m.academia_id = c.academia_id
+        and m.user_id = auth.uid()
+        and (m.papel = 'totem' or (m.ativo and m.papel <> 'aluno'))
+    )
   order by c.created_at
 $$;
 
 revoke execute on function public.meus_convites() from public, anon;
 grant execute on function public.meus_convites() to authenticated;
 
--- Passos comuns de aceitar e recusar: e-mail confirmado, travas e convite
--- válido para este login. Devolve o convite travado. p_exige_senha separa o
--- aceite (que exige a senha definida) da recusa.
+-- Passos comuns de aceitar e recusar: e-mail confirmado, senha (só no
+-- aceite), convite deste login e travas. Devolve o convite travado. Um
+-- convite de outro e-mail não trava a academia dele.
 create or replace function public.convite_do_login_travado(p_convite_id uuid, p_exige_senha boolean)
 returns public.convites_equipe
 language plpgsql
@@ -343,11 +432,14 @@ begin
       using hint = 'senha_pendente';
   end if;
 
-  select c.academia_id into v_academia from public.convites_equipe c where c.id = p_convite_id;
+  select c.academia_id into v_academia
+  from public.convites_equipe c
+  where c.id = p_convite_id and c.email = v_email and c.status = 'pendente';
+
   if v_academia is not null then
     perform 1 from public.academias a where a.id = v_academia for update;
+    select c.* into v_conv from public.convites_equipe c where c.id = p_convite_id for update;
   end if;
-  select c.* into v_conv from public.convites_equipe c where c.id = p_convite_id for update;
 
   if v_conv.id is null
      or v_conv.status <> 'pendente'
@@ -374,15 +466,15 @@ declare
   v_papel_quem text;
   v_membro     public.membros_academia;
 begin
-  -- 1 a 4: e-mail, senha, travas e convite válido.
+  -- 1 a 4: e-mail, senha, convite deste login e travas.
   v_conv := public.convite_do_login_travado(p_convite_id, true);
 
   -- 5. Quem convidou ainda pode dar esse acesso.
-  v_papel_quem := public.convite_papel_ativo(v_conv.convidado_por, v_conv.academia_id);
-  if v_papel_quem is null or (v_conv.papel = 'dono' and v_papel_quem <> 'dono') then
+  if not public.convite_de_quem_pode(v_conv) then
     raise exception 'Convite não encontrado, vencido ou já respondido.'
       using hint = 'convite_invalido';
   end if;
+  v_papel_quem := public.convite_papel_ativo(v_conv.convidado_por, v_conv.academia_id);
 
   -- 6. Academia suspensa não aceita (C6).
   if not public.academia_ativa(v_conv.academia_id) then
@@ -395,10 +487,11 @@ begin
   where m.academia_id = v_conv.academia_id and m.user_id = auth.uid()
   for update;
 
-  if found then
-    -- 7. Já é da equipe (inclusive se foi reativado depois do convite).
-    if v_membro.ativo and v_membro.papel <> 'aluno' then
-      raise exception 'Você já faz parte da equipe desta academia.'
+  if v_membro.user_id is not null then
+    -- 7. Já está na academia como equipe (inclusive reativado depois do
+    --    convite) ou como totem.
+    if v_membro.papel = 'totem' or (v_membro.ativo and v_membro.papel <> 'aluno') then
+      raise exception 'Você já faz parte desta academia.'
         using hint = 'ja_membro';
     end if;
     -- 8. Dono inativo só volta com outro papel por convite de um dono.
@@ -480,7 +573,7 @@ begin
   from public.membros_academia m
   join auth.users u on u.id = m.user_id
   where m.academia_id = p_academia_id
-    and m.papel <> 'aluno'
+    and m.papel in ('dono', 'admin', 'professor', 'recepcao')
   order by m.ativo desc, m.papel, u.email;
 end
 $$;
@@ -502,6 +595,11 @@ grant execute on function public.equipe_da_academia(uuid) to authenticated;
 -- Não passa: RPC security definer chamada pela API (tem o papel da
 -- requisição, mesmo rodando como postgres) e o Auth apagando a conta
 -- (roda como supabase_auth_admin).
+--
+-- O gatilho trava a academia depois da linha do membro (o update já travou
+-- a linha). Uma alteração direta em dono concorrendo com uma função que
+-- trava a academia antes pode terminar em deadlock; o Postgres desfaz uma
+-- das duas (40P01) e nenhuma deixa a academia sem dono.
 
 create or replace function public.membros_ultimo_dono()
 returns trigger
