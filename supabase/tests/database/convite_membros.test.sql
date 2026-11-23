@@ -4,7 +4,7 @@
 -- Academias A e B (ativas) e S (suspensa).
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(76);
+select plan(78);
 
 -- ---------------------------------------------------------------------
 -- Auxiliares
@@ -109,6 +109,7 @@ insert into auth.users (id, email, email_confirmed_at, raw_app_meta_data) values
   ('e7c00000-0000-4000-8000-0000000000d7', 'semquem@conv.test',    now(), '{}'),
   ('e7c00000-0000-4000-8000-0000000000d8', 'saiu@conv.test',       now(), '{}'),
   ('e7c00000-0000-4000-8000-0000000000d9', 'recusa@conv.test',     now(), '{}'),
+  ('e7c00000-0000-4000-8000-0000000000da', 'quemapagou@conv.test', now(), '{}'),
   ('e7c00000-0000-4000-8000-0000000000e1', 'totem-a@conv.test',    now(), '{}');
 
 insert into public.academias (id, nome, slug, status) values
@@ -296,6 +297,7 @@ select public.__cc('e7c00000-0000-4000-8000-0000000000a1', 'e7c00000-0000-4000-8
 select public.__cc('e7c00000-0000-4000-8000-0000000000a7', 'e7c00000-0000-4000-8000-00000000000a', 'saiu@conv.test',     'professor');
 select public.__cc('e7c00000-0000-4000-8000-0000000000a1', 'e7c00000-0000-4000-8000-00000000000a', 'recusa@conv.test',   'professor');
 select public.__cc('e7c00000-0000-4000-8000-0000000000a1', 'e7c00000-0000-4000-8000-00000000000a', 'dono2@conv.test',    'dono');
+select public.__cc('e7c00000-0000-4000-8000-0000000000a2', 'e7c00000-0000-4000-8000-00000000000a', 'quemapagou@conv.test', 'professor');
 
 reset role;
 update public.convites_equipe set expira_em = now() - interval '1 minute' where email = 'vencido@conv.test';
@@ -382,6 +384,19 @@ select is(public.__hint_de(format('select public.aceitar_convite(%L)', (public._
 select public.__como('e7c00000-0000-4000-8000-0000000000d7');
 select is(public.__hint_de(format('select public.aceitar_convite(%L)', (public.__conv('e7c00000-0000-4000-8000-00000000000a', 'semquem@conv.test')).id)),
   'convite_invalido', 'convite de conta apagada (convidado_por nulo) não é aceito');
+
+-- Exclusão lógica no Auth da conta de quem convidou (o vínculo continua).
+reset role;
+update auth.users set deleted_at = now() where id = 'e7c00000-0000-4000-8000-0000000000a2';
+set local role authenticated;
+select public.__como('e7c00000-0000-4000-8000-0000000000da');
+select is((select count(*) from public.meus_convites()), 0::bigint,
+  'meus_convites: convite de conta apagada logicamente não aparece');
+select is(public.__hint_de(format('select public.aceitar_convite(%L)', (public.__conv('e7c00000-0000-4000-8000-00000000000a', 'quemapagou@conv.test')).id)),
+  'convite_invalido', 'conta de quem convidou apagada logicamente: o convite morre');
+reset role;
+update auth.users set deleted_at = null where id = 'e7c00000-0000-4000-8000-0000000000a2';
+set local role authenticated;
 
 -- O admin que convidou é desativado pelo dono; e o inativo2 é reativado pela
 -- tela antes de aceitar.

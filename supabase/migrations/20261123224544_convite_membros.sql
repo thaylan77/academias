@@ -98,8 +98,9 @@ as $$
     and u.deleted_at is null
 $$;
 
--- Papel de quem convida: dono ou admin ativo da academia (sem olhar a
--- assinatura). Null se não for.
+-- Papel de quem convida: dono ou admin ativo da academia, com a conta do
+-- Auth existente e não apagada (exclusão lógica também conta). Não olha a
+-- assinatura. Null se não for.
 create or replace function public.convite_papel_ativo(p_user_id uuid, p_academia_id uuid)
 returns text
 language sql
@@ -109,10 +110,12 @@ set search_path = ''
 as $$
   select m.papel
   from public.membros_academia m
+  join auth.users u on u.id = m.user_id
   where m.academia_id = p_academia_id
     and m.user_id = p_user_id
     and m.ativo
     and m.papel in ('dono', 'admin')
+    and u.deleted_at is null
 $$;
 
 -- O convite ainda pode ser aceito do lado de quem convidou (passo 5 do
@@ -484,7 +487,10 @@ begin
   -- 1 a 4: e-mail, senha, convite deste login e travas.
   v_conv := public.convite_do_login_travado(p_convite_id, true);
 
-  -- 5. Quem convidou ainda pode dar esse acesso.
+  -- 5. Quem convidou ainda pode dar esse acesso. A conta dele fica travada
+  --    até o fim: uma exclusão no Auth concorrente espera o aceite, ou o
+  --    aceite vê a conta apagada.
+  perform 1 from auth.users u where u.id = v_conv.convidado_por for share;
   if not public.convite_de_quem_pode(v_conv) then
     raise exception 'Convite não encontrado, vencido ou já respondido.'
       using hint = 'convite_invalido';

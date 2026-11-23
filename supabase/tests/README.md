@@ -46,8 +46,8 @@ edite o arquivo manualmente.
 | `financeiro/emissao_webhook.test.sql` | 46 | Emissão, tentativa da reserva, adoção pelo webhook e divergências |
 | `financeiro/permissoes.test.sql` | 30 | Grants financeiros, colunas de sistema, anonimização e academia imutável |
 | `financeiro/recorrencia.test.sql` | 21 | Competência, recorrência e mês inicial da cobrança |
-| `database/convite_membros.test.sql` | 76 | Convite da equipe: criação só pela Edge Function, papéis, convite duplicado, limites (inclusive cancelar e recriar), totem fora da equipe, academia suspensa, aceite e recusa (e-mail, senha, vencido, quem convidou perdeu o acesso, membro reativado, aluno promovido), cancelamento, `equipe_da_academia` e o último dono |
-| `database/convite_membros_concorrencia.test.sql` | 34 | Convite com duas transações (`dblink`, espera provada pelo pid): aceite duplo, convite contra aceite, dois donos saindo (delete) ou se desativando (update) ao mesmo tempo, revogação do admin (desativação ou troca de titular) contra o aceite do convite dele, e troca de e-mail no Auth durante a espera do aceite |
+| `database/convite_membros.test.sql` | 78 | Convite da equipe: criação só pela Edge Function, papéis, convite duplicado, limites (inclusive cancelar e recriar), totem fora da equipe, academia suspensa, aceite e recusa (e-mail, senha, vencido, quem convidou perdeu o acesso, membro reativado, aluno promovido), cancelamento, `equipe_da_academia` e o último dono |
+| `database/convite_membros_concorrencia.test.sql` | 39 | Convite com duas transações (`dblink`, espera provada pelo pid): aceite duplo, convite contra aceite, dois donos saindo (delete) ou se desativando (update) ao mesmo tempo, revogação do admin (desativação ou troca de titular) contra o aceite do convite dele, troca de e-mail no Auth durante a espera do aceite, e exclusão lógica da conta de quem convidou |
 | `matricula/concorrencia.test.sql` | 13 | Matrícula duplicada com duas transações simultâneas (`dblink`): a segunda espera e é recusada |
 | `matricula/duplicada.test.sql` | 39 | Matrícula duplicada na mesma turma: situações, períodos, troca de plano, duas academias e erro `matricula_duplicada` |
 
