@@ -23,13 +23,24 @@ O que já existe em `main`:
   - páginas públicas: matrícula online, check-in do aluno e totem com o QR
     da turma;
   - **painel da equipe**: login e escolha de academia, alunos (lista,
-    ficha, cadastro, edição e anonimização) e turmas (horários,
-    matriculados, modalidades e professores). Cada papel vê só o que pode.
+    ficha, cadastro, edição e anonimização), turmas (horários,
+    matriculados, check-ins da aula, modalidades e professores),
+    matrículas (aprovação das pendentes da matrícula online, matrícula
+    feita no painel, encerramento e trancamento), cobranças (lista,
+    inadimplentes, baixa manual, cancelamento, geração na hora e resultado
+    da geração automática) e graduações (progresso, registro e catálogo de
+    faixas), com cada papel vendo só o que pode;
+  - **portal do aluno** (`/portal`): o aluno ou o responsável entra por
+    link mágico (o mesmo acesso da tela de check-in) e vê a graduação dos
+    próprios cadastros, ou dos filhos, ligados ao e-mail com que entrou.
+- **Geração diária de cobranças** das academias ativas pelo `pg_cron`,
+  com registro de cada execução e das falhas por academia.
 
-Em andamento ou ainda não existe: telas de matrículas, cobranças e
-graduações no painel, portal do aluno, integração com gateway de pagamento,
-lembretes por WhatsApp e convite de membros. O backlog está no fim do
-[AGENTS.md](AGENTS.md) e nas issues.
+Ainda não existe: integração com gateway de pagamento (schema e RLS
+prontos; faltam as Edge Functions, o webhook e as telas, conforme
+[a spec](docs/specs/financeiro-gateway-webhook.md)), convite de membros da
+equipe por e-mail, pagamentos no portal do aluno e lembretes por WhatsApp.
+O backlog está no fim do [AGENTS.md](AGENTS.md) e nas issues.
 
 ## Telas
 
@@ -65,12 +76,35 @@ editam; professor só consulta; anonimização (LGPD) só para dono e admin.
 
 **Turmas**: agrupadas por modalidade, com professor, público, capacidade e
 horários no fuso da academia. Turma sem horário avisa que não aceita
-check-in por QR. A ficha mostra os horários e os alunos com matrícula
-vigente. Modalidades e professores (o catálogo que as turmas usam) ficam na
-mesma seção. Só dono e admin cadastram e editam; professor e recepção
-consultam.
+check-in por QR. A ficha mostra os horários, os alunos com matrícula
+vigente e os check-ins da aula. Modalidades e professores (o catálogo que
+as turmas usam) ficam na mesma seção. Só dono e admin cadastram e
+editam; professor e recepção consultam.
 
 ![Ficha da turma com horários e alunos matriculados](docs/imagens/painel-turma-ficha.png)
+
+**Matrículas**: pedidos pendentes da matrícula online para aprovar,
+matrícula feita no painel (turmas e plano numa transação só, com dia de
+vencimento quando há plano), encerramento e trancamento. Dono, admin e
+recepção operam; o professor não acessa a seção (as matrículas do aluno
+aparecem para ele na ficha do aluno).
+
+**Cobranças**: inadimplentes, lista das cobranças com baixa manual e
+cancelamento, e geração na hora das cobranças de uma matrícula. Dono,
+admin e recepção operam; professor não acessa o financeiro. Só dono e
+admin veem o resultado da última geração automática e as falhas.
+
+**Graduações**: progresso de cada aluno desde a última graduação (aulas,
+meses e se está apto), registro de graduação e catálogo de faixas por
+modalidade. Dono, admin e professor registram; só dono e admin editam as
+faixas; recepção consulta.
+
+### Portal do aluno
+
+Em `/portal`, o aluno ou o responsável pede o link mágico pelo e-mail (o
+mesmo acesso da tela de check-in) e vê a faixa e o grau atuais dos
+próprios cadastros, ou dos filhos, ligados a esse e-mail. Quem tem
+cadastro em mais de uma academia vê os de todas elas.
 
 ### Totem de presença
 
@@ -114,8 +148,9 @@ Rotas:
 | `/{slug}/checkin`            | check-in do aluno pelo QR da turma         |
 | `/{slug}/totem`              | totem da academia (login da equipe ou do papel `totem`) |
 | `/painel`                    | painel da equipe: login e escolha de academia |
-| `/painel/{slug}/{seção}`     | seções do painel (`alunos`, `turmas`...)   |
-| `/painel/{slug}/{seção}/{id}`| registro aberto na seção (ou `novo`)       |
+| `/painel/{slug}/{seção}`     | seções do painel (`alunos`, `turmas`, `matriculas`, `cobrancas`, `graduacoes`) |
+| `/painel/{slug}/{seção}/{id}`| registro aberto (ou `novo`) em `alunos` e `turmas` |
+| `/portal`                    | portal do aluno (login por link mágico)    |
 
 `painel` é um slug reservado: nenhuma academia pode usá-lo (nem `portal`,
 `api`, `admin`, `entrar` e `assets`).
@@ -172,7 +207,8 @@ docs/imagens/          capturas de tela do README
   regra que impede duas matrículas não canceladas do mesmo aluno na mesma
   turma com períodos sobrepostos.
 - [docs/specs/financeiro-gateway-webhook.md](docs/specs/financeiro-gateway-webhook.md):
-  gateway de pagamento e webhook (ainda não implementado).
+  gateway de pagamento e webhook (schema e RLS prontos; faltam as Edge
+  Functions, o webhook e as telas).
 
 ## Como contribuir
 
