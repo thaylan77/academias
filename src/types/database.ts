@@ -132,13 +132,13 @@ isOneToOne: false
                   ]
                 },"convites_equipe": {
                   Row: {
-                    "academia_id": string,"aceito_em": string | null,"aceito_por": string | null,"convidado_por": string | null,"created_at": string,"email": string,"encerrado_em": string | null,"encerrado_por": string | null,"expira_em": string,"id": string,"papel": string,"status": string,"ultimo_envio_em": string | null,"updated_at": string
+                    "academia_id": string,"aceito_em": string | null,"aceito_por": string | null,"convidado_por": string | null,"created_at": string,"email": string,"encerrado_em": string | null,"encerrado_por": string | null,"envios_janela_inicio": string | null,"envios_na_janela": number,"expira_em": string,"id": string,"papel": string,"status": string,"ultimo_envio_em": string | null,"updated_at": string,"convite_de_quem_pode": boolean | null
                   }
                   Insert: {
-                    "academia_id": string,"aceito_em"?: string | null,"aceito_por"?: string | null,"convidado_por"?: string | null,"created_at"?: string,"email": string,"encerrado_em"?: string | null,"encerrado_por"?: string | null,"expira_em": string,"id"?: string,"papel": string,"status"?: string,"ultimo_envio_em"?: string | null,"updated_at"?: string
+                    "academia_id": string,"aceito_em"?: string | null,"aceito_por"?: string | null,"convidado_por"?: string | null,"created_at"?: string,"email": string,"encerrado_em"?: string | null,"encerrado_por"?: string | null,"envios_janela_inicio"?: string | null,"envios_na_janela"?: number,"expira_em": string,"id"?: string,"papel": string,"status"?: string,"ultimo_envio_em"?: string | null,"updated_at"?: string
                   }
                   Update: {
-                    "academia_id"?: string,"aceito_em"?: string | null,"aceito_por"?: string | null,"convidado_por"?: string | null,"created_at"?: string,"email"?: string,"encerrado_em"?: string | null,"encerrado_por"?: string | null,"expira_em"?: string,"id"?: string,"papel"?: string,"status"?: string,"ultimo_envio_em"?: string | null,"updated_at"?: string
+                    "academia_id"?: string,"aceito_em"?: string | null,"aceito_por"?: string | null,"convidado_por"?: string | null,"created_at"?: string,"email"?: string,"encerrado_em"?: string | null,"encerrado_por"?: string | null,"envios_janela_inicio"?: string | null,"envios_na_janela"?: number,"expira_em"?: string,"id"?: string,"papel"?: string,"status"?: string,"ultimo_envio_em"?: string | null,"updated_at"?: string
                   }
                   Relationships: [
                     {
@@ -564,6 +564,9 @@ isOneToOne: false
 "checkin_token_da_janela":
 { Args: { "p_janela": number,"p_turma_id": string }; Returns: string
                            },
+"convite_de_quem_pode":
+{ Args: { "p_convite": Database["public"]['Tables']["convites_equipe"]['Row'] }; Returns: boolean
+                           },
 "convite_do_login_travado":
 { Args: { "p_convite_id": string,"p_exige_senha": boolean }; Returns: {
               "academia_id": string,
@@ -574,6 +577,8 @@ isOneToOne: false
 "email": string,
 "encerrado_em": string | null,
 "encerrado_por": string | null,
+"envios_janela_inicio": string | null,
+"envios_na_janela": number,
 "expira_em": string,
 "id": string,
 "papel": string,
