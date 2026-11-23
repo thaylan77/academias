@@ -125,6 +125,9 @@ Helpers SQL:
 - `hoje_academia(academia_id)`: data de hoje no fuso da academia. Use no lugar
   de `current_date` em qualquer regra de negócio.
 
+Gatilho `membros_academia_ultimo_dono`: nenhuma alteração pela API deixa a
+academia sem dono ativo (`hint = ultimo_dono`).
+
 **Única exceção** à regra "suspensa lê, mas não altera": `anonimizar_aluno`
 usa `tem_papel` (dono, admin) sem checar a assinatura, porque pedido de
 titular (LGPD) não depende de pagamento. Coberta por
@@ -155,6 +158,10 @@ Plano, status e slug da academia só mudam via `service_role` (billing do SaaS).
 | `trancar_matricula(matricula_id)` / `destrancar_matricula(matricula_id)` | secretaria | trancada não gera cobrança nem aceita check-in, mas ocupa a turma; trancar devolve as pendentes de hoje em diante; destrancar (só a trancada em andamento) reativa o aluno |
 | `salvar_turma(academia_id, dados, turma_id?)` | dono, admin | turma e horários numa transação; turma com presença não troca de modalidade |
 | `anonimizar_aluno(aluno_id)`           | dono, admin  | LGPD: substitui o delete de aluno                          |
+| `criar_convite_interna(user_id, academia_id, email, papel)` | Edge Function `convidar-membro` (service_role) | convite da equipe por e-mail (dono convida até dono; admin, até admin), um pendente por e-mail e academia, 7 dias; devolve o estado da conta só para a função; limite de reenvio e diário |
+| `cancelar_convite(convite_id)` | dono, admin | cancela convite pendente (admin não cancela o de dono) |
+| `meus_convites()` / `aceitar_convite(convite_id)` / `recusar_convite(convite_id)` | logado | convites pendentes do e-mail confirmado do login; o aceite grava em `membros_academia` (novo, reativação ou troca do papel `aluno`) |
+| `equipe_da_academia(academia_id)` | dono, admin | membros da equipe com e-mail, sem o papel `aluno` |
 | `registrar_graduacao(academia_id, dados)` | dono, admin, professor | graduação com data no dia da academia (nunca no futuro) e grau dentro da faixa |
 | `vw_graduacao_atual`                   | equipe/aluno | faixa e grau atuais por modalidade                         |
 | `vw_progresso_graduacao`               | equipe/aluno | aulas e meses desde a última graduação, campo `apto`       |

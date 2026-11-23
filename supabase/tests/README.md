@@ -46,6 +46,8 @@ edite o arquivo manualmente.
 | `financeiro/emissao_webhook.test.sql` | 46 | Emissão, tentativa da reserva, adoção pelo webhook e divergências |
 | `financeiro/permissoes.test.sql` | 30 | Grants financeiros, colunas de sistema, anonimização e academia imutável |
 | `financeiro/recorrencia.test.sql` | 21 | Competência, recorrência e mês inicial da cobrança |
+| `database/convite_membros.test.sql` | 67 | Convite da equipe: criação só pela Edge Function, papéis, convite duplicado, limites, academia suspensa, aceite e recusa (e-mail, senha, vencido, quem convidou perdeu o acesso, membro reativado, aluno promovido), cancelamento, `equipe_da_academia` e o último dono |
+| `database/convite_membros_concorrencia.test.sql` | 12 | Convite com duas transações (`dblink`): aceite duplo, convite contra aceite e dois donos saindo ao mesmo tempo |
 | `matricula/concorrencia.test.sql` | 13 | Matrícula duplicada com duas transações simultâneas (`dblink`): a segunda espera e é recusada |
 | `matricula/duplicada.test.sql` | 39 | Matrícula duplicada na mesma turma: situações, períodos, troca de plano, duas academias e erro `matricula_duplicada` |
 
