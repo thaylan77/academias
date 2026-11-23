@@ -268,7 +268,9 @@ mesmo tempo esperam um pelo outro, e o segundo é recusado.
 
 Apagar no Auth a conta do último dono de uma academia (o delete em cascata
 de `auth.users`) também é recusado, porque o Auth não roda como
-`service_role`. A conta só pode ser apagada depois de passar a academia
+`service_role`. A exclusão lógica (`deleted_at`) também: um gatilho em
+`auth.users` aplica a mesma trava, e dono com a conta apagada logicamente não
+conta como dono restante. A conta só pode ser apagada depois de passar a academia
 para outro dono. Pedido de titular (LGPD) com essa conta é tratado
 manualmente, pelo SQL do projeto.
 

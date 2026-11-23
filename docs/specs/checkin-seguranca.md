@@ -113,7 +113,7 @@ O código vai no `hint` do erro (`raise exception '<mensagem em português>' usi
 | `convite_reenvio_cedo` | `criar_convite_interna` | menos de 60 segundos desde o último e-mail para o mesmo endereço na academia, contando convites cancelados e recusados |
 | `limite_convites` | `criar_convite_interna` | 5 e-mails para o mesmo endereço na academia em 24 horas, ou 30 convites com envio na academia em 24 horas |
 | `senha_pendente` | `aceitar_convite` | conta criada ou protegida pelo convite ainda sem senha definida (`app_metadata.definir_senha`) |
-| `ultimo_dono` | gravação em `membros_academia` (gatilho `membros_academia_ultimo_dono`) | a alteração deixaria a academia sem dono ativo. Passam o `service_role`, a sessão administrativa sem JWT e o delete em cascata da academia |
+| `ultimo_dono` | gravação em `membros_academia` (gatilho `membros_academia_ultimo_dono`) e exclusão lógica em `auth.users` (gatilho `auth_users_ultimo_dono`) | a alteração deixaria a academia sem dono ativo com conta não apagada. Passam o `service_role`, a sessão administrativa sem JWT e o delete em cascata da academia |
 | `matricula_duplicada` | gravação em `matricula_turmas` e em `matriculas` | o aluno já tem matrícula não cancelada na turma em período sobreposto. O `detail` traz `matricula_id` e `turma_id` em conflito. Regra em `docs/specs/matricula-duplicada.md` |
 
 

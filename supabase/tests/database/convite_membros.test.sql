@@ -4,7 +4,7 @@
 -- Academias A e B (ativas) e S (suspensa).
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(78);
+select plan(81);
 
 -- ---------------------------------------------------------------------
 -- Auxiliares
@@ -28,6 +28,20 @@ begin
   perform set_config('request.jwt.claim.sub', '', true);
   perform set_config('request.jwt.claim.role', 'service_role', true);
   perform set_config('request.jwt.claims', '{"role":"service_role"}', true);
+end
+$$;
+
+-- Simula o Auth (GoTrue): requisição que não é service_role nem sessão
+-- administrativa sem JWT. No Supabase de verdade é o session_user
+-- supabase_auth_admin; aqui, o papel da requisição.
+create function public.__como_auth()
+returns void
+language plpgsql
+as $$
+begin
+  perform set_config('request.jwt.claim.sub', '', true);
+  perform set_config('request.jwt.claim.role', 'supabase_auth_admin', true);
+  perform set_config('request.jwt.claims', '{"role":"supabase_auth_admin"}', true);
 end
 $$;
 
@@ -110,12 +124,15 @@ insert into auth.users (id, email, email_confirmed_at, raw_app_meta_data) values
   ('e7c00000-0000-4000-8000-0000000000d8', 'saiu@conv.test',       now(), '{}'),
   ('e7c00000-0000-4000-8000-0000000000d9', 'recusa@conv.test',     now(), '{}'),
   ('e7c00000-0000-4000-8000-0000000000da', 'quemapagou@conv.test', now(), '{}'),
+  ('e7c00000-0000-4000-8000-0000000000f1', 'dono-x@conv.test',     now(), '{}'),
+  ('e7c00000-0000-4000-8000-0000000000f2', 'dono-y@conv.test',     now(), '{}'),
   ('e7c00000-0000-4000-8000-0000000000e1', 'totem-a@conv.test',    now(), '{}');
 
 insert into public.academias (id, nome, slug, status) values
   ('e7c00000-0000-4000-8000-00000000000a', 'Convite A', 'convite-a', 'ativa'),
   ('e7c00000-0000-4000-8000-00000000000b', 'Convite B', 'convite-b', 'ativa'),
-  ('e7c00000-0000-4000-8000-00000000000c', 'Convite S', 'convite-s', 'ativa');
+  ('e7c00000-0000-4000-8000-00000000000c', 'Convite S', 'convite-s', 'ativa'),
+  ('e7c00000-0000-4000-8000-00000000000d', 'Convite D', 'convite-d', 'ativa');
 
 insert into public.membros_academia (academia_id, user_id, papel, ativo) values
   ('e7c00000-0000-4000-8000-00000000000a', 'e7c00000-0000-4000-8000-0000000000a1', 'dono',      true),
@@ -130,7 +147,9 @@ insert into public.membros_academia (academia_id, user_id, papel, ativo) values
   ('e7c00000-0000-4000-8000-00000000000a', 'e7c00000-0000-4000-8000-0000000000e1', 'totem',     true),
   ('e7c00000-0000-4000-8000-00000000000b', 'e7c00000-0000-4000-8000-0000000000b1', 'dono',      true),
   ('e7c00000-0000-4000-8000-00000000000b', 'e7c00000-0000-4000-8000-0000000000b2', 'admin',     true),
-  ('e7c00000-0000-4000-8000-00000000000c', 'e7c00000-0000-4000-8000-0000000000c1', 'dono',      true);
+  ('e7c00000-0000-4000-8000-00000000000c', 'e7c00000-0000-4000-8000-0000000000c1', 'dono',      true),
+  ('e7c00000-0000-4000-8000-00000000000d', 'e7c00000-0000-4000-8000-0000000000f1', 'dono',      true),
+  ('e7c00000-0000-4000-8000-00000000000d', 'e7c00000-0000-4000-8000-0000000000f2', 'dono',      true);
 
 insert into public.alunos (id, academia_id, nome, email, status, user_id) values
   ('e7c00000-0000-4000-8000-0000000001a1', 'e7c00000-0000-4000-8000-00000000000a', 'Aluna Promovida',
@@ -487,6 +506,23 @@ select public.__como('e7c00000-0000-4000-8000-0000000000a1');
 select is(public.__hint_de($$update public.membros_academia set papel = 'admin'
                              where academia_id = 'e7c00000-0000-4000-8000-00000000000a' and user_id = 'e7c00000-0000-4000-8000-0000000000a1'$$),
   'ultimo_dono', 'o dono que sobrou não se rebaixa');
+
+-- Exclusão lógica no Auth: em D (donos x e y), apagar y passa; depois, x
+-- não sai, e apagar x é recusado.
+reset role;
+select public.__como_auth();
+select is(public.__hint_de($$update auth.users set deleted_at = now() where id = 'e7c00000-0000-4000-8000-0000000000f2'$$),
+  'sem erro', 'Auth apaga logicamente um dono quando sobra outro');
+set local role authenticated;
+select public.__como('e7c00000-0000-4000-8000-0000000000f1');
+select is(public.__hint_de($$update public.membros_academia set papel = 'admin'
+                             where academia_id = 'e7c00000-0000-4000-8000-00000000000d' and user_id = 'e7c00000-0000-4000-8000-0000000000f1'$$),
+  'ultimo_dono', 'dono apagado logicamente não conta: o outro não se rebaixa');
+reset role;
+select public.__como_auth();
+select is(public.__hint_de($$update auth.users set deleted_at = now() where id = 'e7c00000-0000-4000-8000-0000000000f1'$$),
+  'ultimo_dono', 'Auth não apaga logicamente o último dono com acesso');
+set local role authenticated;
 
 -- service_role e sessão administrativa sem JWT passam.
 reset role;

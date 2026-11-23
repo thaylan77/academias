@@ -605,6 +605,29 @@ grant execute on function public.equipe_da_academia(uuid) to authenticated;
 -- =====================================================================
 -- 7. ÚLTIMO DONO E REVOGAÇÃO
 -- =====================================================================
+-- Outro dono ativo, com a conta do Auth existente e não apagada (exclusão
+-- lógica também conta como apagada).
+create or replace function public.academia_tem_outro_dono(p_academia_id uuid, p_user_id uuid)
+returns boolean
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select exists (
+    select 1
+    from public.membros_academia m
+    join auth.users u on u.id = m.user_id
+    where m.academia_id = p_academia_id
+      and m.papel = 'dono'
+      and m.ativo
+      and m.user_id <> p_user_id
+      and u.deleted_at is null
+  )
+$$;
+
+revoke execute on function public.academia_tem_outro_dono(uuid, uuid) from public, anon, authenticated;
+
 -- Quando um dono ou admin ativo perde poder (delete, desativação,
 -- rebaixamento ou troca do titular do vínculo), trava a linha da academia,
 -- a mesma que as funções de convite travam: a revogação e o aceite de um
@@ -664,13 +687,7 @@ begin
     return coalesce(new, old);
   end if;
 
-  if not exists (
-    select 1 from public.membros_academia m
-    where m.academia_id = old.academia_id
-      and m.papel = 'dono'
-      and m.ativo
-      and m.user_id <> old.user_id
-  ) then
+  if not public.academia_tem_outro_dono(old.academia_id, old.user_id) then
     raise exception 'A academia precisa de pelo menos um dono ativo. Convide outro dono antes de sair.'
       using hint = 'ultimo_dono';
   end if;
@@ -684,3 +701,50 @@ revoke execute on function public.membros_ultimo_dono() from public, anon, authe
 create trigger membros_academia_ultimo_dono
   before update or delete on public.membros_academia
   for each row execute function public.membros_ultimo_dono();
+
+-- Exclusão lógica no Auth (auth.users.deleted_at) não passa pelo delete em
+-- cascata de membros_academia: este gatilho aplica a mesma trava. Recusa
+-- apagar logicamente a conta do último dono com acesso de alguma academia.
+-- O Auth roda como supabase_auth_admin e é barrado, como na exclusão de
+-- verdade (spec, 4.5); passam o service_role e a sessão administrativa sem
+-- JWT.
+create or replace function public.auth_conta_ultimo_dono()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_papel_req text := nullif(auth.role(), '');
+  v_academia  uuid;
+begin
+  if old.deleted_at is not null or new.deleted_at is null then
+    return new;
+  end if;
+  if v_papel_req = 'service_role'
+     or (v_papel_req is null and session_user in ('postgres', 'supabase_admin')) then
+    return new;
+  end if;
+
+  for v_academia in
+    select m.academia_id
+    from public.membros_academia m
+    where m.user_id = old.id and m.papel = 'dono' and m.ativo
+    order by m.academia_id
+  loop
+    perform 1 from public.academias a where a.id = v_academia for update;
+    if not public.academia_tem_outro_dono(v_academia, old.id) then
+      raise exception 'Esta conta é a última dona ativa de uma academia. Passe a academia para outro dono antes de apagá-la.'
+        using hint = 'ultimo_dono';
+    end if;
+  end loop;
+
+  return new;
+end
+$$;
+
+revoke execute on function public.auth_conta_ultimo_dono() from public, anon, authenticated;
+
+create trigger auth_users_ultimo_dono
+  before update of deleted_at on auth.users
+  for each row execute function public.auth_conta_ultimo_dono();

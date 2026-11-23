@@ -127,7 +127,9 @@ Helpers SQL:
 
 Gatilho `membros_academia_ultimo_dono`: nenhuma alteração pela API deixa a
 academia sem dono ativo (`hint = ultimo_dono`), e a perda de poder de um dono
-ou admin trava a academia, como as funções de convite.
+ou admin trava a academia, como as funções de convite. Dono com a conta
+apagada logicamente no Auth não conta, e o gatilho `auth_users_ultimo_dono`
+recusa apagar logicamente o último dono.
 
 **Única exceção** à regra "suspensa lê, mas não altera": `anonimizar_aluno`
 usa `tem_papel` (dono, admin) sem checar a assinatura, porque pedido de
