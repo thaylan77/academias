@@ -130,6 +130,25 @@ isOneToOne: false
       referencedColumns: ["id"]
     }
                   ]
+                },"convites_equipe": {
+                  Row: {
+                    "academia_id": string,"aceito_em": string | null,"aceito_por": string | null,"convidado_por": string | null,"created_at": string,"email": string,"encerrado_em": string | null,"encerrado_por": string | null,"expira_em": string,"id": string,"papel": string,"status": string,"ultimo_envio_em": string | null,"updated_at": string
+                  }
+                  Insert: {
+                    "academia_id": string,"aceito_em"?: string | null,"aceito_por"?: string | null,"convidado_por"?: string | null,"created_at"?: string,"email": string,"encerrado_em"?: string | null,"encerrado_por"?: string | null,"expira_em": string,"id"?: string,"papel": string,"status"?: string,"ultimo_envio_em"?: string | null,"updated_at"?: string
+                  }
+                  Update: {
+                    "academia_id"?: string,"aceito_em"?: string | null,"aceito_por"?: string | null,"convidado_por"?: string | null,"created_at"?: string,"email"?: string,"encerrado_em"?: string | null,"encerrado_por"?: string | null,"expira_em"?: string,"id"?: string,"papel"?: string,"status"?: string,"ultimo_envio_em"?: string | null,"updated_at"?: string
+                  }
+                  Relationships: [
+                    {
+      foreignKeyName: "convites_equipe_academia_id_fkey"
+      columns: ["academia_id"]
+isOneToOne: false
+      referencedRelation: "academias"
+      referencedColumns: ["id"]
+    }
+                  ]
                 },"faixas": {
                   Row: {
                     "academia_id": string,"cor": string | null,"created_at": string,"id": string,"max_graus": number,"min_aulas": number,"min_meses": number,"modalidade_id": string,"nome": string,"ordem": number
@@ -501,6 +520,9 @@ isOneToOne: false
 "academia_publica":
 { Args: { "p_slug": string }; Returns: Json
                            },
+"aceitar_convite":
+{ Args: { "p_convite_id": string }; Returns: string
+                           },
 "aluno_sem_dados_pessoais":
 { Args: { "p_aluno": Database["public"]['Tables']["alunos"]['Row'] }; Returns: boolean
                            },
@@ -525,6 +547,9 @@ isOneToOne: false
 "cancelar_cobranca_interna":
 { Args: { "p_cobranca_id": string,"p_user_id": string }; Returns: undefined
                            },
+"cancelar_convite":
+{ Args: { "p_convite_id": string }; Returns: undefined
+                           },
 "checkin_aulas_abertas":
 { Args: { "p_academia_id": string }; Returns: {
               "dia": string,"hora_fim": string,"hora_inicio": string,"turma_id": string
@@ -539,8 +564,40 @@ isOneToOne: false
 "checkin_token_da_janela":
 { Args: { "p_janela": number,"p_turma_id": string }; Returns: string
                            },
+"convite_do_login_travado":
+{ Args: { "p_convite_id": string,"p_exige_senha": boolean }; Returns: {
+              "academia_id": string,
+"aceito_em": string | null,
+"aceito_por": string | null,
+"convidado_por": string | null,
+"created_at": string,
+"email": string,
+"encerrado_em": string | null,
+"encerrado_por": string | null,
+"expira_em": string,
+"id": string,
+"papel": string,
+"status": string,
+"ultimo_envio_em": string | null,
+"updated_at": string
+            }
+                          SetofOptions: {
+        from: "*"
+        to: "convites_equipe"
+        isOneToOne: true
+        isSetofReturn: false
+      } },
+"convite_email_do_login":
+{ Args: Record<PropertyKey, never>; Returns: string
+                           },
+"convite_papel_ativo":
+{ Args: { "p_academia_id": string,"p_user_id": string }; Returns: string
+                           },
 "criar_academia":
 { Args: { "p_nome": string,"p_slug": string }; Returns: string
+                           },
+"criar_convite_interna":
+{ Args: { "p_academia_id": string,"p_email": string,"p_papel": string,"p_user_id": string }; Returns: Json
                            },
 "criar_matricula":
 { Args: { "p_academia_id": string,"p_dados": Json }; Returns: string
@@ -553,6 +610,11 @@ isOneToOne: false
                            },
 "encerrar_matricula":
 { Args: { "p_data_fim": string,"p_matricula_id": string }; Returns: number
+                           },
+"equipe_da_academia":
+{ Args: { "p_academia_id": string }; Returns: {
+              "ativo": boolean,"created_at": string,"email": string,"papel": string,"user_id": string
+            }[]
                            },
 "fazer_checkin":
 { Args: { "p_aluno_id"?: string,"p_token": string,"p_turma_id": string }; Returns: string
@@ -584,8 +646,16 @@ isOneToOne: false
 "membro_pode_gerir":
 { Args: { "p_academia_id": string,"p_papeis": (string)[],"p_user_id": string }; Returns: boolean
                            },
+"meus_convites":
+{ Args: Record<PropertyKey, never>; Returns: {
+              "academia_id": string,"academia_nome": string,"convite_id": string,"expira_em": string,"papel": string
+            }[]
+                           },
 "pode_gerir":
 { Args: { "p_academia_id": string,"p_papeis": (string)[] }; Returns: boolean
+                           },
+"recusar_convite":
+{ Args: { "p_convite_id": string }; Returns: undefined
                            },
 "registrar_emissao_interna":
 { Args: { "p_cobranca_id": string,"p_gateway_conta_id": string,"p_gateway_id": string,"p_link_pagamento": string,"p_tentativa": string }; Returns: undefined
