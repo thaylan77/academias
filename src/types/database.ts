@@ -687,6 +687,9 @@ isOneToOne: false
 "membro_pode_gerir":
 { Args: { "p_academia_id": string,"p_papeis": (string)[],"p_user_id": string }; Returns: boolean
                            },
+"membros_reconfere_autor":
+{ Args: { "p_academia_id": string,"p_papel_antes": string,"p_papel_depois": string }; Returns: undefined
+                           },
 "meus_convites":
 { Args: Record<PropertyKey, never>; Returns: {
               "academia_id": string,"academia_nome": string,"convite_id": string,"expira_em": string,"papel": string
