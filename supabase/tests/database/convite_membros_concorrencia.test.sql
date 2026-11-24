@@ -34,6 +34,8 @@
 --      recusada.
 --   V. a prova da senha nova muda enquanto o aceite espera a trava: o aceite
 --      é recusado (senha_pendente), sem vínculo.
+--   W. a sessão de quem aceita é revogada enquanto o aceite espera: a
+--      revogação vence, e o convite, o vínculo e as sessões ficam intactos.
 -- A espera é provada pelo pid: s2 está bloqueada e s1 está entre os que a
 -- bloqueiam. As fixtures são gravadas e confirmadas por uma conexão própria,
 -- apagadas antes (se uma execução anterior parou no meio) e depois, pela
@@ -41,7 +43,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 create extension if not exists dblink with schema extensions;
-select plan(85);
+select plan(89);
 
 create function pg_temp.conexao(p_nome text) returns text language sql as $$
   select format('host=%s port=%s dbname=%s user=postgres password=postgres application_name=%s',
@@ -134,6 +136,7 @@ begin
       'e7d00000-0000-4000-8000-0000000000b9', 'e7d00000-0000-4000-8000-0000000000db',
       'e7d00000-0000-4000-8000-0000000000bc', 'e7d00000-0000-4000-8000-0000000000bd',
       'e7d00000-0000-4000-8000-0000000000dd', 'e7d00000-0000-4000-8000-0000000000de',
+      'e7d00000-0000-4000-8000-0000000000df',
       'e7d00000-0000-4000-8000-0000000000d1', 'e7d00000-0000-4000-8000-0000000000d2');
   $f$);
 end
@@ -175,7 +178,8 @@ select extensions.dblink_exec('prep', $f$
     ('e7d00000-0000-4000-8000-0000000000bc', 'dono12@concorre.test', now()),
     ('e7d00000-0000-4000-8000-0000000000bd', 'dono13@concorre.test', now()),
     ('e7d00000-0000-4000-8000-0000000000dd', 'u12@concorre.test',   now()),
-    ('e7d00000-0000-4000-8000-0000000000de', 'u13@concorre.test',   now());
+    ('e7d00000-0000-4000-8000-0000000000de', 'u13@concorre.test',   now()),
+    ('e7d00000-0000-4000-8000-0000000000df', 'u14@concorre.test',   now());
   -- Senha nova já definida (concluir-senha), como pede o aceite.
   -- Cada usuário com uma sessão (id = o próprio id do usuário, como o
   -- session_id que pg_temp.como põe no JWT) e a senha nova definida nela.
@@ -239,6 +243,8 @@ select extensions.dblink_exec('prep', $f$
     ('e7d00000-0000-4000-8000-0000000002ce', 'e7d00000-0000-4000-8000-00000000000d', 'u11@concorre.test', 'professor',
      'e7d00000-0000-4000-8000-0000000000b9', now() + interval '7 days'),
     ('e7d00000-0000-4000-8000-0000000002cf', 'e7d00000-0000-4000-8000-00000000000e', 'u13@concorre.test', 'professor',
+     'e7d00000-0000-4000-8000-0000000000bd', now() + interval '7 days'),
+    ('e7d00000-0000-4000-8000-0000000002d0', 'e7d00000-0000-4000-8000-00000000000e', 'u14@concorre.test', 'professor',
      'e7d00000-0000-4000-8000-0000000000bd', now() + interval '7 days');
 $f$);
 
@@ -638,6 +644,25 @@ select matches(pg_temp.resultado_s2(), 'HINT: +senha_pendente', 'V: com a prova 
 select is((select count(*) from public.membros_academia
            where academia_id = 'e7d00000-0000-4000-8000-00000000000e' and user_id = 'e7d00000-0000-4000-8000-0000000000de'),
   0::bigint, 'V: u13 não entrou na equipe');
+
+-- ---------------------------------------------------------------------
+-- W. s1 (administrativa) apaga, sem confirmar, a sessão de u14; u14 aceita em
+--    s2 com essa sessão e espera; s1 confirma a revogação.
+-- ---------------------------------------------------------------------
+select pg_temp.como('s2', 'e7d00000-0000-4000-8000-0000000000df');
+select extensions.dblink_exec('s1', 'begin');
+select extensions.dblink_exec('s1', $$delete from auth.sessions where id = 'e7d00000-0000-4000-8000-0000000000df'$$);
+select is(extensions.dblink_send_query('s2', $$select public.aceitar_convite('e7d00000-0000-4000-8000-0000000002d0')$$),
+  1, 'W: s2 envia o aceite');
+select ok(pg_temp.s2_espera_s1(), 'W: o aceite espera a revogação da sessão');
+select extensions.dblink_exec('s1', 'commit');
+select matches(pg_temp.resultado_s2(), 'HINT: +convite_exige_link', 'W: a revogação venceu: o aceite é recusado');
+select is((select (select count(*) from public.membros_academia
+                   where academia_id = 'e7d00000-0000-4000-8000-00000000000e'
+                     and user_id = 'e7d00000-0000-4000-8000-0000000000df')::text
+                  || '/' || status
+           from public.convites_equipe where id = 'e7d00000-0000-4000-8000-0000000002d0'),
+  '0/pendente', 'W: sem vínculo, e o convite continua pendente');
 
 -- ---------------------------------------------------------------------
 -- Limpeza.

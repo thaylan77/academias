@@ -795,8 +795,13 @@ begin
     -- Trava a própria conta (uma troca de e-mail no Auth espera o aceite) e
     -- relê e-mail e senha: podem ter mudado enquanto esperava as travas.
     perform 1 from auth.users u where u.id = auth.uid() for share;
-    -- A sessão do token ainda existe (uma sessão revogada não aceita nem recusa).
-    if not public.sessao_valida(auth.uid(), public.jwt_sessao()) then
+    -- A sessão do token ainda existe (uma sessão revogada não aceita nem
+    -- recusa), e fica travada até o fim: uma revogação concorrente espera
+    -- este aceite, ou o aceite vê a sessão apagada.
+    perform 1 from auth.sessions s
+     where s.id = public.jwt_sessao() and s.user_id = auth.uid()
+     for share;
+    if not found then
       raise exception 'Abra o link enviado ao seu e-mail para aceitar o convite.'
         using hint = 'convite_exige_link';
     end if;
