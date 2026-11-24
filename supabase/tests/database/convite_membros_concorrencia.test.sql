@@ -9,15 +9,12 @@
 --   F. o mesmo, trocando o titular do vínculo de admin (user_id);
 --   G. o e-mail do convidado muda no Auth enquanto o aceite espera a trava:
 --      o aceite relê o e-mail e é recusado;
---   H. a conta de quem convidou é apagada logicamente no Auth durante o
---      aceite: o aceite espera e é recusado;
---   I. a conta de um admin está sendo apagada logicamente; o dono o promove
---      a dono (espera a exclusão, que desativa o vínculo) e tenta sair: a
---      saída é recusada.
+--   (H e I testavam a exclusão lógica no Auth, que agora é proibida.)
 --   J. duas academias convidam o mesmo e-mail ao mesmo tempo: a segunda
 --      espera a trava do e-mail e esbarra nos 60 segundos.
 --   K. um convite espera a trava da academia: o horário registrado do envio
---      é o de depois da espera, não o do início da transação.
+--      é o de depois da espera, não o do início da transação;
+--   L. o convite vence enquanto o aceite espera a trava: o aceite é recusado.
 -- A espera é provada pelo pid: s2 está bloqueada e s1 está entre os que a
 -- bloqueiam. As fixtures são gravadas e confirmadas por uma conexão própria,
 -- apagadas antes (se uma execução anterior parou no meio) e depois, pela
@@ -25,7 +22,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 create extension if not exists dblink with schema extensions;
-select plan(55);
+select plan(47);
 
 create function pg_temp.conexao(p_nome text) returns text language sql as $$
   select format('host=%s port=%s dbname=%s user=postgres password=postgres application_name=%s',
@@ -168,7 +165,9 @@ select extensions.dblink_exec('prep', $f$
     ('e7d00000-0000-4000-8000-0000000002c7', 'e7d00000-0000-4000-8000-00000000000b', 'u6@concorre.test', 'professor',
      'e7d00000-0000-4000-8000-0000000000b2', now() + interval '7 days'),
     ('e7d00000-0000-4000-8000-0000000002c8', 'e7d00000-0000-4000-8000-00000000000b', 'u7@concorre.test', 'professor',
-     'e7d00000-0000-4000-8000-0000000000b5', now() + interval '7 days');
+     'e7d00000-0000-4000-8000-0000000000b5', now() + interval '7 days'),
+    ('e7d00000-0000-4000-8000-0000000002c9', 'e7d00000-0000-4000-8000-00000000000b', 'u2@concorre.test', 'recepcao',
+     'e7d00000-0000-4000-8000-0000000000b2', now() + interval '7 days');
 $f$);
 
 -- ---------------------------------------------------------------------
@@ -305,48 +304,6 @@ select is((select count(*) from public.membros_academia
   0::bigint, 'G: u6 não entrou na equipe');
 
 -- ---------------------------------------------------------------------
--- H. s1 (conexão administrativa, SQL do projeto) apaga logicamente a conta de
---    b5 sem confirmar; u7 aceita em s2 o convite que b5 fez.
--- ---------------------------------------------------------------------
-select pg_temp.como('s2', 'e7d00000-0000-4000-8000-0000000000d7');
-select ok(pg_temp.ninguem_esperando(), 'H: antes do envio, s2 não espera ninguém');
-select extensions.dblink_exec('s1', 'begin');
-select extensions.dblink_exec('s1', $$update auth.users set deleted_at = now() where id = 'e7d00000-0000-4000-8000-0000000000b5'$$);
-select is(extensions.dblink_send_query('s2', $$select public.aceitar_convite('e7d00000-0000-4000-8000-0000000002c8')$$),
-  1, 'H: s2 envia o aceite');
-select ok(pg_temp.s2_espera_s1(), 'H: o aceite espera a exclusão em andamento');
-select extensions.dblink_exec('s1', 'commit');
-select matches(pg_temp.resultado_s2(), 'HINT: +convite_invalido', 'H: com a conta de quem convidou apagada, o aceite é recusado');
-select is((select count(*) from public.membros_academia
-           where academia_id = 'e7d00000-0000-4000-8000-00000000000b' and user_id = 'e7d00000-0000-4000-8000-0000000000d7'),
-  0::bigint, 'H: u7 não entrou na equipe');
-
--- ---------------------------------------------------------------------
--- I. s1, pelo SQL do projeto (sem JWT; o Auth é recusado), apaga
---    logicamente a conta do admin b7 sem confirmar (o gatilho desativa o
---    vínculo dele); o dono b6 promove b7 a dono em s2 e
---    depois tenta sair.
--- ---------------------------------------------------------------------
-select extensions.dblink_exec('s1', $q$set request.jwt.claim.sub = ''; set request.jwt.claim.role = ''; set request.jwt.claims = ''$q$);
-select pg_temp.como('s2', 'e7d00000-0000-4000-8000-0000000000b6');
-select ok(pg_temp.ninguem_esperando(), 'I: antes do envio, s2 não espera ninguém');
-select extensions.dblink_exec('s1', 'begin');
-select extensions.dblink_exec('s1', $$update auth.users set deleted_at = now() where id = 'e7d00000-0000-4000-8000-0000000000b7'$$);
-select is(extensions.dblink_send_query('s2', $$update public.membros_academia set papel = 'dono'
-  where academia_id = 'e7d00000-0000-4000-8000-00000000000c' and user_id = 'e7d00000-0000-4000-8000-0000000000b7'$$),
-  1, 'I: s2 envia a promoção de b7');
-select ok(pg_temp.s2_espera_s1(), 'I: a promoção espera a exclusão lógica em andamento');
-select extensions.dblink_exec('s1', 'commit');
-select is(pg_temp.resultado_s2(), 'ok', 'I: a promoção passa, mas o vínculo de b7 já está inativo');
-select is(extensions.dblink_send_query('s2', $$update public.membros_academia set ativo = false
-  where academia_id = 'e7d00000-0000-4000-8000-00000000000c' and user_id = 'e7d00000-0000-4000-8000-0000000000b6'$$),
-  1, 'I: s2 envia a saída do dono atual');
-select matches(pg_temp.resultado_s2(), 'HINT: +ultimo_dono', 'I: com o promovido apagado, a saída é recusada (ultimo_dono)');
-select is((select count(*) from public.membros_academia m join auth.users u on u.id = m.user_id
-           where m.academia_id = 'e7d00000-0000-4000-8000-00000000000c' and m.papel = 'dono' and m.ativo and u.deleted_at is null),
-  1::bigint, 'I: sobrou um dono ativo com conta');
-
--- ---------------------------------------------------------------------
 -- J. s1 (dono a2, em K) e s2 (dono b2, em L), como a Edge Function, convidam
 --    o mesmo e-mail; s1 não confirma.
 -- ---------------------------------------------------------------------
@@ -389,6 +346,25 @@ select ok((select c.ultimo_envio_em >= (select t from inicio_s2) + interval '1 s
                   and c.envios_recentes[1] = c.ultimo_envio_em
            from public.convites_equipe c where c.email = 'relogio@concorre.test'),
   'K: o envio registrado é o horário de depois da espera');
+
+-- ---------------------------------------------------------------------
+-- L. O convite c9 (de b2 para u2, em L) passa a vencer em 2 s; s1 segura a
+--    academia L; u2 aceita em s2 e espera; o convite vence; s1 confirma.
+-- ---------------------------------------------------------------------
+select extensions.dblink_exec('prep', $$update public.convites_equipe set expira_em = clock_timestamp() + interval '2 seconds'
+  where id = 'e7d00000-0000-4000-8000-0000000002c9'$$);
+select pg_temp.como('s2', 'e7d00000-0000-4000-8000-0000000000d2');
+select extensions.dblink_exec('s1', 'begin');
+select extensions.dblink_exec('s1', $$update public.academias set updated_at = updated_at where id = 'e7d00000-0000-4000-8000-00000000000b'$$);
+select is(extensions.dblink_send_query('s2', $$select public.aceitar_convite('e7d00000-0000-4000-8000-0000000002c9')$$),
+  1, 'L: s2 envia o aceite antes do vencimento');
+select ok(pg_temp.s2_espera_s1(), 'L: o aceite espera a trava da academia');
+select pg_sleep(2.5);
+select extensions.dblink_exec('s1', 'commit');
+select matches(pg_temp.resultado_s2(), 'HINT: +convite_invalido', 'L: o convite venceu durante a espera: o aceite é recusado');
+select is((select count(*) from public.membros_academia
+           where academia_id = 'e7d00000-0000-4000-8000-00000000000b' and user_id = 'e7d00000-0000-4000-8000-0000000000d2'),
+  0::bigint, 'L: u2 não entrou na equipe de L');
 
 -- ---------------------------------------------------------------------
 -- Limpeza.

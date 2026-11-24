@@ -4,7 +4,7 @@
 -- Academias A e B (ativas) e S (suspensa).
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(89);
+select plan(81);
 
 -- ---------------------------------------------------------------------
 -- Auxiliares
@@ -322,7 +322,6 @@ select public.__cc('e7c00000-0000-4000-8000-0000000000a1', 'e7c00000-0000-4000-8
 select public.__cc('e7c00000-0000-4000-8000-0000000000a7', 'e7c00000-0000-4000-8000-00000000000a', 'saiu@conv.test',     'professor');
 select public.__cc('e7c00000-0000-4000-8000-0000000000a1', 'e7c00000-0000-4000-8000-00000000000a', 'recusa@conv.test',   'professor');
 select public.__cc('e7c00000-0000-4000-8000-0000000000a1', 'e7c00000-0000-4000-8000-00000000000a', 'dono2@conv.test',    'dono');
-select public.__cc('e7c00000-0000-4000-8000-0000000000a2', 'e7c00000-0000-4000-8000-00000000000a', 'quemapagou@conv.test', 'professor');
 
 reset role;
 update public.convites_equipe set expira_em = now() - interval '1 minute' where email = 'vencido@conv.test';
@@ -409,32 +408,6 @@ select is(public.__hint_de(format('select public.aceitar_convite(%L)', (public._
 select public.__como('e7c00000-0000-4000-8000-0000000000d7');
 select is(public.__hint_de(format('select public.aceitar_convite(%L)', (public.__conv('e7c00000-0000-4000-8000-00000000000a', 'semquem@conv.test')).id)),
   'convite_invalido', 'convite de conta apagada (convidado_por nulo) não é aceito');
-
--- Exclusão lógica da conta de quem convidou, pelo SQL do projeto (o Auth é
--- recusado; ver o bloco do último dono).
-reset role;
-select public.__sem_jwt();
-update auth.users set deleted_at = now() where id = 'e7c00000-0000-4000-8000-0000000000a2';
-set local role authenticated;
-select public.__como('e7c00000-0000-4000-8000-0000000000da');
-select is((select count(*) from public.meus_convites()), 0::bigint,
-  'meus_convites: convite de conta apagada logicamente não aparece');
-select is(public.__hint_de(format('select public.aceitar_convite(%L)', (public.__conv('e7c00000-0000-4000-8000-00000000000a', 'quemapagou@conv.test')).id)),
-  'convite_invalido', 'conta de quem convidou apagada logicamente: o convite morre');
-reset role;
-select is(public.__membro('e7c00000-0000-4000-8000-00000000000a', 'e7c00000-0000-4000-8000-0000000000a2'), 'admin (inativo)',
-  'exclusão lógica desativa os vínculos da conta');
-set local role authenticated;
-select public.__como('e7c00000-0000-4000-8000-0000000000a2');
-select is((select count(*) from public.convites_equipe), 0::bigint,
-  'conta apagada logicamente, com o JWT ainda válido, não lê convites');
-select is(public.__hint_de($$select * from public.equipe_da_academia('e7c00000-0000-4000-8000-00000000000a')$$),
-  'sem_permissao', 'conta apagada logicamente não lista a equipe');
-reset role;
-update auth.users set deleted_at = null where id = 'e7c00000-0000-4000-8000-0000000000a2';
-update public.membros_academia set ativo = true
- where academia_id = 'e7c00000-0000-4000-8000-00000000000a' and user_id = 'e7c00000-0000-4000-8000-0000000000a2';
-set local role authenticated;
 
 -- O admin que convidou é desativado pelo dono; e o inativo2 é reativado pela
 -- tela antes de aceitar.
@@ -526,33 +499,18 @@ select is(public.__hint_de($$update public.membros_academia set papel = 'admin'
                              where academia_id = 'e7c00000-0000-4000-8000-00000000000a' and user_id = 'e7c00000-0000-4000-8000-0000000000a1'$$),
   'ultimo_dono', 'o dono que sobrou não se rebaixa');
 
--- Exclusão lógica: o Auth é recusado; o SQL do projeto (sem JWT) consegue e
--- desativa os vínculos. Em D (donos x e y), apagar y pelo SQL do projeto
--- deixa x como único dono com conta, e x não sai.
+-- Exclusão lógica no Auth é recusada para todos: o Auth, o service_role e o
+-- SQL do projeto (sem JWT). Conta se apaga de verdade.
 reset role;
 select public.__como_auth();
 select is(public.__hint_de($$update auth.users set deleted_at = now() where id = 'e7c00000-0000-4000-8000-0000000000f2'$$),
   'exclusao_logica_bloqueada', 'o Auth não apaga logicamente uma conta');
-select public.__sem_jwt();
-update auth.users set deleted_at = now() where id = 'e7c00000-0000-4000-8000-0000000000f2';
-select is(public.__membro('e7c00000-0000-4000-8000-00000000000d', 'e7c00000-0000-4000-8000-0000000000f2'), 'dono (inativo)',
-  'pelo SQL do projeto, a exclusão lógica desativa os vínculos da conta');
-select is((select coalesce(user_id::text, '-') from public.alunos where id = 'e7c00000-0000-4000-8000-0000000001d1'), '-',
-  'pelo SQL do projeto, a exclusão lógica solta os cadastros de aluno do login');
-set local role authenticated;
-select public.__como('e7c00000-0000-4000-8000-0000000000f2');
-select ok(not public.sou_o_aluno('e7c00000-0000-4000-8000-0000000001d1'),
-  'o JWT antigo da conta apagada logicamente não é mais o login do aluno');
-reset role;
-set local role authenticated;
-select public.__como('e7c00000-0000-4000-8000-0000000000f1');
-select is(public.__hint_de($$update public.membros_academia set papel = 'admin'
-                             where academia_id = 'e7c00000-0000-4000-8000-00000000000d' and user_id = 'e7c00000-0000-4000-8000-0000000000f1'$$),
-  'ultimo_dono', 'dono apagado logicamente não conta: o outro não se rebaixa');
-reset role;
 select public.__como_servico();
-select is(public.__hint_de($$update auth.users set deleted_at = now() where id = 'e7c00000-0000-4000-8000-0000000000f1'$$),
+select is(public.__hint_de($$update auth.users set deleted_at = now() where id = 'e7c00000-0000-4000-8000-0000000000f2'$$),
   'exclusao_logica_bloqueada', 'nem uma requisição service_role apaga logicamente uma conta');
+select public.__sem_jwt();
+select is(public.__hint_de($$update auth.users set deleted_at = now() where id = 'e7c00000-0000-4000-8000-0000000000f2'$$),
+  'exclusao_logica_bloqueada', 'nem o SQL do projeto, sem JWT, apaga logicamente uma conta');
 set local role authenticated;
 
 -- service_role e sessão administrativa sem JWT passam.

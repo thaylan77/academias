@@ -114,7 +114,7 @@ O código vai no `hint` do erro (`raise exception '<mensagem em português>' usi
 | `limite_convites` | `criar_convite_interna` | 5 e-mails para o mesmo endereço em 24 horas (em qualquer academia), ou 30 convites com envio na academia em 24 horas |
 | `senha_pendente` | `aceitar_convite` | conta criada ou protegida pelo convite ainda sem senha definida (`app_metadata.definir_senha`) |
 | `ultimo_dono` | gravação em `membros_academia` (gatilho `membros_academia_ultimo_dono`) | a alteração deixaria a academia sem dono ativo com conta não apagada. Passam o `service_role`, a sessão administrativa sem JWT e o delete em cascata da academia |
-| `exclusao_logica_bloqueada` | `auth.users` (gatilho `auth_users_exclusao_logica`) | o Auth ou uma requisição tentou a exclusão lógica (`deleted_at`) de uma conta. Conta se apaga de verdade. Só o SQL do projeto, sem JWT, consegue, e nesse caso os vínculos da conta são desativados |
+| `exclusao_logica_bloqueada` | `auth.users` (gatilho `auth_users_exclusao_logica`) | qualquer um (o Auth, uma requisição ou o SQL do projeto) tentou a exclusão lógica (`deleted_at`) de uma conta. Conta se apaga de verdade |
 | `matricula_duplicada` | gravação em `matricula_turmas` e em `matriculas` | o aluno já tem matrícula não cancelada na turma em período sobreposto. O `detail` traz `matricula_id` e `turma_id` em conflito. Regra em `docs/specs/matricula-duplicada.md` |
 
 

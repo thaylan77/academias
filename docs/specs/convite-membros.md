@@ -271,9 +271,9 @@ de `auth.users`) também é recusado, porque o Auth não roda como
 `service_role`. A exclusão lógica (`deleted_at`) é proibida (decisão do dono do projeto
 na revisão do PR #82): um gatilho em `auth.users` a recusa com
 `exclusao_logica_bloqueada`, porque uma conta apagada logicamente, com um JWT
-emitido antes, continuaria passando pelo RLS em vários pontos. Só o SQL do
-projeto, sem JWT, consegue, e nesse caso os vínculos da conta são
-desativados. Dono com conta apagada logicamente não conta como dono restante. A conta só pode ser apagada depois de passar a academia
+emitido antes, continuaria passando pelo RLS em vários pontos. Vale para todos,
+inclusive o SQL do projeto. Conta se apaga de verdade, e o delete em cascata
+leva os vínculos e solta os cadastros de aluno e professor. A conta só pode ser apagada depois de passar a academia
 para outro dono. Pedido de titular (LGPD) com essa conta é tratado
 manualmente, pelo SQL do projeto.
 

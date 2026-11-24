@@ -468,7 +468,7 @@ begin
 
   if v_conv.id is null
      or v_conv.status <> 'pendente'
-     or v_conv.expira_em <= now()
+     or v_conv.expira_em <= clock_timestamp()  -- depois das travas, não o início da transação
      or v_conv.email <> v_email then
     raise exception 'Convite não encontrado, vencido ou já respondido.'
       using hint = 'convite_invalido';
@@ -494,10 +494,7 @@ begin
   -- 1 a 4: e-mail, senha, convite deste login e travas.
   v_conv := public.convite_do_login_travado(p_convite_id, true);
 
-  -- 5. Quem convidou ainda pode dar esse acesso. A conta dele fica travada
-  --    até o fim: uma exclusão no Auth concorrente espera o aceite, ou o
-  --    aceite vê a conta apagada.
-  perform 1 from auth.users u where u.id = v_conv.convidado_por for share;
+  -- 5. Quem convidou ainda pode dar esse acesso.
   if not public.convite_de_quem_pode(v_conv) then
     raise exception 'Convite não encontrado, vencido ou já respondido.'
       using hint = 'convite_invalido';
@@ -612,31 +609,25 @@ grant execute on function public.equipe_da_academia(uuid) to authenticated;
 -- =====================================================================
 -- 7. ÚLTIMO DONO E REVOGAÇÃO
 -- =====================================================================
--- Outro dono ativo, com a conta do Auth existente e não apagada (exclusão
--- lógica também conta como apagada). Trava as contas desses donos no Auth
--- (for share): uma exclusão lógica em andamento é esperada, e a linha é
--- reavaliada depois do commit dela. Assim, promover um admin cuja conta está
--- sendo apagada não abre caminho para o dono atual sair.
+-- Outro dono ativo, com a conta do Auth existente e sem deleted_at (a
+-- exclusão lógica é proibida; o filtro é só defesa).
 create or replace function public.academia_tem_outro_dono(p_academia_id uuid, p_user_id uuid)
 returns boolean
-language plpgsql
-volatile
+language sql
+stable
 security definer
 set search_path = ''
 as $$
-begin
-  perform 1
-  from public.membros_academia m
-  join auth.users u on u.id = m.user_id
-  where m.academia_id = p_academia_id
-    and m.papel = 'dono'
-    and m.ativo
-    and m.user_id <> p_user_id
-    and u.deleted_at is null
-  order by u.id
-  for share of u;
-  return found;
-end
+  select exists (
+    select 1
+    from public.membros_academia m
+    join auth.users u on u.id = m.user_id
+    where m.academia_id = p_academia_id
+      and m.papel = 'dono'
+      and m.ativo
+      and m.user_id <> p_user_id
+      and u.deleted_at is null
+  )
 $$;
 
 revoke execute on function public.academia_tem_outro_dono(uuid, uuid) from public, anon, authenticated;
@@ -716,41 +707,22 @@ create trigger membros_academia_ultimo_dono
   for each row execute function public.membros_ultimo_dono();
 
 -- Exclusão lógica no Auth (auth.users.deleted_at) é proibida neste projeto
--- (decisão do dono do projeto): conta se apaga de verdade, e o delete em
--- cascata leva os vínculos (membros_academia) e solta os cadastros de aluno.
--- Uma conta apagada logicamente, com um JWT emitido antes, continuaria
--- passando pelo RLS em vários pontos (vínculo, sou_o_aluno, criar_academia).
--- O Auth e qualquer requisição recebem exclusao_logica_bloqueada. Só a
--- sessão administrativa sem JWT (SQL do projeto) consegue; nesse caso, os
--- vínculos da conta são desativados e os cadastros de aluno e professor são
--- soltos do login, como no delete de verdade, para que o RLS barre o JWT
--- antigo.
+-- (decisão do dono do projeto), para todos, inclusive o SQL do projeto:
+-- conta se apaga de verdade, e o delete em cascata leva os vínculos
+-- (membros_academia) e solta os cadastros de aluno e professor. Uma conta
+-- apagada logicamente, com um JWT emitido antes, continuaria passando pelo
+-- RLS e pelas RPCs (vínculo, sou_o_aluno, criar_academia).
 create or replace function public.auth_exclusao_logica()
 returns trigger
 language plpgsql
 security definer
 set search_path = ''
 as $$
-declare
-  v_papel_req text := nullif(auth.role(), '');
 begin
-  if old.deleted_at is not null or new.deleted_at is null then
-    return new;
-  end if;
-  if not (v_papel_req is null and session_user in ('postgres', 'supabase_admin')) then
+  if old.deleted_at is null and new.deleted_at is not null then
     raise exception 'A exclusão lógica de contas está desativada: apague a conta de verdade.'
       using hint = 'exclusao_logica_bloqueada';
   end if;
-
-  -- O mesmo que o delete de verdade faria: vínculos fora (aqui, inativos) e
-  -- os cadastros de aluno e professor soltos do login (on delete set null).
-  update public.membros_academia m set ativo = false
-   where m.user_id = old.id and m.ativo;
-  update public.alunos a set user_id = null
-   where a.user_id = old.id and a.anonimizado_em is null;
-  update public.professores p set user_id = null
-   where p.user_id = old.id;
-
   return new;
 end
 $$;
