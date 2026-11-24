@@ -30,10 +30,15 @@ create table public.convites_equipe (
                        check (status in ('pendente', 'aceito', 'cancelado', 'recusado')),
   convidado_por        uuid references auth.users (id) on delete set null,
   expira_em            timestamptz not null,
-  -- Envios de e-mail (C10): o último, e o horário de cada envio das últimas
-  -- 24 horas (os mais antigos saem a cada novo envio).
+  -- C10. Tentativas de envio desta academia (com e-mail ou sem): a última e o
+  -- horário de cada uma das últimas 24 horas. A academia lê, e os limites
+  -- dela usam estas colunas.
   ultimo_envio_em      timestamptz,
   envios_recentes      timestamptz[] not null default '{}',
+  -- Envios de e-mail que de fato saíram. Só os limites do projeto todo usam;
+  -- authenticated não lê (revelariam se outra academia convidou o endereço).
+  envio_real_em        timestamptz,
+  envios_reais         timestamptz[] not null default '{}',
   aceito_por           uuid references auth.users (id) on delete set null,
   aceito_em            timestamptz,
   encerrado_por        uuid references auth.users (id) on delete set null,
@@ -57,7 +62,7 @@ create unique index convites_equipe_pendente_uidx
 create index convites_equipe_email_idx
   on public.convites_equipe (email) where status = 'pendente';
 create index convites_equipe_email_envio_idx
-  on public.convites_equipe (email, ultimo_envio_em);
+  on public.convites_equipe (email, envio_real_em);
 create index convites_equipe_academia_envio_idx
   on public.convites_equipe (academia_id, ultimo_envio_em);
 
@@ -75,9 +80,13 @@ create policy convites_equipe_select on public.convites_equipe
   using (public.tem_papel(academia_id, array['dono', 'admin']));
 
 -- Sem política de escrita, e sem o privilégio também: insert, update e
--- delete direto dão "permission denied", não "zero linhas".
+-- delete direto dão "permission denied", não "zero linhas". A leitura é por
+-- coluna: os envios reais ficam de fora.
 revoke all on public.convites_equipe from anon, authenticated;
-grant select on public.convites_equipe to authenticated;
+grant select (id, academia_id, email, papel, status, convidado_por, expira_em,
+              ultimo_envio_em, envios_recentes, aceito_por, aceito_em,
+              encerrado_por, encerrado_em, created_at, updated_at)
+  on public.convites_equipe to authenticated;
 
 -- =====================================================================
 -- 2. AUXILIARES (nenhuma é chamável pela API)
@@ -269,19 +278,20 @@ begin
       using hint = 'limite_convites';
   end if;
 
-  -- 6b. Contando as outras academias: se o limite estoura, o convite é
-  --     gravado, mas sem envio (enviar = false), e a resposta ao front é a
-  --     mesma de um convite enviado. Um erro aqui revelaria que outra
-  --     academia convidou o mesmo endereço.
+  -- 6b. Contando os envios reais de todas as academias: se o limite estoura,
+  --     o convite e a tentativa são gravados como num envio, mas o e-mail
+  --     não sai (enviar = false). O que a academia vê (resposta, colunas que
+  --     lê, próximos limites) é igual nos dois casos: um erro ou uma
+  --     diferença aqui revelaria que outra academia convidou o endereço.
   v_enviar := not (
     exists (
       select 1 from public.convites_equipe c
       where c.email = v_email
-        and c.ultimo_envio_em > v_agora - interval '60 seconds'
+        and c.envio_real_em > v_agora - interval '60 seconds'
     )
     or (select count(*)
         from public.convites_equipe c
-        cross join lateral unnest(c.envios_recentes) as e(enviado_em)
+        cross join lateral unnest(c.envios_reais) as e(enviado_em)
         where c.email = v_email
           and e.enviado_em > v_agora - interval '24 hours') >= 5
   );
@@ -303,25 +313,31 @@ begin
   end if;
 
   if v_pendente.id is not null then
-    -- 8a. Reenvio do pendente: atualiza papel, validade e quem convidou (C9);
-    --     o envio só é registrado se vai sair.
+    -- 8a. Reenvio do pendente: atualiza papel, validade e quem convidou (C9).
+    --     A tentativa é registrada sempre; o envio real, só se vai sair.
     update public.convites_equipe c
        set papel = p_papel,
            expira_em = v_agora + interval '7 days',
            convidado_por = p_user_id,
-           ultimo_envio_em = case when v_enviar then v_agora else c.ultimo_envio_em end,
-           envios_recentes = case when v_enviar then array(
+           ultimo_envio_em = v_agora,
+           envios_recentes = array(
              select e from unnest(c.envios_recentes) as e
              where e > v_agora - interval '24 hours'
+             order by e) || v_agora,
+           envio_real_em = case when v_enviar then v_agora else c.envio_real_em end,
+           envios_reais = case when v_enviar then array(
+             select e from unnest(c.envios_reais) as e
+             where e > v_agora - interval '24 hours'
              order by e) || v_agora
-             else c.envios_recentes end
+             else c.envios_reais end
      where c.id = v_pendente.id;
     v_id := v_pendente.id;
   else
     -- 8b. Convite novo.
     insert into public.convites_equipe (academia_id, email, papel, convidado_por, expira_em,
-                                        ultimo_envio_em, envios_recentes)
+                                        ultimo_envio_em, envios_recentes, envio_real_em, envios_reais)
     values (p_academia_id, v_email, p_papel, p_user_id, v_agora + interval '7 days',
+            v_agora, array[v_agora],
             case when v_enviar then v_agora end,
             case when v_enviar then array[v_agora] else '{}'::timestamptz[] end)
     returning id into v_id;

@@ -4,7 +4,7 @@
 -- Academias A e B (ativas) e S (suspensa).
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(81);
+select plan(83);
 
 -- ---------------------------------------------------------------------
 -- Auxiliares
@@ -195,6 +195,10 @@ select ok(not has_table_privilege('authenticated', 'public.convites_equipe', 'IN
   'authenticated não escreve direto em convites_equipe');
 select ok(not has_function_privilege('authenticated', 'public.criar_convite_interna(uuid,uuid,text,text)', 'EXECUTE'),
   'authenticated não cria convite (só a Edge Function, com service_role)');
+select ok(not has_column_privilege('authenticated', 'public.convites_equipe', 'envio_real_em', 'SELECT')
+          and not has_column_privilege('authenticated', 'public.convites_equipe', 'envios_reais', 'SELECT')
+          and has_column_privilege('authenticated', 'public.convites_equipe', 'ultimo_envio_em', 'SELECT'),
+  'authenticated lê as tentativas da academia, mas não os envios reais');
 select ok(not has_function_privilege('anon', 'public.cancelar_convite(uuid)', 'EXECUTE')
           and not has_function_privilege('anon', 'public.meus_convites()', 'EXECUTE')
           and not has_function_privilege('anon', 'public.aceitar_convite(uuid)', 'EXECUTE')
@@ -273,6 +277,9 @@ update public.convites_equipe
    set ultimo_envio_em = now() - interval '7 minutes',
        envios_recentes = array[now() - interval '23 hours 50 minutes', now() - interval '10 minutes',
                                now() - interval '9 minutes', now() - interval '8 minutes', now() - interval '7 minutes']
+       , envio_real_em = now() - interval '7 minutes',
+       envios_reais = array[now() - interval '23 hours 50 minutes', now() - interval '10 minutes',
+                               now() - interval '9 minutes', now() - interval '8 minutes', now() - interval '7 minutes']
  where email = 'ciclo@conv.test' and academia_id = 'e7c00000-0000-4000-8000-00000000000a';
 set local role service_role;
 select public.__como_servico();
@@ -283,12 +290,17 @@ update public.convites_equipe set ultimo_envio_em = null where academia_id = 'e7
 set local role service_role;
 select public.__como_servico();
 select is((public.__cc('e7c00000-0000-4000-8000-0000000000f1', 'e7c00000-0000-4000-8000-00000000000d', 'ciclo@conv.test', 'professor') ->> 'enviar')
-          || '/' || cardinality((public.__conv('e7c00000-0000-4000-8000-00000000000d', 'ciclo@conv.test')).envios_recentes),
-  'false/0', 'C10: o teto de 5 por endereço vale entre academias, gravando sem registrar envio');
+          || '/' || cardinality((public.__conv('e7c00000-0000-4000-8000-00000000000d', 'ciclo@conv.test')).envios_reais),
+  'false/0', 'C10: o teto de 5 por endereço vale entre academias, gravando sem envio real');
+select is(public.__hint_de($$select public.__cc('e7c00000-0000-4000-8000-0000000000f1', 'e7c00000-0000-4000-8000-00000000000d', 'ciclo@conv.test', 'professor')$$),
+  'convite_reenvio_cedo', 'C10: depois de um envio suprimido, a academia vê os 60 segundos como num envio de verdade');
 reset role;
 update public.convites_equipe
    set ultimo_envio_em = now() - interval '3 minutes',
        envios_recentes = array[now() - interval '25 hours', now() - interval '25 hours', now() - interval '25 hours',
+                               now() - interval '25 hours', now() - interval '3 minutes']
+       , envio_real_em = now() - interval '3 minutes',
+       envios_reais = array[now() - interval '25 hours', now() - interval '25 hours', now() - interval '25 hours',
                                now() - interval '25 hours', now() - interval '3 minutes']
  where email = 'ciclo@conv.test' and academia_id = 'e7c00000-0000-4000-8000-00000000000a';
 set local role service_role;

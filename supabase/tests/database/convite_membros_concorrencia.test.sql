@@ -326,10 +326,10 @@ select is(extensions.dblink_send_query('s2', $$select public.criar_convite_inter
 select ok(pg_temp.s2_espera_s1(), 'J: o segundo convite espera a trava do e-mail');
 select extensions.dblink_exec('s1', 'commit');
 select is(pg_temp.resultado_s2(), 'ok', 'J: o segundo convite não dá erro que revele a outra academia');
-select is((select string_agg(a.slug || '=' || (c.ultimo_envio_em is not null)::text, ',' order by a.slug)
+select is((select string_agg(a.slug || '=' || (c.envio_real_em is not null)::text, ',' order by a.slug)
            from public.convites_equipe c join public.academias a on a.id = c.academia_id
            where c.email = 'disputa@concorre.test'),
-  'convite-concorre-k=true,convite-concorre-l=false', 'J: um envio só para o endereço; o de L fica gravado sem envio');
+  'convite-concorre-k=true,convite-concorre-l=false', 'J: um envio real só para o endereço; o de L fica gravado sem envio real');
 
 -- ---------------------------------------------------------------------
 -- K. s2 abre a transação; s1 segura a academia L; depois de 1,5 s, s2
