@@ -622,6 +622,9 @@ isOneToOne: false
 "convite_email_do_login":
 { Args: Record<PropertyKey, never>; Returns: string
                            },
+"convite_exige_read_committed":
+{ Args: Record<PropertyKey, never>; Returns: undefined
+                           },
 "convite_papel_ativo":
 { Args: { "p_academia_id": string,"p_user_id": string }; Returns: string
                            },
