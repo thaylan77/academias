@@ -68,7 +68,7 @@ begin
   else
     perform extensions.dblink_exec(p_conn, format($q$set request.jwt.claim.sub = %L; set request.jwt.claim.role = 'authenticated'; set request.jwt.claims = %L$q$,
       p_user, json_build_object('sub', p_user, 'role', 'authenticated',
-                              'iat', floor(extract(epoch from clock_timestamp()))::bigint + 1,
+                              'iat', floor(extract(epoch from clock_timestamp()))::bigint + 1, 'session_id', p_user,
                               'amr', json_build_array(json_build_object('method', 'otp', 'timestamp', 0)))::text));
     perform extensions.dblink_exec(p_conn, 'set role authenticated');
   end if;
@@ -174,8 +174,12 @@ select extensions.dblink_exec('prep', $f$
     ('e7d00000-0000-4000-8000-0000000000bd', 'dono13@concorre.test', now()),
     ('e7d00000-0000-4000-8000-0000000000dd', 'u12@concorre.test',   now());
   -- Senha nova já definida (concluir-senha), como pede o aceite.
-  update auth.users set raw_app_meta_data = coalesce(raw_app_meta_data, '{}'::jsonb) || '{"senha_redefinida_em": 1}'
+  -- Cada usuário com uma sessão (id = o próprio id do usuário, como o
+  -- session_id que pg_temp.como põe no JWT) e a senha nova definida nela.
+  update auth.users set raw_app_meta_data = coalesce(raw_app_meta_data, '{}'::jsonb)
+         || jsonb_build_object('senha_redefinida_em', 1, 'senha_redefinida_sessao', id::text)
    where email like '%@concorre.test';
+  insert into auth.sessions (id, user_id) select id, id from auth.users where email like '%@concorre.test';
   insert into public.academias (id, nome, slug, status) values
     ('e7d00000-0000-4000-8000-00000000000a', 'Concorre K', 'convite-concorre-k', 'ativa'),
     ('e7d00000-0000-4000-8000-00000000000b', 'Concorre L', 'convite-concorre-l', 'ativa'),

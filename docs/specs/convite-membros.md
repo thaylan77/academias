@@ -256,8 +256,9 @@ senha. A pessoa não fica sem senha.
 
 Para aceitar, toda conta (nova ou antiga) define uma senha nova na sessão
 aberta pelo link do convite: a `concluir-senha` grava
-`app_metadata.senha_redefinida_em` (epoch), e o aceite exige que ele seja
-posterior ao login pelo link. O aceite também apaga as outras sessões da
+`app_metadata.senha_redefinida_em` (epoch) e `senha_redefinida_sessao` (o
+`session_id` do JWT), e o aceite exige que a troca seja posterior ao login
+pelo link e tenha sido feita na mesma sessão, que precisa existir no Auth. O aceite também apaga as outras sessões da
 conta, e o vínculo só vale para tokens emitidos depois dele
 (`membros_academia.vale_a_partir`): o front renova a sessão depois do aceite.
 Isso protege contas criadas enquanto a confirmação de e-mail estava

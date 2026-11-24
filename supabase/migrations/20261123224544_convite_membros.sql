@@ -118,8 +118,9 @@ revoke all on public.convites_envios from anon, authenticated;
 -- Uma conta criada enquanto a confirmação de e-mail estava desligada pode ter
 -- a senha nas mãos de outra pessoa. O aceite do convite exige senha nova na
 -- sessão aberta pelo link, apaga as outras sessões e grava vale_a_partir no
--- vínculo: tokens emitidos antes disso (iat menor) não usam o vínculo, mesmo
--- que ainda não tenham expirado. Vínculo sem vale_a_partir (os anteriores e os
+-- vínculo: só usam o vínculo tokens emitidos depois disso (iat) e de uma
+-- sessão que ainda existe no Auth (session_id), mesmo que um token antigo ou
+-- de sessão revogada ainda não tenha expirado. Vínculo sem vale_a_partir (os anteriores e os
 -- de criar_academia) vale para qualquer token.
 alter table public.membros_academia add column vale_a_partir timestamptz;
 
@@ -136,6 +137,34 @@ $$;
 revoke execute on function public.jwt_iat() from public, anon;
 grant execute on function public.jwt_iat() to authenticated, service_role;
 
+-- session_id do JWT da requisição (null se não houver).
+create or replace function public.jwt_sessao()
+returns uuid
+language sql
+stable
+set search_path = ''
+as $$
+  select nullif(nullif(current_setting('request.jwt.claims', true), '')::jsonb ->> 'session_id', '')::uuid
+$$;
+
+revoke execute on function public.jwt_sessao() from public, anon;
+grant execute on function public.jwt_sessao() to authenticated, service_role;
+
+-- A sessão existe no Auth e é do usuário (uma sessão revogada some de
+-- auth.sessions, mesmo que o token dela ainda não tenha expirado).
+create or replace function public.sessao_valida(p_user_id uuid, p_sessao uuid)
+returns boolean
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select p_sessao is not null
+     and exists (select 1 from auth.sessions s where s.id = p_sessao and s.user_id = p_user_id)
+$$;
+
+revoke execute on function public.sessao_valida(uuid, uuid) from public, anon, authenticated;
+
 create or replace function public.tem_papel(p_academia_id uuid, p_papeis text[] default null)
 returns boolean
 language sql
@@ -149,7 +178,9 @@ as $$
     where m.academia_id = p_academia_id
       and m.user_id = auth.uid()
       and m.ativo
-      and (m.vale_a_partir is null or public.jwt_iat() >= extract(epoch from m.vale_a_partir))
+      and (m.vale_a_partir is null
+           or (public.jwt_iat() >= extract(epoch from m.vale_a_partir)
+               and public.sessao_valida(auth.uid(), public.jwt_sessao())))
       and case when p_papeis is null then m.papel <> 'totem'
                else m.papel = any (p_papeis) end
   );
@@ -215,7 +246,7 @@ revoke execute on function public.convite_papel_ativo(uuid, uuid) from public, a
 
 -- O mesmo, para quem altera com um token: o vínculo só vale se o token foi
 -- emitido depois de vale_a_partir (p_iat null conta como token antigo).
-create or replace function public.convite_papel_ativo_iat(p_user_id uuid, p_academia_id uuid, p_iat bigint)
+create or replace function public.convite_papel_ativo_iat(p_user_id uuid, p_academia_id uuid, p_iat bigint, p_sessao uuid)
 returns text
 language sql
 stable
@@ -230,7 +261,9 @@ as $$
     and m.ativo
     and m.papel in ('dono', 'admin')
     and u.deleted_at is null
-    and (m.vale_a_partir is null or coalesce(p_iat, 0) >= extract(epoch from m.vale_a_partir))
+    and (m.vale_a_partir is null
+         or (coalesce(p_iat, 0) >= extract(epoch from m.vale_a_partir)
+             and public.sessao_valida(p_user_id, p_sessao)))
 $$;
 
 create or replace function public.convite_papel_ativo_sessao(p_academia_id uuid)
@@ -240,10 +273,10 @@ stable
 security definer
 set search_path = ''
 as $$
-  select public.convite_papel_ativo_iat(auth.uid(), p_academia_id, public.jwt_iat())
+  select public.convite_papel_ativo_iat(auth.uid(), p_academia_id, public.jwt_iat(), public.jwt_sessao())
 $$;
 
-revoke execute on function public.convite_papel_ativo_iat(uuid, uuid, bigint) from public, anon, authenticated;
+revoke execute on function public.convite_papel_ativo_iat(uuid, uuid, bigint, uuid) from public, anon, authenticated;
 revoke execute on function public.convite_papel_ativo_sessao(uuid) from public, anon, authenticated;
 -- academia_ativa com o relógio de agora (clock_timestamp) no fuso da
 -- academia, para checagens feitas depois de esperar travas.
@@ -304,7 +337,8 @@ create or replace function public.criar_convite_interna(
   p_academia_id uuid,
   p_email       text,
   p_papel       text,
-  p_iat         bigint default null  -- iat do JWT que a Edge Function conferiu
+  p_iat         bigint default null, -- iat do JWT que a Edge Function conferiu
+  p_sessao      uuid default null    -- session_id desse JWT
 )
 returns jsonb
 language plpgsql
@@ -333,14 +367,14 @@ begin
   end if;
 
   -- 2. Antes de travar: quem não é dono nem admin da academia sai aqui.
-  if public.convite_papel_ativo_iat(p_user_id, p_academia_id, p_iat) is null then
+  if public.convite_papel_ativo_iat(p_user_id, p_academia_id, p_iat, p_sessao) is null then
     raise exception 'Só o dono ou um admin da academia convida para a equipe.'
       using hint = 'sem_permissao';
   end if;
 
   -- 3. Trava a academia e relê papel e assinatura.
   perform 1 from public.academias a where a.id = p_academia_id for no key update;
-  v_papel_eu := public.convite_papel_ativo_iat(p_user_id, p_academia_id, p_iat);
+  v_papel_eu := public.convite_papel_ativo_iat(p_user_id, p_academia_id, p_iat, p_sessao);
   if v_papel_eu is null then
     raise exception 'Só o dono ou um admin da academia convida para a equipe.'
       using hint = 'sem_permissao';
@@ -523,8 +557,8 @@ begin
 end
 $$;
 
-revoke execute on function public.criar_convite_interna(uuid, uuid, text, text, bigint) from public, anon, authenticated;
-grant execute on function public.criar_convite_interna(uuid, uuid, text, text, bigint) to service_role;
+revoke execute on function public.criar_convite_interna(uuid, uuid, text, text, bigint, uuid) from public, anon, authenticated;
+grant execute on function public.criar_convite_interna(uuid, uuid, text, text, bigint, uuid) to service_role;
 
 -- Contrato com a Edge Function para cada envio liberado (enviar = true), com
 -- o envio_id devolvido por criar_convite_interna (a reserva):
@@ -729,10 +763,12 @@ begin
     -- Senha nova, definida nesta sessão aberta pelo link (a Edge Function
     -- concluir-senha grava senha_redefinida_em): uma senha antiga pode estar
     -- com outra pessoa.
+    -- A prova vale só para a sessão em que a senha foi trocada.
     if not exists (
       select 1 from auth.users u
       where u.id = auth.uid()
         and (u.raw_app_meta_data ->> 'senha_redefinida_em')::bigint >= v_link_em
+        and u.raw_app_meta_data ->> 'senha_redefinida_sessao' = public.jwt_sessao()::text
     ) then
       raise exception 'Defina uma senha nova antes de aceitar o convite.'
         using hint = 'senha_pendente';
@@ -758,6 +794,11 @@ begin
     -- Trava a própria conta (uma troca de e-mail no Auth espera o aceite) e
     -- relê e-mail e senha: podem ter mudado enquanto esperava as travas.
     perform 1 from auth.users u where u.id = auth.uid() for share;
+    -- A sessão do token ainda existe (uma sessão revogada não aceita).
+    if p_exige_senha and not public.sessao_valida(auth.uid(), public.jwt_sessao()) then
+      raise exception 'Abra o link enviado ao seu e-mail para aceitar o convite.'
+        using hint = 'convite_exige_link';
+    end if;
     v_email := public.convite_email_do_login();
     if v_email is null then
       raise exception 'Confirme o seu e-mail antes de responder ao convite.'

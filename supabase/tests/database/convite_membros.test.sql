@@ -4,7 +4,7 @@
 -- Academias A e B (ativas) e S (suspensa).
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(115);
+select plan(118);
 
 -- ---------------------------------------------------------------------
 -- Auxiliares
@@ -17,7 +17,7 @@ begin
   perform set_config('request.jwt.claim.sub', p_user, true);
   perform set_config('request.jwt.claim.role', 'authenticated', true);
   perform set_config('request.jwt.claims', json_build_object('sub', p_user, 'role', 'authenticated',
-    'iat', floor(extract(epoch from clock_timestamp()))::bigint + 1,
+    'iat', floor(extract(epoch from clock_timestamp()))::bigint + 1, 'session_id', p_user,
     'amr', json_build_array(json_build_object('method', 'otp', 'timestamp', 0)))::text, true);
 end
 $$;
@@ -44,7 +44,7 @@ as $$
 begin
   perform set_config('request.jwt.claim.sub', p_user, true);
   perform set_config('request.jwt.claim.role', 'authenticated', true);
-  perform set_config('request.jwt.claims', json_build_object('sub', p_user, 'role', 'authenticated',
+  perform set_config('request.jwt.claims', json_build_object('sub', p_user, 'role', 'authenticated', 'session_id', p_user,
     'amr', json_build_array(json_build_object('method', 'password', 'timestamp', 0)))::text, true);
 end
 $$;
@@ -157,12 +157,23 @@ insert into auth.users (id, email, email_confirmed_at, raw_app_meta_data) values
   ('e7c00000-0000-4000-8000-0000000000f2', 'dono-y@conv.test',     now(), '{}'),
   ('e7c00000-0000-4000-8000-0000000000dc', 'aluno2@conv.test',     now(), '{}'),
   ('e7c00000-0000-4000-8000-0000000000dd', 'semsenha@conv.test',   now(), '{}'),
+  ('e7c00000-0000-4000-8000-0000000000de', 'outrasessao@conv.test', now(), '{}'),
+  ('e7c00000-0000-4000-8000-0000000000df', 'semsessao@conv.test',  now(), '{}'),
   ('e7c00000-0000-4000-8000-0000000000e1', 'totem-a@conv.test',    now(), '{}');
 
 -- Senha nova já definida pela Edge Function concluir-senha (o aceite exige),
 -- menos para semsenha.
-update auth.users set raw_app_meta_data = raw_app_meta_data || '{"senha_redefinida_em": 1}'
+update auth.users set raw_app_meta_data = raw_app_meta_data
+       || jsonb_build_object('senha_redefinida_em', 1, 'senha_redefinida_sessao', id::text)
  where email like '%@conv.test' and email <> 'semsenha@conv.test';
+-- A troca de senha de outrasessao foi feita em outra sessão.
+update auth.users set raw_app_meta_data = raw_app_meta_data
+       || '{"senha_redefinida_sessao": "e7c00000-0000-4000-8000-0000000005ff"}'
+ where email = 'outrasessao@conv.test';
+-- Uma sessão por usuário (id = o próprio id do usuário, como o session_id que
+-- __como põe no JWT); semsessao teve a sessão revogada.
+insert into auth.sessions (id, user_id) select id, id from auth.users where email like '%@conv.test';
+delete from auth.sessions where user_id = 'e7c00000-0000-4000-8000-0000000000df';
 
 insert into public.academias (id, nome, slug, status) values
   ('e7c00000-0000-4000-8000-00000000000a', 'Convite A', 'convite-a', 'ativa'),
@@ -235,7 +246,7 @@ select ok(not has_table_privilege('authenticated', 'public.convites_equipe', 'IN
           and not has_table_privilege('authenticated', 'public.convites_equipe', 'UPDATE')
           and not has_table_privilege('authenticated', 'public.convites_equipe', 'DELETE'),
   'authenticated não escreve direto em convites_equipe');
-select ok(not has_function_privilege('authenticated', 'public.criar_convite_interna(uuid,uuid,text,text,bigint)', 'EXECUTE'),
+select ok(not has_function_privilege('authenticated', 'public.criar_convite_interna(uuid,uuid,text,text,bigint,uuid)', 'EXECUTE'),
   'authenticated não cria convite (só a Edge Function, com service_role)');
 select ok(not has_table_privilege('authenticated', 'public.membros_academia', 'INSERT')
           and not has_column_privilege('authenticated', 'public.membros_academia', 'user_id', 'UPDATE')
@@ -488,6 +499,8 @@ select public.__cc('e7c00000-0000-4000-8000-0000000000a1', 'e7c00000-0000-4000-8
 select public.__cc('e7c00000-0000-4000-8000-0000000000a1', 'e7c00000-0000-4000-8000-00000000000a', 'aluno@conv.test',    'recepcao');
 select public.__cc('e7c00000-0000-4000-8000-0000000000a1', 'e7c00000-0000-4000-8000-00000000000a', 'aluno2@conv.test',   'professor');
 select public.__cc('e7c00000-0000-4000-8000-0000000000a1', 'e7c00000-0000-4000-8000-00000000000a', 'semsenha@conv.test', 'professor');
+select public.__cc('e7c00000-0000-4000-8000-0000000000a1', 'e7c00000-0000-4000-8000-00000000000a', 'outrasessao@conv.test', 'professor');
+select public.__cc('e7c00000-0000-4000-8000-0000000000a1', 'e7c00000-0000-4000-8000-00000000000a', 'semsessao@conv.test', 'professor');
 select public.__cc('e7c00000-0000-4000-8000-0000000000a2', 'e7c00000-0000-4000-8000-00000000000a', 'inativo-a@conv.test','professor');
 select public.__cc('e7c00000-0000-4000-8000-0000000000a2', 'e7c00000-0000-4000-8000-00000000000a', 'inativo2-a@conv.test','recepcao');
 select public.__cc('e7c00000-0000-4000-8000-0000000000a1', 'e7c00000-0000-4000-8000-00000000000a', 'vencido@conv.test',  'professor');
@@ -570,6 +583,12 @@ select is(public.__hint_de($$select public.aceitar_convite('e7c00000-0000-4000-8
 select public.__como('e7c00000-0000-4000-8000-0000000000dd');
 select is(public.__hint_de(format('select public.aceitar_convite(%L)', (public.__conv('e7c00000-0000-4000-8000-00000000000a', 'semsenha@conv.test')).id)),
   'senha_pendente', 'sem senha nova definida depois do link, o aceite é recusado');
+select public.__como('e7c00000-0000-4000-8000-0000000000de');
+select is(public.__hint_de(format('select public.aceitar_convite(%L)', (public.__conv('e7c00000-0000-4000-8000-00000000000a', 'outrasessao@conv.test')).id)),
+  'senha_pendente', 'senha trocada em outra sessão não serve de prova');
+select public.__como('e7c00000-0000-4000-8000-0000000000df');
+select is(public.__hint_de(format('select public.aceitar_convite(%L)', (public.__conv('e7c00000-0000-4000-8000-00000000000a', 'semsessao@conv.test')).id)),
+  'convite_exige_link', 'token de sessão revogada não aceita');
 reset role;
 insert into auth.sessions (id, user_id) values
   ('e7c00000-0000-4000-8000-0000000005a1', 'e7c00000-0000-4000-8000-0000000000d1'),
@@ -578,14 +597,18 @@ set local role authenticated;
 select public.__como_senha('e7c00000-0000-4000-8000-0000000000d1');
 select is(public.__hint_de(format('select public.aceitar_convite(%L)', (public.__conv('e7c00000-0000-4000-8000-00000000000a', 'conf@conv.test')).id)),
   'convite_exige_link', 'sessão aberta só com senha não aceita: precisa do link enviado ao e-mail');
-select public.__como_token('e7c00000-0000-4000-8000-0000000000d1', floor(extract(epoch from clock_timestamp()))::bigint,
-                            'e7c00000-0000-4000-8000-0000000005a1');
+select public.__como('e7c00000-0000-4000-8000-0000000000d1');
 select is(public.aceitar_convite((public.__conv('e7c00000-0000-4000-8000-00000000000a', 'conf@conv.test')).id),
   'e7c00000-0000-4000-8000-00000000000a'::uuid, 'aceite devolve a academia');
 select is(public.__sessoes('e7c00000-0000-4000-8000-0000000000d1'),
-  'e7c00000-0000-4000-8000-0000000005a1', 'o aceite apaga as outras sessões da conta e mantém a atual');
+  'e7c00000-0000-4000-8000-0000000000d1', 'o aceite apaga as outras sessões da conta e mantém a atual');
+select public.__como_token('e7c00000-0000-4000-8000-0000000000d1', 0, 'e7c00000-0000-4000-8000-0000000000d1');
 select is(public.__hint_de($$select * from public.equipe_da_academia('e7c00000-0000-4000-8000-00000000000a')$$),
   'sem_permissao', 'token emitido antes do aceite não usa o vínculo novo');
+select public.__como_token('e7c00000-0000-4000-8000-0000000000d1', floor(extract(epoch from clock_timestamp()))::bigint + 10,
+                            'e7c00000-0000-4000-8000-0000000005a2');
+select is(public.__hint_de($$select * from public.equipe_da_academia('e7c00000-0000-4000-8000-00000000000a')$$),
+  'sem_permissao', 'token novo de uma sessão revogada não usa o vínculo');
 select public.__como('e7c00000-0000-4000-8000-0000000000d1');
 select ok((select count(*) from public.equipe_da_academia('e7c00000-0000-4000-8000-00000000000a')) > 0,
   'token novo, depois do aceite, usa o vínculo');
