@@ -192,15 +192,15 @@ revoke execute on function public.academia_ativa_agora(uuid) from public, anon, 
 -- PostgREST usa): cada comando depois de uma espera vê o que já foi
 -- confirmado. Em repeatable read, uma transação que esperou a trava ainda
 -- leria o snapshot antigo (duas saídas de dono, por exemplo, poderiam passar
--- juntas). Serializable detecta esses casos sozinho. Repeatable read é
--- recusado.
+-- juntas), e serializable misturado com read committed não protege a
+-- invariante. Só read committed é aceito.
 create or replace function public.convite_exige_read_committed()
 returns void
 language plpgsql
 set search_path = ''
 as $$
 begin
-  if current_setting('transaction_isolation') = 'repeatable read' then
+  if current_setting('transaction_isolation') <> 'read committed' then
     raise exception 'Esta operação exige o isolamento read committed (o padrão).'
       using hint = 'isolamento_nao_suportado';
   end if;
