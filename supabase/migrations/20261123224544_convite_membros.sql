@@ -142,13 +142,13 @@ revoke execute on function public.convite_de_quem_pode(public.convites_equipe) f
 -- 3. CRIAR (Edge Function convidar-membro, com o user_id do JWT)
 -- =====================================================================
 -- Limites de envio (C10):
---   * 60 segundos entre dois e-mails para o mesmo endereço, em qualquer
---     academia, contando convites cancelados ou recusados (cancelar e
---     recriar, ou convidar por outra academia, não fura);
---   * no máximo 5 e-mails para o mesmo endereço em 24 horas, em qualquer
---     academia;
---   * no máximo 30 convites com envio nas últimas 24 horas por academia
---     (convite novo ou reenvio de um que não teve envio nesse período).
+--   * 60 segundos entre dois e-mails para o mesmo endereço e no máximo 5 em
+--     24 horas, contando convites cancelados e recusados e todas as
+--     academias. Pelo histórico da própria academia, erro explícito; pelo
+--     de outras, o convite é gravado sem envio (enviar = false), para não
+--     revelar a atividade de outro tenant;
+--   * no máximo 30 convites criados ou com envio nas últimas 24 horas por
+--     academia.
 
 create or replace function public.criar_convite_interna(
   p_user_id     uuid,
@@ -169,6 +169,7 @@ declare
   v_conta     text;
   v_conta_id  uuid;
   v_agora     timestamptz;
+  v_enviar    boolean;
 begin
   -- 1. Entrada.
   if v_email !~ '^[^@[:space:]]+@[^@[:space:]]+\.[^@[:space:]]+$'
@@ -246,9 +247,13 @@ begin
   -- Relógio lido depois das travas: uma espera longa não deixa o envio
   -- registrado com um horário antigo (now() é o início da transação).
   v_agora := clock_timestamp();
+
+  -- 6a. Com o histórico desta academia, o erro é explícito: só revela dados
+  --     dela mesma.
   if exists (
     select 1 from public.convites_equipe c
-    where c.email = v_email
+    where c.academia_id = p_academia_id
+      and c.email = v_email
       and c.ultimo_envio_em > v_agora - interval '60 seconds'
   ) then
     raise exception 'O convite acabou de ser enviado. Espere um minuto para reenviar.'
@@ -257,42 +262,68 @@ begin
   if (select count(*)
       from public.convites_equipe c
       cross join lateral unnest(c.envios_recentes) as e(enviado_em)
-      where c.email = v_email
+      where c.academia_id = p_academia_id
+        and c.email = v_email
         and e.enviado_em > v_agora - interval '24 hours') >= 5 then
-    raise exception 'Este e-mail já recebeu 5 convites nas últimas 24 horas. Tente de novo mais tarde.'
+    raise exception 'Este e-mail já recebeu 5 convites da academia nas últimas 24 horas.'
       using hint = 'limite_convites';
   end if;
 
-  -- 7. Limite da academia (C10): convites com envio nas últimas 24 horas,
-  --    sem contar o pendente que está sendo reenviado se ele já está nelas.
+  -- 6b. Contando as outras academias: se o limite estoura, o convite é
+  --     gravado, mas sem envio (enviar = false), e a resposta ao front é a
+  --     mesma de um convite enviado. Um erro aqui revelaria que outra
+  --     academia convidou o mesmo endereço.
+  v_enviar := not (
+    exists (
+      select 1 from public.convites_equipe c
+      where c.email = v_email
+        and c.ultimo_envio_em > v_agora - interval '60 seconds'
+    )
+    or (select count(*)
+        from public.convites_equipe c
+        cross join lateral unnest(c.envios_recentes) as e(enviado_em)
+        where c.email = v_email
+          and e.enviado_em > v_agora - interval '24 hours') >= 5
+  );
+
+  -- 7. Limite da academia (C10): convites criados ou com envio nas últimas
+  --    24 horas, sem contar o pendente que está sendo reenviado se ele já
+  --    está nelas.
   if (select count(*) from public.convites_equipe c
       where c.academia_id = p_academia_id
-        and c.ultimo_envio_em > v_agora - interval '24 hours'
+        and (c.created_at > v_agora - interval '24 hours'
+             or c.ultimo_envio_em > v_agora - interval '24 hours')
         and c.id is distinct from v_pendente.id) >= 30
-     and (v_pendente.id is null or v_pendente.ultimo_envio_em is null
-          or v_pendente.ultimo_envio_em <= v_agora - interval '24 hours') then
+     and (v_pendente.id is null
+          or (v_pendente.created_at <= v_agora - interval '24 hours'
+              and (v_pendente.ultimo_envio_em is null
+                   or v_pendente.ultimo_envio_em <= v_agora - interval '24 hours'))) then
     raise exception 'A academia chegou ao limite de 30 convites em 24 horas.'
       using hint = 'limite_convites';
   end if;
 
   if v_pendente.id is not null then
-    -- 8a. Reenvio do pendente: atualiza papel, validade e quem convidou (C9).
+    -- 8a. Reenvio do pendente: atualiza papel, validade e quem convidou (C9);
+    --     o envio só é registrado se vai sair.
     update public.convites_equipe c
        set papel = p_papel,
            expira_em = v_agora + interval '7 days',
            convidado_por = p_user_id,
-           ultimo_envio_em = v_agora,
-           envios_recentes = array(
+           ultimo_envio_em = case when v_enviar then v_agora else c.ultimo_envio_em end,
+           envios_recentes = case when v_enviar then array(
              select e from unnest(c.envios_recentes) as e
              where e > v_agora - interval '24 hours'
              order by e) || v_agora
+             else c.envios_recentes end
      where c.id = v_pendente.id;
     v_id := v_pendente.id;
   else
     -- 8b. Convite novo.
     insert into public.convites_equipe (academia_id, email, papel, convidado_por, expira_em,
                                         ultimo_envio_em, envios_recentes)
-    values (p_academia_id, v_email, p_papel, p_user_id, v_agora + interval '7 days', v_agora, array[v_agora])
+    values (p_academia_id, v_email, p_papel, p_user_id, v_agora + interval '7 days',
+            case when v_enviar then v_agora end,
+            case when v_enviar then array[v_agora] else '{}'::timestamptz[] end)
     returning id into v_id;
   end if;
 
@@ -312,7 +343,8 @@ begin
     'convite_id', v_id,
     'email', v_email,
     'conta', coalesce(v_conta, 'nenhuma'),
-    'user_id', v_conta_id
+    'user_id', v_conta_id,
+    'enviar', v_enviar
   );
 end
 $$;

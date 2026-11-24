@@ -110,8 +110,8 @@ O código vai no `hint` do erro (`raise exception '<mensagem em português>' usi
 | `graduacao_repetida` | `registrar_graduacao` | mesma faixa, grau e data já registrados para o aluno |
 | `ja_membro` | `criar_convite_interna`, `aceitar_convite` | o e-mail já é membro ativo da equipe nesta academia, ou é o login de um totem dela |
 | `convite_invalido` | `cancelar_convite`, `aceitar_convite`, `recusar_convite` | convite inexistente, de academia que quem chama não gere, não pendente, vencido (no aceite), de outro e-mail ou de quem perdeu o acesso. Um código só, para não revelar qual |
-| `convite_reenvio_cedo` | `criar_convite_interna` | menos de 60 segundos desde o último e-mail para o mesmo endereço, em qualquer academia, contando convites cancelados e recusados |
-| `limite_convites` | `criar_convite_interna` | 5 e-mails para o mesmo endereço em 24 horas (em qualquer academia), ou 30 convites com envio na academia em 24 horas |
+| `convite_reenvio_cedo` | `criar_convite_interna` | menos de 60 segundos desde o último e-mail desta academia para o mesmo endereço, contando convites cancelados e recusados. Pelo histórico de outras academias não há erro: o convite é gravado sem envio (`enviar = false`), para não revelar outro tenant |
+| `limite_convites` | `criar_convite_interna` | 5 e-mails desta academia para o mesmo endereço em 24 horas (pelas outras academias, grava sem envio, como acima), ou 30 convites criados ou com envio na academia em 24 horas |
 | `senha_pendente` | `aceitar_convite` | conta criada ou protegida pelo convite ainda sem senha definida (`app_metadata.definir_senha`) |
 | `ultimo_dono` | gravação em `membros_academia` (gatilho `membros_academia_ultimo_dono`) | a alteração deixaria a academia sem dono ativo com conta não apagada. Passam o `service_role`, a sessão administrativa sem JWT e o delete em cascata da academia |
 | `exclusao_logica_bloqueada` | `auth.users` (gatilho `auth_users_exclusao_logica`) | qualquer um (o Auth, uma requisição ou o SQL do projeto) tentou a exclusão lógica (`deleted_at`) de uma conta. Conta se apaga de verdade |

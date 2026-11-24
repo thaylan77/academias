@@ -212,7 +212,7 @@ set local role service_role;
 select public.__como_servico();
 
 select is(public.__cc('e7c00000-0000-4000-8000-0000000000a2', 'e7c00000-0000-4000-8000-00000000000a', '  Novo@Conv.TEST ', 'professor') - 'convite_id' - 'user_id',
-  '{"email": "novo@conv.test", "conta": "nenhuma"}'::jsonb, 'admin convida professor: e-mail normalizado, conta inexistente');
+  '{"email": "novo@conv.test", "conta": "nenhuma", "enviar": true}'::jsonb, 'admin convida professor: e-mail normalizado, conta inexistente, envio liberado');
 select is(public.__hint_de($$select public.__cc('e7c00000-0000-4000-8000-0000000000a2', 'e7c00000-0000-4000-8000-00000000000a', 'x@conv.test', 'dono')$$),
   'sem_permissao', 'admin não convida dono');
 select is(public.__cc('e7c00000-0000-4000-8000-0000000000a1', 'e7c00000-0000-4000-8000-00000000000a', 'conf@conv.test', 'dono') ->> 'conta',
@@ -264,8 +264,8 @@ set local role service_role;
 select public.__como_servico();
 select is(public.__hint_de($$select public.__cc('e7c00000-0000-4000-8000-0000000000a1', 'e7c00000-0000-4000-8000-00000000000a', 'ciclo@conv.test', 'professor')$$),
   'convite_reenvio_cedo', 'C10: cancelar e recriar logo em seguida esbarra nos 60 segundos');
-select is(public.__hint_de($$select public.__cc('e7c00000-0000-4000-8000-0000000000f1', 'e7c00000-0000-4000-8000-00000000000d', 'ciclo@conv.test', 'professor')$$),
-  'convite_reenvio_cedo', 'C10: os 60 segundos valem entre academias');
+select is(public.__cc('e7c00000-0000-4000-8000-0000000000f1', 'e7c00000-0000-4000-8000-00000000000d', 'ciclo@conv.test', 'professor') ->> 'enviar',
+  'false', 'C10: os 60 segundos valem entre academias, sem erro que revele a outra (grava sem envio)');
 reset role;
 -- O primeiro envio está quase saindo da janela e os outros quatro são de
 -- agora: a janela é móvel, e o sexto continua recusado.
@@ -278,8 +278,13 @@ set local role service_role;
 select public.__como_servico();
 select is(public.__hint_de($$select public.__cc('e7c00000-0000-4000-8000-0000000000a1', 'e7c00000-0000-4000-8000-00000000000a', 'ciclo@conv.test', 'professor')$$),
   'limite_convites', 'C10: o 6º e-mail para o mesmo endereço em 24 horas é recusado');
-select is(public.__hint_de($$select public.__cc('e7c00000-0000-4000-8000-0000000000f1', 'e7c00000-0000-4000-8000-00000000000d', 'ciclo@conv.test', 'professor')$$),
-  'limite_convites', 'C10: o teto de 5 por endereço vale entre academias');
+reset role;
+update public.convites_equipe set ultimo_envio_em = null where academia_id = 'e7c00000-0000-4000-8000-00000000000d';
+set local role service_role;
+select public.__como_servico();
+select is((public.__cc('e7c00000-0000-4000-8000-0000000000f1', 'e7c00000-0000-4000-8000-00000000000d', 'ciclo@conv.test', 'professor') ->> 'enviar')
+          || '/' || cardinality((public.__conv('e7c00000-0000-4000-8000-00000000000d', 'ciclo@conv.test')).envios_recentes),
+  'false/0', 'C10: o teto de 5 por endereço vale entre academias, gravando sem registrar envio');
 reset role;
 update public.convites_equipe
    set ultimo_envio_em = now() - interval '3 minutes',
