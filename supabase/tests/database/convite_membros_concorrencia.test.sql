@@ -16,6 +16,8 @@
 --      saída é recusada.
 --   J. duas academias convidam o mesmo e-mail ao mesmo tempo: a segunda
 --      espera a trava do e-mail e esbarra nos 60 segundos.
+--   K. um convite espera a trava da academia: o horário registrado do envio
+--      é o de depois da espera, não o do início da transação.
 -- A espera é provada pelo pid: s2 está bloqueada e s1 está entre os que a
 -- bloqueiam. As fixtures são gravadas e confirmadas por uma conexão própria,
 -- apagadas antes (se uma execução anterior parou no meio) e depois, pela
@@ -23,7 +25,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 create extension if not exists dblink with schema extensions;
-select plan(51);
+select plan(55);
 
 create function pg_temp.conexao(p_nome text) returns text language sql as $$
   select format('host=%s port=%s dbname=%s user=postgres password=postgres application_name=%s',
@@ -362,6 +364,31 @@ select extensions.dblink_exec('s1', 'commit');
 select matches(pg_temp.resultado_s2(), 'HINT: +convite_reenvio_cedo', 'J: o segundo convite esbarra nos 60 segundos');
 select is((select count(*) from public.convites_equipe where email = 'disputa@concorre.test'),
   1::bigint, 'J: um convite só para o endereço');
+
+-- ---------------------------------------------------------------------
+-- K. s2 abre a transação; s1 segura a academia L; depois de 1,5 s, s2
+--    convida em L e espera; s1 confirma.
+-- ---------------------------------------------------------------------
+select extensions.dblink_exec('s1', 'reset role');
+select extensions.dblink_exec('s1', $q$set request.jwt.claim.sub = ''; set request.jwt.claim.role = ''; set request.jwt.claims = ''$q$);
+select pg_temp.como('s2', 'service_role');
+select extensions.dblink_exec('s2', 'begin');
+create temp table inicio_s2 as
+select x::timestamptz as t from extensions.dblink('s2', 'select now()::text') as r(x text);
+select extensions.dblink_exec('s1', 'begin');
+select extensions.dblink_exec('s1', $$update public.academias set updated_at = updated_at where id = 'e7d00000-0000-4000-8000-00000000000b'$$);
+select pg_sleep(1.5);
+select is(extensions.dblink_send_query('s2', $$select public.criar_convite_interna(
+    'e7d00000-0000-4000-8000-0000000000b2', 'e7d00000-0000-4000-8000-00000000000b', 'relogio@concorre.test', 'professor')::text$$),
+  1, 'K: s2 envia o convite');
+select ok(pg_temp.s2_espera_s1(), 'K: o convite espera a trava da academia');
+select extensions.dblink_exec('s1', 'commit');
+select is(pg_temp.resultado_s2(), 'ok', 'K: o convite passa depois da espera');
+select extensions.dblink_exec('s2', 'commit');
+select ok((select c.ultimo_envio_em >= (select t from inicio_s2) + interval '1 second'
+                  and c.envios_recentes[1] = c.ultimo_envio_em
+           from public.convites_equipe c where c.email = 'relogio@concorre.test'),
+  'K: o envio registrado é o horário de depois da espera');
 
 -- ---------------------------------------------------------------------
 -- Limpeza.

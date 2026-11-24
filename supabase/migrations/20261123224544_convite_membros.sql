@@ -168,6 +168,7 @@ declare
   v_id        uuid;
   v_conta     text;
   v_conta_id  uuid;
+  v_agora     timestamptz;
 begin
   -- 1. Entrada.
   if v_email !~ '^[^@[:space:]]+@[^@[:space:]]+\.[^@[:space:]]+$'
@@ -242,10 +243,13 @@ begin
   --    academia, sempre nessa ordem) serializa convites de academias
   --    diferentes para o mesmo endereço.
   perform pg_advisory_xact_lock(hashtextextended('convite_email:' || v_email, 0));
+  -- Relógio lido depois das travas: uma espera longa não deixa o envio
+  -- registrado com um horário antigo (now() é o início da transação).
+  v_agora := clock_timestamp();
   if exists (
     select 1 from public.convites_equipe c
     where c.email = v_email
-      and c.ultimo_envio_em > now() - interval '60 seconds'
+      and c.ultimo_envio_em > v_agora - interval '60 seconds'
   ) then
     raise exception 'O convite acabou de ser enviado. Espere um minuto para reenviar.'
       using hint = 'convite_reenvio_cedo';
@@ -254,7 +258,7 @@ begin
       from public.convites_equipe c
       cross join lateral unnest(c.envios_recentes) as e(enviado_em)
       where c.email = v_email
-        and e.enviado_em > now() - interval '24 hours') >= 5 then
+        and e.enviado_em > v_agora - interval '24 hours') >= 5 then
     raise exception 'Este e-mail já recebeu 5 convites nas últimas 24 horas. Tente de novo mais tarde.'
       using hint = 'limite_convites';
   end if;
@@ -263,10 +267,10 @@ begin
   --    sem contar o pendente que está sendo reenviado se ele já está nelas.
   if (select count(*) from public.convites_equipe c
       where c.academia_id = p_academia_id
-        and c.ultimo_envio_em > now() - interval '24 hours'
+        and c.ultimo_envio_em > v_agora - interval '24 hours'
         and c.id is distinct from v_pendente.id) >= 30
      and (v_pendente.id is null or v_pendente.ultimo_envio_em is null
-          or v_pendente.ultimo_envio_em <= now() - interval '24 hours') then
+          or v_pendente.ultimo_envio_em <= v_agora - interval '24 hours') then
     raise exception 'A academia chegou ao limite de 30 convites em 24 horas.'
       using hint = 'limite_convites';
   end if;
@@ -275,20 +279,20 @@ begin
     -- 8a. Reenvio do pendente: atualiza papel, validade e quem convidou (C9).
     update public.convites_equipe c
        set papel = p_papel,
-           expira_em = now() + interval '7 days',
+           expira_em = v_agora + interval '7 days',
            convidado_por = p_user_id,
-           ultimo_envio_em = now(),
+           ultimo_envio_em = v_agora,
            envios_recentes = array(
              select e from unnest(c.envios_recentes) as e
-             where e > now() - interval '24 hours'
-             order by e) || now()
+             where e > v_agora - interval '24 hours'
+             order by e) || v_agora
      where c.id = v_pendente.id;
     v_id := v_pendente.id;
   else
     -- 8b. Convite novo.
     insert into public.convites_equipe (academia_id, email, papel, convidado_por, expira_em,
                                         ultimo_envio_em, envios_recentes)
-    values (p_academia_id, v_email, p_papel, p_user_id, now() + interval '7 days', now(), array[now()])
+    values (p_academia_id, v_email, p_papel, p_user_id, v_agora + interval '7 days', v_agora, array[v_agora])
     returning id into v_id;
   end if;
 
@@ -718,7 +722,9 @@ create trigger membros_academia_ultimo_dono
 -- passando pelo RLS em vários pontos (vínculo, sou_o_aluno, criar_academia).
 -- O Auth e qualquer requisição recebem exclusao_logica_bloqueada. Só a
 -- sessão administrativa sem JWT (SQL do projeto) consegue; nesse caso, os
--- vínculos da conta são desativados, para que o RLS barre o JWT antigo.
+-- vínculos da conta são desativados e os cadastros de aluno e professor são
+-- soltos do login, como no delete de verdade, para que o RLS barre o JWT
+-- antigo.
 create or replace function public.auth_exclusao_logica()
 returns trigger
 language plpgsql
@@ -736,8 +742,14 @@ begin
       using hint = 'exclusao_logica_bloqueada';
   end if;
 
+  -- O mesmo que o delete de verdade faria: vínculos fora (aqui, inativos) e
+  -- os cadastros de aluno e professor soltos do login (on delete set null).
   update public.membros_academia m set ativo = false
    where m.user_id = old.id and m.ativo;
+  update public.alunos a set user_id = null
+   where a.user_id = old.id and a.anonimizado_em is null;
+  update public.professores p set user_id = null
+   where p.user_id = old.id;
 
   return new;
 end

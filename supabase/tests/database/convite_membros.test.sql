@@ -4,7 +4,7 @@
 -- Academias A e B (ativas) e S (suspensa).
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(87);
+select plan(89);
 
 -- ---------------------------------------------------------------------
 -- Auxiliares
@@ -153,7 +153,9 @@ insert into public.membros_academia (academia_id, user_id, papel, ativo) values
 
 insert into public.alunos (id, academia_id, nome, email, status, user_id) values
   ('e7c00000-0000-4000-8000-0000000001a1', 'e7c00000-0000-4000-8000-00000000000a', 'Aluna Promovida',
-   'aluno@conv.test', 'ativo', 'e7c00000-0000-4000-8000-0000000000d4');
+   'aluno@conv.test', 'ativo', 'e7c00000-0000-4000-8000-0000000000d4'),
+  ('e7c00000-0000-4000-8000-0000000001d1', 'e7c00000-0000-4000-8000-00000000000d', 'Dono Y Aluno',
+   'dono-y@conv.test', 'ativo', 'e7c00000-0000-4000-8000-0000000000f2');
 
 -- Convite em S criado antes da suspensão (gravado direto).
 insert into public.convites_equipe (id, academia_id, email, papel, convidado_por, expira_em) values
@@ -535,6 +537,13 @@ select public.__sem_jwt();
 update auth.users set deleted_at = now() where id = 'e7c00000-0000-4000-8000-0000000000f2';
 select is(public.__membro('e7c00000-0000-4000-8000-00000000000d', 'e7c00000-0000-4000-8000-0000000000f2'), 'dono (inativo)',
   'pelo SQL do projeto, a exclusão lógica desativa os vínculos da conta');
+select is((select coalesce(user_id::text, '-') from public.alunos where id = 'e7c00000-0000-4000-8000-0000000001d1'), '-',
+  'pelo SQL do projeto, a exclusão lógica solta os cadastros de aluno do login');
+set local role authenticated;
+select public.__como('e7c00000-0000-4000-8000-0000000000f2');
+select ok(not public.sou_o_aluno('e7c00000-0000-4000-8000-0000000001d1'),
+  'o JWT antigo da conta apagada logicamente não é mais o login do aluno');
+reset role;
 set local role authenticated;
 select public.__como('e7c00000-0000-4000-8000-0000000000f1');
 select is(public.__hint_de($$update public.membros_academia set papel = 'admin'
