@@ -4,7 +4,7 @@
 -- Academias A e B (ativas) e S (suspensa).
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(110);
+select plan(111);
 
 -- ---------------------------------------------------------------------
 -- Auxiliares
@@ -16,7 +16,21 @@ as $$
 begin
   perform set_config('request.jwt.claim.sub', p_user, true);
   perform set_config('request.jwt.claim.role', 'authenticated', true);
-  perform set_config('request.jwt.claims', json_build_object('sub', p_user, 'role', 'authenticated')::text, true);
+  perform set_config('request.jwt.claims', json_build_object('sub', p_user, 'role', 'authenticated',
+    'amr', json_build_array(json_build_object('method', 'otp', 'timestamp', 0)))::text, true);
+end
+$$;
+
+-- Sessão aberta só com senha (sem link enviado ao e-mail).
+create function public.__como_senha(p_user text)
+returns void
+language plpgsql
+as $$
+begin
+  perform set_config('request.jwt.claim.sub', p_user, true);
+  perform set_config('request.jwt.claim.role', 'authenticated', true);
+  perform set_config('request.jwt.claims', json_build_object('sub', p_user, 'role', 'authenticated',
+    'amr', json_build_array(json_build_object('method', 'password', 'timestamp', 0)))::text, true);
 end
 $$;
 
@@ -95,7 +109,7 @@ as $$
   select public.criar_convite_interna(p_user::uuid, p_acad::uuid, p_email, p_papel)
 $$;
 
-grant execute on function public.__como(text), public.__como_servico(), public.__sem_jwt(),
+grant execute on function public.__como(text), public.__como_senha(text), public.__como_servico(), public.__sem_jwt(),
   public.__hint_de(text), public.__passa_e_desfaz(text) to authenticated, service_role;
 grant execute on function public.__cc(text, text, text, text) to service_role;
 
@@ -526,6 +540,9 @@ select is(public.__hint_de(format('select public.aceitar_convite(%L)', (public._
 select is(public.__hint_de($$select public.aceitar_convite('e7c00000-0000-4000-8000-00000000ffff')$$),
   'convite_invalido', 'convite inexistente: mesmo código');
 
+select public.__como_senha('e7c00000-0000-4000-8000-0000000000d1');
+select is(public.__hint_de(format('select public.aceitar_convite(%L)', (public.__conv('e7c00000-0000-4000-8000-00000000000a', 'conf@conv.test')).id)),
+  'convite_exige_link', 'sessão aberta só com senha não aceita: precisa do link enviado ao e-mail');
 select public.__como('e7c00000-0000-4000-8000-0000000000d1');
 select is(public.aceitar_convite((public.__conv('e7c00000-0000-4000-8000-00000000000a', 'conf@conv.test')).id),
   'e7c00000-0000-4000-8000-00000000000a'::uuid, 'aceite devolve a academia');

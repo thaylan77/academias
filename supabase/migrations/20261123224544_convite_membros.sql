@@ -635,6 +635,20 @@ begin
       using hint = 'email_nao_confirmado';
   end if;
 
+  -- O aceite exige uma sessão aberta por um link enviado ao e-mail (link
+  -- mágico, OTP, convite, recuperação ou confirmação de cadastro): só o
+  -- e-mail confirmado não prova a posse se o Auth estiver configurado sem
+  -- confirmação. O método vem do amr do JWT.
+  if p_exige_senha and not exists (
+    select 1
+    from jsonb_array_elements(coalesce(nullif(current_setting('request.jwt.claims', true), '')::jsonb -> 'amr',
+                                       '[]'::jsonb)) as a
+    where a ->> 'method' in ('otp', 'magiclink', 'invite', 'recovery', 'email/signup', 'email_change')
+  ) then
+    raise exception 'Abra o link enviado ao seu e-mail para aceitar o convite.'
+      using hint = 'convite_exige_link';
+  end if;
+
   if p_exige_senha and exists (
     select 1 from auth.users u
     where u.id = auth.uid()

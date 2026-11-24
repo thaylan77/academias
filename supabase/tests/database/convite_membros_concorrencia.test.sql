@@ -67,7 +67,8 @@ begin
     perform extensions.dblink_exec(p_conn, 'set role service_role');
   else
     perform extensions.dblink_exec(p_conn, format($q$set request.jwt.claim.sub = %L; set request.jwt.claim.role = 'authenticated'; set request.jwt.claims = %L$q$,
-      p_user, json_build_object('sub', p_user, 'role', 'authenticated')::text));
+      p_user, json_build_object('sub', p_user, 'role', 'authenticated',
+                              'amr', json_build_array(json_build_object('method', 'otp', 'timestamp', 0)))::text));
     perform extensions.dblink_exec(p_conn, 'set role authenticated');
   end if;
 end
