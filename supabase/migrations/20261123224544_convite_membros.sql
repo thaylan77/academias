@@ -360,13 +360,52 @@ begin
     'email', v_email,
     'conta', coalesce(v_conta, 'nenhuma'),
     'user_id', v_conta_id,
-    'enviar', v_enviar
+    'enviar', v_enviar,
+    'enviado_em', case when v_enviar then v_agora end
   );
 end
 $$;
 
 revoke execute on function public.criar_convite_interna(uuid, uuid, text, text) from public, anon, authenticated;
 grant execute on function public.criar_convite_interna(uuid, uuid, text, text) to service_role;
+
+-- A Edge Function chama quando o provedor recusa de vez o envio que
+-- criar_convite_interna liberou (enviar = true): o envio deixa de contar nos
+-- limites do projeto todo, e uma falha do provedor não suprime convites de
+-- outras academias. A tentativa continua registrada (é o que a academia vê).
+-- Idempotente: liberar de novo, ou um horário que não está lá, não faz nada.
+-- Reserva abandonada (a função caiu antes de saber) continua contando: é o
+-- lado seguro contra spam, e sai da conta em 24 horas.
+create or replace function public.liberar_envio_convite_interna(p_convite_id uuid, p_enviado_em timestamptz)
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_email text;
+  v_academia uuid;
+begin
+  select c.email, c.academia_id into v_email, v_academia
+  from public.convites_equipe c where c.id = p_convite_id;
+  if v_email is null then
+    return;
+  end if;
+
+  -- Mesma ordem de travas de criar_convite_interna.
+  perform 1 from public.academias a where a.id = v_academia for update;
+  perform pg_advisory_xact_lock(hashtextextended('convite_email:' || v_email, 0));
+
+  update public.convites_equipe c
+     set envios_reais = array_remove(c.envios_reais, p_enviado_em),
+         envio_real_em = (select max(e) from unnest(array_remove(c.envios_reais, p_enviado_em)) as e)
+   where c.id = p_convite_id
+     and p_enviado_em = any (c.envios_reais);
+end
+$$;
+
+revoke execute on function public.liberar_envio_convite_interna(uuid, timestamptz) from public, anon, authenticated;
+grant execute on function public.liberar_envio_convite_interna(uuid, timestamptz) to service_role;
 
 -- =====================================================================
 -- 4. CANCELAR (dono, admin)

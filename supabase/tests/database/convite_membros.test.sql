@@ -4,7 +4,7 @@
 -- Academias A e B (ativas) e S (suspensa).
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(86);
+select plan(89);
 
 -- ---------------------------------------------------------------------
 -- Auxiliares
@@ -215,7 +215,7 @@ select is(public.__hint_de($$update public.convites_equipe set academia_id = 'e7
 set local role service_role;
 select public.__como_servico();
 
-select is(public.__cc('e7c00000-0000-4000-8000-0000000000a2', 'e7c00000-0000-4000-8000-00000000000a', '  Novo@Conv.TEST ', 'professor') - 'convite_id' - 'user_id',
+select is(public.__cc('e7c00000-0000-4000-8000-0000000000a2', 'e7c00000-0000-4000-8000-00000000000a', '  Novo@Conv.TEST ', 'professor') - 'convite_id' - 'user_id' - 'enviado_em',
   '{"email": "novo@conv.test", "conta": "nenhuma", "enviar": true}'::jsonb, 'admin convida professor: e-mail normalizado, conta inexistente, envio liberado');
 select is(public.__hint_de($$select public.__cc('e7c00000-0000-4000-8000-0000000000a2', 'e7c00000-0000-4000-8000-00000000000a', 'x@conv.test', 'dono')$$),
   'sem_permissao', 'admin não convida dono');
@@ -307,6 +307,20 @@ set local role service_role;
 select public.__como_servico();
 select is(public.__cc('e7c00000-0000-4000-8000-0000000000a1', 'e7c00000-0000-4000-8000-00000000000a', 'ciclo@conv.test', 'professor') ->> 'conta',
   'nenhuma', 'C10: envios com mais de 24 horas saem da conta');
+
+-- Falha do provedor: liberar o envio devolve a cota do endereço no projeto
+-- todo, e outra academia volta a conseguir enviar.
+select public.__cc('e7c00000-0000-4000-8000-0000000000a1', 'e7c00000-0000-4000-8000-00000000000a', 'falha@conv.test', 'professor');
+select public.liberar_envio_convite_interna((public.__conv('e7c00000-0000-4000-8000-00000000000a', 'falha@conv.test')).id,
+                                            (public.__conv('e7c00000-0000-4000-8000-00000000000a', 'falha@conv.test')).envio_real_em);
+select is(cardinality((public.__conv('e7c00000-0000-4000-8000-00000000000a', 'falha@conv.test')).envios_reais) || '/'
+          || coalesce((public.__conv('e7c00000-0000-4000-8000-00000000000a', 'falha@conv.test')).envio_real_em::text, '-'),
+  '0/-', 'liberar o envio que falhou tira ele da cota do projeto todo');
+select is(public.__cc('e7c00000-0000-4000-8000-0000000000f1', 'e7c00000-0000-4000-8000-00000000000d', 'falha@conv.test', 'professor') ->> 'enviar',
+  'true', 'depois da falha liberada, outra academia volta a enviar para o endereço');
+select is(public.__hint_de(format('select public.liberar_envio_convite_interna(%L, now())',
+            (public.__conv('e7c00000-0000-4000-8000-00000000000a', 'falha@conv.test')).id)),
+  'sem erro', 'liberar de novo, ou um horário que não está lá, não faz nada');
 
 -- O reenvio do mesmo pendente registra cada envio na janela.
 select public.__cc('e7c00000-0000-4000-8000-0000000000a1', 'e7c00000-0000-4000-8000-00000000000a', 'reenvio@conv.test', 'professor');
