@@ -106,6 +106,7 @@ $$;
 create function pg_temp.limpa() returns void language plpgsql as $$
 begin
   perform extensions.dblink_exec('prep', $f$
+    delete from public.convites_envios where email like '%@concorre.test';
     delete from public.academias where id in ('e7d00000-0000-4000-8000-00000000000a', 'e7d00000-0000-4000-8000-00000000000b', 'e7d00000-0000-4000-8000-00000000000c');
     delete from auth.users where id in (
       'e7d00000-0000-4000-8000-0000000000a1', 'e7d00000-0000-4000-8000-0000000000a2',
@@ -185,11 +186,13 @@ select extensions.dblink_exec('prep', $f$
     ('e7d00000-0000-4000-8000-0000000002ca', 'e7d00000-0000-4000-8000-00000000000b', 'u8@concorre.test', 'recepcao',
      'e7d00000-0000-4000-8000-0000000000b2', now() + interval '7 days');
   insert into public.convites_equipe (id, academia_id, email, papel, convidado_por, expira_em,
-                                      ultimo_envio_em, envios_recentes, envios_reservados, envios_reais) values
+                                      ultimo_envio_em, envios_recentes) values
     ('e7d00000-0000-4000-8000-0000000002cb', 'e7d00000-0000-4000-8000-00000000000b', 'liberar@concorre.test', 'professor',
      'e7d00000-0000-4000-8000-0000000000b2', now() + interval '7 days',
-     '2026-11-23 10:00:00+00', array['2026-11-23 10:00:00+00'::timestamptz],
-     array['2026-11-23 10:00:00+00'::timestamptz], array['2026-11-23 10:00:00+00'::timestamptz]);
+     '2026-11-23 10:00:00+00', array['2026-11-23 10:00:00+00'::timestamptz]);
+  insert into public.convites_envios (id, email, convite_id, reservado_em) values
+    ('e7d00000-0000-4000-8000-0000000003cb', 'liberar@concorre.test', 'e7d00000-0000-4000-8000-0000000002cb',
+     '2026-11-23 10:00:00+00');
   insert into public.convites_equipe (id, academia_id, email, papel, convidado_por, expira_em) values
     ('e7d00000-0000-4000-8000-0000000002cc', 'e7d00000-0000-4000-8000-00000000000b', 'u9@concorre.test', 'recepcao',
      'e7d00000-0000-4000-8000-0000000000b2', now() + interval '7 days'),
@@ -346,7 +349,7 @@ select is(extensions.dblink_send_query('s2', $$select public.criar_convite_inter
 select ok(pg_temp.s2_espera_s1(), 'J: o segundo convite espera a trava do e-mail');
 select extensions.dblink_exec('s1', 'commit');
 select is(pg_temp.resultado_s2(), 'ok', 'J: o segundo convite não dá erro que revele a outra academia');
-select is((select string_agg(a.slug || '=' || (cardinality(c.envios_reais) > 0)::text, ',' order by a.slug)
+select is((select string_agg(a.slug || '=' || (exists (select 1 from public.convites_envios v where v.convite_id = c.id))::text, ',' order by a.slug)
            from public.convites_equipe c join public.academias a on a.id = c.academia_id
            where c.email = 'disputa@concorre.test'),
   'convite-concorre-k=true,convite-concorre-l=false', 'J: um envio real só para o endereço; o de L fica gravado sem envio real');
@@ -420,15 +423,14 @@ select is((select papel from public.membros_academia
 -- N. s1, como a Edge Function, libera o envio de c11 (já confirmado antes).
 -- ---------------------------------------------------------------------
 create temp table antes_n as
-select to_jsonb(c) - 'envio_real_em' - 'envios_reais' - 'envios_reservados' as visivel
+select to_jsonb(c) as visivel
 from public.convites_equipe c where c.id = 'e7d00000-0000-4000-8000-0000000002cb';
 select pg_temp.como('s1', 'service_role');
 select extensions.dblink_exec('s1', $q$do $d$ begin perform public.liberar_envio_convite_interna(
-    'e7d00000-0000-4000-8000-0000000002cb', '2026-11-23 10:00:00+00'); end $d$$q$);
-select is((select cardinality(envios_reais) || '/' || coalesce(envio_real_em::text, '-')
-           from public.convites_equipe where id = 'e7d00000-0000-4000-8000-0000000002cb'),
-  '0/-', 'N: a liberação devolve a cota');
-select is((select to_jsonb(c) - 'envio_real_em' - 'envios_reais' - 'envios_reservados'
+    'e7d00000-0000-4000-8000-0000000003cb'); end $d$$q$);
+select ok((select liberado_em is not null from public.convites_envios where id = 'e7d00000-0000-4000-8000-0000000003cb'),
+  'N: a liberação devolve a cota');
+select is((select to_jsonb(c)
            from public.convites_equipe c where c.id = 'e7d00000-0000-4000-8000-0000000002cb'),
   (select visivel from antes_n), 'N: nada do que a academia lê mudou, nem o updated_at');
 

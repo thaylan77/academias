@@ -4,7 +4,7 @@
 -- Academias A e B (ativas) e S (suspensa).
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(97);
+select plan(99);
 
 -- ---------------------------------------------------------------------
 -- Auxiliares
@@ -195,10 +195,9 @@ select ok(not has_table_privilege('authenticated', 'public.convites_equipe', 'IN
   'authenticated não escreve direto em convites_equipe');
 select ok(not has_function_privilege('authenticated', 'public.criar_convite_interna(uuid,uuid,text,text)', 'EXECUTE'),
   'authenticated não cria convite (só a Edge Function, com service_role)');
-select ok(not has_column_privilege('authenticated', 'public.convites_equipe', 'envio_real_em', 'SELECT')
-          and not has_column_privilege('authenticated', 'public.convites_equipe', 'envios_reais', 'SELECT')
-          and has_column_privilege('authenticated', 'public.convites_equipe', 'ultimo_envio_em', 'SELECT'),
-  'authenticated lê as tentativas da academia, mas não os envios reais');
+select ok(not has_table_privilege('authenticated', 'public.convites_envios', 'SELECT')
+          and not has_table_privilege('anon', 'public.convites_envios', 'SELECT'),
+  'ninguém lê os envios reais pela API (convites_envios)');
 select ok(not has_function_privilege('anon', 'public.cancelar_convite(uuid)', 'EXECUTE')
           and not has_function_privilege('anon', 'public.meus_convites()', 'EXECUTE')
           and not has_function_privilege('anon', 'public.aceitar_convite(uuid)', 'EXECUTE')
@@ -215,7 +214,7 @@ select is(public.__hint_de($$update public.convites_equipe set academia_id = 'e7
 set local role service_role;
 select public.__como_servico();
 
-select is(public.__cc('e7c00000-0000-4000-8000-0000000000a2', 'e7c00000-0000-4000-8000-00000000000a', '  Novo@Conv.TEST ', 'professor') - 'convite_id' - 'user_id' - 'enviado_em',
+select is(public.__cc('e7c00000-0000-4000-8000-0000000000a2', 'e7c00000-0000-4000-8000-00000000000a', '  Novo@Conv.TEST ', 'professor') - 'convite_id' - 'user_id' - 'envio_id',
   '{"email": "novo@conv.test", "conta": "nenhuma", "enviar": true}'::jsonb, 'admin convida professor: e-mail normalizado, conta inexistente, envio liberado');
 select is(public.__hint_de($$select public.__cc('e7c00000-0000-4000-8000-0000000000a2', 'e7c00000-0000-4000-8000-00000000000a', 'x@conv.test', 'dono')$$),
   'sem_permissao', 'admin não convida dono');
@@ -277,11 +276,12 @@ update public.convites_equipe
    set ultimo_envio_em = now() - interval '7 minutes',
        envios_recentes = array[now() - interval '23 hours 50 minutes', now() - interval '10 minutes',
                                now() - interval '9 minutes', now() - interval '8 minutes', now() - interval '7 minutes']
-       , envios_reservados = '{}'
-       , envio_real_em = now() - interval '7 minutes',
-       envios_reais = array[now() - interval '23 hours 50 minutes', now() - interval '10 minutes',
-                               now() - interval '9 minutes', now() - interval '8 minutes', now() - interval '7 minutes']
  where email = 'ciclo@conv.test' and academia_id = 'e7c00000-0000-4000-8000-00000000000a';
+delete from public.convites_envios where email = 'ciclo@conv.test';
+insert into public.convites_envios (email, reservado_em, enviado_em)
+select 'ciclo@conv.test', t, t
+from unnest(array[now() - interval '23 hours 50 minutes', now() - interval '10 minutes',
+                  now() - interval '9 minutes', now() - interval '8 minutes', now() - interval '7 minutes']) t;
 set local role service_role;
 select public.__como_servico();
 select is(public.__hint_de($$select public.__cc('e7c00000-0000-4000-8000-0000000000a1', 'e7c00000-0000-4000-8000-00000000000a', 'ciclo@conv.test', 'professor')$$),
@@ -291,7 +291,8 @@ update public.convites_equipe set ultimo_envio_em = null where academia_id = 'e7
 set local role service_role;
 select public.__como_servico();
 select is((public.__cc('e7c00000-0000-4000-8000-0000000000f1', 'e7c00000-0000-4000-8000-00000000000d', 'ciclo@conv.test', 'professor') ->> 'enviar')
-          || '/' || cardinality((public.__conv('e7c00000-0000-4000-8000-00000000000d', 'ciclo@conv.test')).envios_reais),
+          || '/' || (select count(*) from public.convites_envios
+                     where convite_id = (public.__conv('e7c00000-0000-4000-8000-00000000000d', 'ciclo@conv.test')).id),
   'false/0', 'C10: o teto de 5 por endereço vale entre academias, gravando sem envio real');
 select is(public.__hint_de($$select public.__cc('e7c00000-0000-4000-8000-0000000000f1', 'e7c00000-0000-4000-8000-00000000000d', 'ciclo@conv.test', 'professor')$$),
   'convite_reenvio_cedo', 'C10: depois de um envio suprimido, a academia vê os 60 segundos como num envio de verdade');
@@ -300,11 +301,12 @@ update public.convites_equipe
    set ultimo_envio_em = now() - interval '3 minutes',
        envios_recentes = array[now() - interval '25 hours', now() - interval '25 hours', now() - interval '25 hours',
                                now() - interval '25 hours', now() - interval '3 minutes']
-       , envios_reservados = '{}'
-       , envio_real_em = now() - interval '3 minutes',
-       envios_reais = array[now() - interval '25 hours', now() - interval '25 hours', now() - interval '25 hours',
-                               now() - interval '25 hours', now() - interval '3 minutes']
  where email = 'ciclo@conv.test' and academia_id = 'e7c00000-0000-4000-8000-00000000000a';
+delete from public.convites_envios where email = 'ciclo@conv.test';
+insert into public.convites_envios (email, reservado_em, enviado_em)
+select 'ciclo@conv.test', t, t
+from unnest(array[now() - interval '25 hours', now() - interval '25 hours', now() - interval '25 hours',
+                  now() - interval '25 hours', now() - interval '3 minutes']) t;
 set local role service_role;
 select public.__como_servico();
 select is(public.__cc('e7c00000-0000-4000-8000-0000000000a1', 'e7c00000-0000-4000-8000-00000000000a', 'ciclo@conv.test', 'professor') ->> 'conta',
@@ -313,34 +315,28 @@ select is(public.__cc('e7c00000-0000-4000-8000-0000000000a1', 'e7c00000-0000-400
 -- Falha do provedor: liberar o envio devolve a cota do endereço no projeto
 -- todo, e outra academia volta a conseguir enviar.
 select public.__cc('e7c00000-0000-4000-8000-0000000000a1', 'e7c00000-0000-4000-8000-00000000000a', 'falha@conv.test', 'professor');
-select public.liberar_envio_convite_interna((public.__conv('e7c00000-0000-4000-8000-00000000000a', 'falha@conv.test')).id,
-                                            (public.__conv('e7c00000-0000-4000-8000-00000000000a', 'falha@conv.test')).envios_reservados[1]);
-select is(cardinality((public.__conv('e7c00000-0000-4000-8000-00000000000a', 'falha@conv.test')).envios_reais) || '/'
-          || coalesce((public.__conv('e7c00000-0000-4000-8000-00000000000a', 'falha@conv.test')).envio_real_em::text, '-'),
-  '0/-', 'liberar o envio que falhou tira ele da cota do projeto todo');
+select public.liberar_envio_convite_interna((select id from public.convites_envios where email = 'falha@conv.test'));
+select is((select count(*) from public.convites_envios where email = 'falha@conv.test' and liberado_em is null)::text,
+  '0', 'liberar o envio que falhou tira ele da cota do projeto todo');
 select is(public.__cc('e7c00000-0000-4000-8000-0000000000f1', 'e7c00000-0000-4000-8000-00000000000d', 'falha@conv.test', 'professor') ->> 'enviar',
   'true', 'depois da falha liberada, outra academia volta a enviar para o endereço');
-select is(public.__hint_de(format('select public.liberar_envio_convite_interna(%L, now())',
-            (public.__conv('e7c00000-0000-4000-8000-00000000000a', 'falha@conv.test')).id)),
-  'sem erro', 'liberar de novo, ou um horário que não está lá, não faz nada');
+select is(public.__hint_de(format('select public.liberar_envio_convite_interna(%L)', gen_random_uuid())),
+  'sem erro', 'liberar de novo, ou um envio que não existe, não faz nada');
 
 -- Envio confirmado: a reserva em andamento bloqueia o endereço mesmo depois
 -- de 60 s, e o intervalo conta da confirmação.
 select public.__cc('e7c00000-0000-4000-8000-0000000000a1', 'e7c00000-0000-4000-8000-00000000000a', 'atraso@conv.test', 'professor');
 reset role;
-update public.convites_equipe
-   set envios_reservados = array[now() - interval '70 seconds'], envios_reais = array[now() - interval '70 seconds'],
-       ultimo_envio_em = now() - interval '70 seconds', envios_recentes = array[now() - interval '70 seconds']
+update public.convites_equipe set ultimo_envio_em = now() - interval '70 seconds', envios_recentes = array[now() - interval '70 seconds']
  where email = 'atraso@conv.test' and academia_id = 'e7c00000-0000-4000-8000-00000000000a';
+update public.convites_envios set reservado_em = now() - interval '70 seconds' where email = 'atraso@conv.test';
 set local role service_role;
 select public.__como_servico();
 select is(public.__cc('e7c00000-0000-4000-8000-0000000000f1', 'e7c00000-0000-4000-8000-00000000000d', 'atraso@conv.test', 'professor') ->> 'enviar',
   'false', 'reserva ainda não confirmada bloqueia o endereço mesmo depois de 60 segundos');
-select public.confirmar_envio_convite_interna((public.__conv('e7c00000-0000-4000-8000-00000000000a', 'atraso@conv.test')).id,
-                                              (public.__conv('e7c00000-0000-4000-8000-00000000000a', 'atraso@conv.test')).envios_reservados[1]);
-select ok((select cardinality(c.envios_reservados) = 0 and c.envio_real_em > now() and c.envios_reais = array[c.envio_real_em]
-           from public.__conv('e7c00000-0000-4000-8000-00000000000a', 'atraso@conv.test') c),
-  'confirmar troca a reserva pelo horário da confirmação');
+select public.confirmar_envio_convite_interna((select id from public.convites_envios where email = 'atraso@conv.test'));
+select ok((select enviado_em > now() from public.convites_envios where email = 'atraso@conv.test'),
+  'confirmar grava o horário da confirmação, não o da reserva');
 reset role;
 update public.convites_equipe set ultimo_envio_em = null, envios_recentes = '{}'
  where email = 'atraso@conv.test' and academia_id = 'e7c00000-0000-4000-8000-00000000000d';
@@ -348,8 +344,8 @@ set local role service_role;
 select public.__como_servico();
 select is(public.__cc('e7c00000-0000-4000-8000-0000000000f1', 'e7c00000-0000-4000-8000-00000000000d', 'atraso@conv.test', 'professor') ->> 'enviar',
   'false', 'o intervalo de 60 segundos conta da confirmação');
-select is(public.__hint_de(format('select public.confirmar_envio_convite_interna(%L, now())',
-            (public.__conv('e7c00000-0000-4000-8000-00000000000a', 'atraso@conv.test')).id)),
+select is(public.__hint_de(format('select public.confirmar_envio_convite_interna(%L)',
+            (select id from public.convites_envios where email = 'atraso@conv.test'))),
   'sem erro', 'confirmar de novo não faz nada');
 
 -- Uma reserva bloqueia o endereço por 6 minutos (a Edge Function só despacha
@@ -357,9 +353,9 @@ select is(public.__hint_de(format('select public.confirmar_envio_convite_interna
 select public.__cc('e7c00000-0000-4000-8000-0000000000a1', 'e7c00000-0000-4000-8000-00000000000a', 'seis@conv.test', 'professor');
 reset role;
 update public.convites_equipe
-   set envios_reservados = array[now() - interval '5 minutes 30 seconds'], envios_reais = array[now() - interval '5 minutes 30 seconds'],
-       ultimo_envio_em = now() - interval '5 minutes 30 seconds', envios_recentes = array[now() - interval '5 minutes 30 seconds']
+   set ultimo_envio_em = now() - interval '5 minutes 30 seconds', envios_recentes = array[now() - interval '5 minutes 30 seconds']
  where email = 'seis@conv.test';
+update public.convites_envios set reservado_em = now() - interval '5 minutes 30 seconds' where email = 'seis@conv.test';
 set local role service_role;
 select public.__como_servico();
 select is(public.__cc('e7c00000-0000-4000-8000-0000000000f1', 'e7c00000-0000-4000-8000-00000000000d', 'seis@conv.test', 'professor') ->> 'enviar',
@@ -369,13 +365,15 @@ select is(public.__cc('e7c00000-0000-4000-8000-0000000000f1', 'e7c00000-0000-400
 -- envios confirmados e uma reserva de 24 h 2 min, o endereço já tem cinco.
 select public.__cc('e7c00000-0000-4000-8000-0000000000a1', 'e7c00000-0000-4000-8000-00000000000a', 'janela@conv.test', 'professor');
 reset role;
-update public.convites_equipe
-   set envios_reservados = array[now() - interval '24 hours 2 minutes'],
-       envios_reais = array[now() - interval '24 hours 2 minutes', now() - interval '4 hours', now() - interval '3 hours',
-                            now() - interval '2 hours', now() - interval '1 hour'],
-       envio_real_em = now() - interval '1 hour',
-       ultimo_envio_em = now() - interval '1 hour', envios_recentes = array[now() - interval '1 hour']
+update public.convites_equipe set ultimo_envio_em = now() - interval '1 hour', envios_recentes = array[now() - interval '1 hour']
  where email = 'janela@conv.test';
+delete from public.convites_envios where email = 'janela@conv.test';
+insert into public.convites_envios (email, reservado_em, enviado_em) values
+  ('janela@conv.test', now() - interval '24 hours 2 minutes', null),
+  ('janela@conv.test', now() - interval '4 hours', now() - interval '4 hours'),
+  ('janela@conv.test', now() - interval '3 hours', now() - interval '3 hours'),
+  ('janela@conv.test', now() - interval '2 hours', now() - interval '2 hours'),
+  ('janela@conv.test', now() - interval '1 hour',  now() - interval '1 hour');
 set local role service_role;
 select public.__como_servico();
 select is(public.__cc('e7c00000-0000-4000-8000-0000000000f1', 'e7c00000-0000-4000-8000-00000000000d', 'janela@conv.test', 'professor') ->> 'enviar',
@@ -385,21 +383,20 @@ select is(public.__cc('e7c00000-0000-4000-8000-0000000000f1', 'e7c00000-0000-400
 -- convite: cada reserva é confirmada ou liberada pela própria identidade.
 select public.__cc('e7c00000-0000-4000-8000-0000000000a1', 'e7c00000-0000-4000-8000-00000000000a', 'tardio@conv.test', 'professor');
 reset role;
-update public.convites_equipe
-   set envios_reservados = array[now() - interval '7 minutes'], envios_reais = array[now() - interval '7 minutes'],
-       ultimo_envio_em = now() - interval '7 minutes', envios_recentes = array[now() - interval '7 minutes']
+update public.convites_equipe set ultimo_envio_em = now() - interval '7 minutes', envios_recentes = array[now() - interval '7 minutes']
  where email = 'tardio@conv.test';
+update public.convites_envios set reservado_em = now() - interval '7 minutes' where email = 'tardio@conv.test';
 set local role service_role;
 select public.__como_servico();
 select public.__cc('e7c00000-0000-4000-8000-0000000000a1', 'e7c00000-0000-4000-8000-00000000000a', 'tardio@conv.test', 'professor');
-select public.liberar_envio_convite_interna((public.__conv('e7c00000-0000-4000-8000-00000000000a', 'tardio@conv.test')).id, now() - interval '7 minutes');
-select is(cardinality((public.__conv('e7c00000-0000-4000-8000-00000000000a', 'tardio@conv.test')).envios_reservados) || '/'
-          || cardinality((public.__conv('e7c00000-0000-4000-8000-00000000000a', 'tardio@conv.test')).envios_reais),
+select public.liberar_envio_convite_interna((select id from public.convites_envios
+                                             where email = 'tardio@conv.test' and reservado_em = now() - interval '7 minutes'));
+select is((select count(*) filter (where liberado_em is not null) || '/' || count(*) filter (where liberado_em is null and enviado_em is null)
+           from public.convites_envios where email = 'tardio@conv.test'),
   '1/1', 'recusa tardia da reserva antiga, depois do reenvio: só ela sai da cota');
-select public.confirmar_envio_convite_interna((public.__conv('e7c00000-0000-4000-8000-00000000000a', 'tardio@conv.test')).id,
-                                              (public.__conv('e7c00000-0000-4000-8000-00000000000a', 'tardio@conv.test')).envios_reservados[1]);
-select ok((select cardinality(c.envios_reservados) = 0 and c.envios_reais = array[c.envio_real_em]
-           from public.__conv('e7c00000-0000-4000-8000-00000000000a', 'tardio@conv.test') c),
+select public.confirmar_envio_convite_interna((select id from public.convites_envios
+                                               where email = 'tardio@conv.test' and liberado_em is null));
+select ok((select count(*) = 1 from public.convites_envios where email = 'tardio@conv.test' and enviado_em is not null),
   'a reserva nova é confirmada pela própria identidade');
 
 -- O reenvio do mesmo pendente registra cada envio na janela.
@@ -657,12 +654,29 @@ select is(public.__passa_e_desfaz($$delete from public.membros_academia
                                     where academia_id = 'e7c00000-0000-4000-8000-00000000000b' and user_id = 'e7c00000-0000-4000-8000-0000000000b1'$$),
   'passou', 'sessão administrativa sem JWT (SQL do projeto) remove o último dono');
 
+-- B tem cinco envios recentes para um endereço; apagar B não devolve a cota
+-- dele às outras academias (convites_envios não tem cascata).
+insert into public.convites_equipe (id, academia_id, email, papel, convidado_por, expira_em) values
+  ('e7c00000-0000-4000-8000-0000000002b9', 'e7c00000-0000-4000-8000-00000000000b', 'apagada@conv.test', 'professor',
+   'e7c00000-0000-4000-8000-0000000000b1', now() + interval '7 days');
+insert into public.convites_envios (email, convite_id, reservado_em, enviado_em)
+select 'apagada@conv.test', 'e7c00000-0000-4000-8000-0000000002b9', t, t
+from unnest(array[now() - interval '5 hours', now() - interval '4 hours', now() - interval '3 hours',
+                  now() - interval '2 hours', now() - interval '1 hour']) t;
+
 -- Apagar a academia apaga os membros, inclusive o único dono. Com o papel de
 -- requisição authenticated, para passar pelo caminho da academia apagada.
 select public.__como('e7c00000-0000-4000-8000-0000000000b1');
 delete from public.academias where id = 'e7c00000-0000-4000-8000-00000000000b';
 select is((select count(*) from public.membros_academia where academia_id = 'e7c00000-0000-4000-8000-00000000000b'),
   0::bigint, 'apagar a academia leva o último dono junto (cascata)');
+select is((select count(*) from public.convites_envios where email = 'apagada@conv.test' and convite_id is null),
+  5::bigint, 'os envios da academia apagada continuam no registro global');
+set local role service_role;
+select public.__como_servico();
+select is(public.__cc('e7c00000-0000-4000-8000-0000000000f1', 'e7c00000-0000-4000-8000-00000000000d', 'apagada@conv.test', 'professor') ->> 'enviar',
+  'false', 'apagar uma academia não devolve a cota do endereço às outras');
+reset role;
 
 select * from finish();
 rollback;

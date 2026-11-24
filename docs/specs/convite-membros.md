@@ -54,7 +54,7 @@ Fica de fora:
 | C7 | Quem já é da academia | Membro ativo da equipe (papel diferente de `aluno`): o convite é recusado (`ja_membro`), no criar e no aceitar; troca de papel é na seção Equipe. Membro **inativo**: o aceite reativa com o papel do convite. Quem só tem o papel `aluno`: o aceite troca para o papel da equipe, e o acesso de aluno continua (vem de `alunos.user_id`, por `sou_o_aluno`). | A chave `(academia_id, user_id)` só cabe um papel. O de equipe prevalece, como já acontece em `vincular_meu_cadastro_aluno` (`on conflict do nothing`). Sem totem no convite, nenhum aluno vira totem e perde o catálogo. |
 | C8 | Último dono | Gatilho em `membros_academia`: recusa o update ou delete que deixe a academia sem **nenhum dono ativo** (`hint = ultimo_dono`). Vale também para o dono que altera a própria linha. Só passa o `service_role`, ou o delete em cascata de uma academia que está sendo apagada (4.5). | Uma academia sem dono fica sem ninguém que possa alterar outro dono. |
 | C9 | Convite duplicado | Um convite pendente por e-mail e academia. Convidar de novo o mesmo e-mail atualiza o papel, a validade e o `convidado_por` do pendente, se quem convida pode convidar **o papel novo e o papel do pendente**. | Evita dois convites com papéis diferentes para a mesma pessoa, e impede que um admin rebaixe o convite de um dono. |
-| C10 | Limite de envio | No máximo 1 e-mail para o mesmo endereço a cada 60 segundos e 5 em 24 horas, contando todas as academias e os convites cancelados e recusados; e 30 convites criados ou com envio por academia em 24 horas (`limite_convites`). Pelo histórico da própria academia (tentativas, com e-mail ou sem), o erro é explícito (`convite_reenvio_cedo`, `limite_convites`); pelos envios reais de outras, o convite e a tentativa são gravados como num envio, mas o e-mail não sai (`enviar = false`). A resposta ao front, as colunas que a academia lê e os próximos limites ficam iguais nos dois casos; os envios reais (`envio_real_em`, `envios_reais`) ficam em colunas que `authenticated` não lê. Assim nada revela a atividade de outro tenant. Os limites por endereço valem no projeto todo (decisão do dono do projeto na revisão do PR #82): uma academia em trial não usa outras para mandar spam ao mesmo endereço. | Qualquer login cria uma academia em trial. Sem limite, uma conta abusiva gasta a cota de SMTP de todo o SaaS. |
+| C10 | Limite de envio | No máximo 1 e-mail para o mesmo endereço a cada 60 segundos e 5 em 24 horas, contando todas as academias e os convites cancelados e recusados; e 30 convites criados ou com envio por academia em 24 horas (`limite_convites`). Pelo histórico da própria academia (tentativas, com e-mail ou sem), o erro é explícito (`convite_reenvio_cedo`, `limite_convites`); pelos envios reais de outras, o convite e a tentativa são gravados como num envio, mas o e-mail não sai (`enviar = false`). A resposta ao front, as colunas que a academia lê e os próximos limites ficam iguais nos dois casos; os envios reais ficam em `convites_envios`, tabela do projeto todo que `authenticated` não lê e que não some quando uma academia é apagada. Assim nada revela a atividade de outro tenant. Os limites por endereço valem no projeto todo (decisão do dono do projeto na revisão do PR #82): uma academia em trial não usa outras para mandar spam ao mesmo endereço. | Qualquer login cria uma academia em trial. Sem limite, uma conta abusiva gasta a cota de SMTP de todo o SaaS. |
 
 ## 4. Schema e banco
 
@@ -237,11 +237,11 @@ A entrada é `{ academia_id, email, papel }`, com o JWT de quem convida.
    **normalizado**, devolvido pela função interna.
 3. Se o e-mail não sair, o convite fica pendente e a tela mostra "Convite
    criado, mas o e-mail não saiu. Tente reenviar em um minuto."
-   Para cada envio liberado (`enviar = true`), o `enviado_em` devolvido é
+   Para cada envio liberado (`enviar = true`), o `envio_id` devolvido é
    uma reserva: com o provedor aceitando, a função chama
-   `confirmar_envio_convite_interna(convite_id, enviado_em)`, e o intervalo de
+   `confirmar_envio_convite_interna(envio_id)`, e o intervalo de
    60 segundos passa a contar dali; com o provedor recusando de vez, chama
-   `liberar_envio_convite_interna(convite_id, enviado_em)`, e o envio sai da
+   `liberar_envio_convite_interna(envio_id)`, e o envio sai da
    cota do endereço no projeto todo, para a falha não suprimir convites de
    outras academias. A função só despacha até 4 minutos depois da reserva; passado isso,
    libera. Cada reserva bloqueia o endereço por 6 minutos, então o envio

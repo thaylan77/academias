@@ -37,17 +37,7 @@ create table public.convites_equipe (
   -- dela usam estas colunas.
   ultimo_envio_em      timestamptz,
   envios_recentes      timestamptz[] not null default '{}',
-  -- Envios de e-mail que de fato saíram. Só os limites do projeto todo usam;
-  -- authenticated não lê (revelariam se outra academia convidou o endereço).
-  -- envio_real_em: o último envio confirmado pelo provedor. envios_reais:
-  -- confirmados e a reserva em andamento (contam na janela de 24 horas).
-  -- envios_reservados: as reservas que a Edge Function ainda não confirmou
-  -- nem liberou, cada uma com o próprio horário; cada uma bloqueia o endereço
-  -- por 6 minutos (a Edge Function só despacha até 4 minutos depois da
-  -- reserva: o envio aceito fica sempre a mais de 60 s do próximo).
-  envio_real_em        timestamptz,
-  envios_reais         timestamptz[] not null default '{}',
-  envios_reservados    timestamptz[] not null default '{}',
+  -- Os envios reais ficam em convites_envios (sem cascata, no projeto todo).
   aceito_por           uuid references auth.users (id) on delete set null,
   aceito_em            timestamptz,
   encerrado_por        uuid references auth.users (id) on delete set null,
@@ -70,34 +60,12 @@ create unique index convites_equipe_pendente_uidx
   on public.convites_equipe (academia_id, email) where status = 'pendente';
 create index convites_equipe_email_idx
   on public.convites_equipe (email) where status = 'pendente';
-create index convites_equipe_email_envio_idx
-  on public.convites_equipe (email, envio_real_em);
 create index convites_equipe_academia_envio_idx
   on public.convites_equipe (academia_id, ultimo_envio_em);
 
--- updated_at, sem contar mudanças só nas colunas privadas de envio: a
--- liberação de um envio que falhou não pode aparecer no que a academia lê.
-create or replace function public.convites_equipe_toca_updated_at()
-returns trigger
-language plpgsql
-set search_path = ''
-as $$
-begin
-  if (to_jsonb(new) - 'envio_real_em' - 'envios_reais' - 'envios_reservados' - 'updated_at')
-     is distinct from (to_jsonb(old) - 'envio_real_em' - 'envios_reais' - 'envios_reservados' - 'updated_at') then
-    new.updated_at := now();
-  else
-    new.updated_at := old.updated_at;
-  end if;
-  return new;
-end
-$$;
-
-revoke execute on function public.convites_equipe_toca_updated_at() from public, anon, authenticated;
-
 create trigger convites_equipe_updated_at
   before update on public.convites_equipe
-  for each row execute function public.convites_equipe_toca_updated_at();
+  for each row execute function public.set_updated_at();
 create trigger convites_equipe_academia_imutavel
   before update of academia_id on public.convites_equipe
   for each row execute function public.bloqueia_troca_academia();
@@ -109,13 +77,38 @@ create policy convites_equipe_select on public.convites_equipe
   using (public.tem_papel(academia_id, array['dono', 'admin']));
 
 -- Sem política de escrita, e sem o privilégio também: insert, update e
--- delete direto dão "permission denied", não "zero linhas". A leitura é por
--- coluna: os envios reais ficam de fora.
+-- delete direto dão "permission denied", não "zero linhas".
 revoke all on public.convites_equipe from anon, authenticated;
-grant select (id, academia_id, email, papel, status, convidado_por, expira_em,
-              ultimo_envio_em, envios_recentes, aceito_por, aceito_em,
-              encerrado_por, encerrado_em, created_at, updated_at)
-  on public.convites_equipe to authenticated;
+grant select on public.convites_equipe to authenticated;
+
+-- C10, envios de e-mail que de fato saíram ou estão saindo, no projeto todo.
+-- Não é dado de tenant: é o registro que os limites por endereço usam, e por
+-- isso não tem academia_id nem cascata (excluir uma academia não pode apagar
+-- a cota que ainda vale para as outras). RLS ligado e nenhum privilégio para
+-- anon e authenticated: ninguém lê pela API (revelaria se outra academia
+-- convidou o endereço). Só as funções *_interna mexem aqui.
+--   reservado_em: quando criar_convite_interna liberou o envio. A reserva
+--     sem resultado bloqueia o endereço por 6 minutos (a Edge Function só
+--     despacha até 4 minutos depois dela) e conta no teto de 5 por 24 horas
+--     mais esses 4 minutos.
+--   enviado_em: quando o provedor aceitou (confirmar_envio_convite_interna).
+--     Conta 24 horas daí, e o intervalo de 60 segundos também.
+--   liberado_em: quando o provedor recusou de vez
+--     (liberar_envio_convite_interna). Não conta mais.
+create table public.convites_envios (
+  id           uuid primary key default gen_random_uuid(),
+  email        text not null check (email = lower(btrim(email))),
+  convite_id   uuid references public.convites_equipe (id) on delete set null,
+  reservado_em timestamptz not null,
+  enviado_em   timestamptz,
+  liberado_em  timestamptz,
+  check (enviado_em is null or liberado_em is null)
+);
+
+create index convites_envios_email_idx on public.convites_envios (email, reservado_em);
+
+alter table public.convites_envios enable row level security;
+revoke all on public.convites_envios from anon, authenticated;
 
 -- =====================================================================
 -- 2. AUXILIARES (nenhuma é chamável pela API)
@@ -227,6 +220,7 @@ declare
   v_conta_id  uuid;
   v_agora     timestamptz;
   v_enviar    boolean;
+  v_envio_id  uuid;
 begin
   -- 1. Entrada.
   if v_email !~ '^[^@[:space:]]+@[^@[:space:]]+\.[^@[:space:]]+$'
@@ -332,29 +326,30 @@ begin
       using hint = 'limite_convites';
   end if;
 
-  -- 6b. Contando os envios reais de todas as academias: se o limite estoura,
-  --     o convite e a tentativa são gravados como num envio, mas o e-mail
-  --     não sai (enviar = false). O que a academia vê (resposta, colunas que
-  --     lê, próximos limites) é igual nos dois casos: um erro ou uma
-  --     diferença aqui revelaria que outra academia convidou o endereço.
+  -- 6b. Contando os envios reais de todas as academias (convites_envios): se
+  --     o limite estoura, o convite e a tentativa são gravados como num
+  --     envio, mas o e-mail não sai (enviar = false). O que a academia vê
+  --     (resposta, colunas que lê, próximos limites) é igual nos dois casos:
+  --     um erro ou uma diferença aqui revelaria que outra academia convidou o
+  --     endereço.
   v_enviar := not (
     exists (
-      select 1 from public.convites_equipe c
-      where c.email = v_email
-        and (c.envio_real_em > v_agora - interval '60 seconds'
-             or exists (select 1 from unnest(c.envios_reservados) as r
-                        where r > v_agora - interval '6 minutes'))
+      select 1 from public.convites_envios v
+      where v.email = v_email
+        and v.liberado_em is null
+        and (v.enviado_em > v_agora - interval '60 seconds'
+             or (v.enviado_em is null and v.reservado_em > v_agora - interval '6 minutes'))
     )
     -- Envio confirmado conta 24 horas do horário real. Reserva sem resultado
     -- conta 24 horas mais o prazo de despacho (4 minutos): o e-mail pode ter
     -- saído até 4 minutos depois dela.
     or (select count(*)
-        from public.convites_equipe c
-        cross join lateral unnest(c.envios_reais) as e(enviado_em)
-        where c.email = v_email
-          and e.enviado_em > v_agora - case when e.enviado_em = any (c.envios_reservados)
-                                            then interval '24 hours 4 minutes'
-                                            else interval '24 hours' end) >= 5
+        from public.convites_envios v
+        where v.email = v_email
+          and v.liberado_em is null
+          and (v.enviado_em > v_agora - interval '24 hours'
+               or (v.enviado_em is null
+                   and v.reservado_em > v_agora - interval '24 hours 4 minutes'))) >= 5
   );
 
   -- 7. Limite da academia (C10): convites criados ou com envio nas últimas
@@ -384,28 +379,26 @@ begin
            envios_recentes = array(
              select e from unnest(c.envios_recentes) as e
              where e > v_agora - interval '24 hours'
-             order by e) || v_agora,
-           envios_reservados = case when v_enviar then array(
-             select r from unnest(c.envios_reservados) as r
-             where r > v_agora - interval '24 hours 4 minutes'
-             order by r) || v_agora
-             else c.envios_reservados end,
-           envios_reais = case when v_enviar then array(
-             select e from unnest(c.envios_reais) as e
-             where e > v_agora - interval '24 hours 4 minutes'
              order by e) || v_agora
-             else c.envios_reais end
      where c.id = v_pendente.id;
     v_id := v_pendente.id;
   else
     -- 8b. Convite novo.
     insert into public.convites_equipe (academia_id, email, papel, convidado_por, expira_em,
-                                        ultimo_envio_em, envios_recentes, envios_reservados, envios_reais)
+                                        ultimo_envio_em, envios_recentes)
     values (p_academia_id, v_email, p_papel, p_user_id, v_agora + interval '7 days',
-            v_agora, array[v_agora],
-            case when v_enviar then array[v_agora] else '{}'::timestamptz[] end,
-            case when v_enviar then array[v_agora] else '{}'::timestamptz[] end)
+            v_agora, array[v_agora])
     returning id into v_id;
+  end if;
+
+  -- 9. Reserva do envio real, se vai sair. Registros velhos do endereço
+  --    (fora de qualquer janela) saem aqui.
+  delete from public.convites_envios v
+   where v.email = v_email and v.reservado_em < v_agora - interval '2 days';
+  if v_enviar then
+    insert into public.convites_envios (email, convite_id, reservado_em)
+    values (v_email, v_id, v_agora)
+    returning id into v_envio_id;
   end if;
 
   -- Estado da conta com esse e-mail, só para a Edge Function escolher o
@@ -426,7 +419,7 @@ begin
     'conta', coalesce(v_conta, 'nenhuma'),
     'user_id', v_conta_id,
     'enviar', v_enviar,
-    'enviado_em', case when v_enviar then v_agora end
+    'envio_id', v_envio_id
   );
 end
 $$;
@@ -435,84 +428,77 @@ revoke execute on function public.criar_convite_interna(uuid, uuid, text, text) 
 grant execute on function public.criar_convite_interna(uuid, uuid, text, text) to service_role;
 
 -- Contrato com a Edge Function para cada envio liberado (enviar = true), com
--- o enviado_em devolvido por criar_convite_interna (é a reserva):
+-- o envio_id devolvido por criar_convite_interna (a reserva):
 --   * provedor aceitou: confirmar_envio_convite_interna. O envio passa a
 --     contar do horário da confirmação (o intervalo de 60 segundos conta do
 --     envio de verdade, não da reserva);
 --   * provedor recusou de vez: liberar_envio_convite_interna. O envio sai da
 --     cota do projeto todo, para a falha não suprimir convites de outras
---     academias. A tentativa continua registrada (é o que a academia vê).
--- As duas valem para qualquer reserva ainda aberta do convite (mesmo depois
--- de um reenvio ter feito outra) e são idempotentes. A Edge Function só
--- despacha até 4 minutos depois da reserva; passado isso, libera. Como cada
--- reserva bloqueia o endereço por 6 minutos, o envio aceito fica a mais de
--- 60 s do próximo, não importa quando a confirmação chegue. Reserva
--- abandonada (a função caiu antes de saber) bloqueia por 6 minutos e conta
--- na janela de 24 horas: lado seguro contra spam.
-create or replace function public.confirmar_envio_convite_interna(p_convite_id uuid, p_enviado_em timestamptz)
+--     academias. A tentativa continua registrada no convite (é o que a
+--     academia vê).
+-- As duas valem para qualquer reserva ainda sem resultado (cada uma tem o
+-- próprio id, mesmo depois de um reenvio) e são idempotentes. A Edge
+-- Function só despacha até 4 minutos depois da reserva; passado isso,
+-- libera. Como cada reserva bloqueia o endereço por 6 minutos, o envio
+-- aceito fica a mais de 60 s do próximo, não importa quando a confirmação
+-- chegue. Reserva abandonada (a função caiu antes de saber) bloqueia por 6
+-- minutos e conta no teto de 5 por 24 horas mais o prazo de despacho: lado
+-- seguro contra spam. Só mexem em convites_envios: nada do que a academia lê
+-- muda.
+create or replace function public.confirmar_envio_convite_interna(p_envio_id uuid)
 returns void
 language plpgsql
 security definer
 set search_path = ''
 as $$
 declare
-  v_email    text;
-  v_academia uuid;
-  v_agora    timestamptz;
+  v_email text;
 begin
-  select c.email, c.academia_id into v_email, v_academia
-  from public.convites_equipe c where c.id = p_convite_id;
+  select v.email into v_email from public.convites_envios v where v.id = p_envio_id;
   if v_email is null then
     return;
   end if;
 
-  -- Mesma ordem de travas de criar_convite_interna.
-  perform 1 from public.academias a where a.id = v_academia for no key update;
+  -- Mesma trava do endereço de criar_convite_interna.
   perform pg_advisory_xact_lock(hashtextextended('convite_email:' || v_email, 0));
-  v_agora := clock_timestamp();
 
-  update public.convites_equipe c
-     set envios_reais = array_replace(c.envios_reais, p_enviado_em, v_agora),
-         envio_real_em = greatest(c.envio_real_em, v_agora),
-         envios_reservados = array_remove(c.envios_reservados, p_enviado_em)
-   where c.id = p_convite_id
-     and p_enviado_em = any (c.envios_reservados);
+  update public.convites_envios v
+     set enviado_em = clock_timestamp()
+   where v.id = p_envio_id
+     and v.enviado_em is null
+     and v.liberado_em is null;
 end
 $$;
 
-revoke execute on function public.confirmar_envio_convite_interna(uuid, timestamptz) from public, anon, authenticated;
-grant execute on function public.confirmar_envio_convite_interna(uuid, timestamptz) to service_role;
+revoke execute on function public.confirmar_envio_convite_interna(uuid) from public, anon, authenticated;
+grant execute on function public.confirmar_envio_convite_interna(uuid) to service_role;
 
-create or replace function public.liberar_envio_convite_interna(p_convite_id uuid, p_enviado_em timestamptz)
+create or replace function public.liberar_envio_convite_interna(p_envio_id uuid)
 returns void
 language plpgsql
 security definer
 set search_path = ''
 as $$
 declare
-  v_email    text;
-  v_academia uuid;
+  v_email text;
 begin
-  select c.email, c.academia_id into v_email, v_academia
-  from public.convites_equipe c where c.id = p_convite_id;
+  select v.email into v_email from public.convites_envios v where v.id = p_envio_id;
   if v_email is null then
     return;
   end if;
 
-  -- Mesma ordem de travas de criar_convite_interna.
-  perform 1 from public.academias a where a.id = v_academia for no key update;
   perform pg_advisory_xact_lock(hashtextextended('convite_email:' || v_email, 0));
 
-  update public.convites_equipe c
-     set envios_reais = array_remove(c.envios_reais, p_enviado_em),
-         envios_reservados = array_remove(c.envios_reservados, p_enviado_em)
-   where c.id = p_convite_id
-     and p_enviado_em = any (c.envios_reservados);
+  update public.convites_envios v
+     set liberado_em = clock_timestamp()
+   where v.id = p_envio_id
+     and v.enviado_em is null
+     and v.liberado_em is null;
 end
 $$;
 
-revoke execute on function public.liberar_envio_convite_interna(uuid, timestamptz) from public, anon, authenticated;
-grant execute on function public.liberar_envio_convite_interna(uuid, timestamptz) to service_role;
+revoke execute on function public.liberar_envio_convite_interna(uuid) from public, anon, authenticated;
+grant execute on function public.liberar_envio_convite_interna(uuid) to service_role;
 
 -- =====================================================================
 -- 4. CANCELAR (dono, admin)
