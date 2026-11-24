@@ -220,6 +220,11 @@ language sql security definer set search_path = '' as $$
                    from public.membros_academia where academia_id = p_acad::uuid and user_id = p_user::uuid), '-')
 $$;
 grant execute on function public.__conv(text, text), public.__membro(text, text) to authenticated, service_role;
+create function public.__sessoes(p_user uuid) returns text
+language sql security definer set search_path = '' as $$
+  select string_agg(s.id::text, ',' order by s.id) from auth.sessions s where s.user_id = p_user
+$$;
+grant execute on function public.__sessoes(uuid) to authenticated;
 
 -- ---------------------------------------------------------------------
 -- Estrutura e permissões
@@ -577,7 +582,7 @@ select public.__como_token('e7c00000-0000-4000-8000-0000000000d1', floor(extract
                             'e7c00000-0000-4000-8000-0000000005a1');
 select is(public.aceitar_convite((public.__conv('e7c00000-0000-4000-8000-00000000000a', 'conf@conv.test')).id),
   'e7c00000-0000-4000-8000-00000000000a'::uuid, 'aceite devolve a academia');
-select is((select string_agg(id::text, ',') from auth.sessions where user_id = 'e7c00000-0000-4000-8000-0000000000d1'),
+select is(public.__sessoes('e7c00000-0000-4000-8000-0000000000d1'),
   'e7c00000-0000-4000-8000-0000000005a1', 'o aceite apaga as outras sessões da conta e mantém a atual');
 select is(public.__hint_de($$select * from public.equipe_da_academia('e7c00000-0000-4000-8000-00000000000a')$$),
   'sem_permissao', 'token emitido antes do aceite não usa o vínculo novo');
