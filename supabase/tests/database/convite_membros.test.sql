@@ -4,7 +4,7 @@
 -- Academias A e B (ativas) e S (suspensa).
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(85);
+select plan(87);
 
 -- ---------------------------------------------------------------------
 -- Auxiliares
@@ -262,6 +262,8 @@ set local role service_role;
 select public.__como_servico();
 select is(public.__hint_de($$select public.__cc('e7c00000-0000-4000-8000-0000000000a1', 'e7c00000-0000-4000-8000-00000000000a', 'ciclo@conv.test', 'professor')$$),
   'convite_reenvio_cedo', 'C10: cancelar e recriar logo em seguida esbarra nos 60 segundos');
+select is(public.__hint_de($$select public.__cc('e7c00000-0000-4000-8000-0000000000f1', 'e7c00000-0000-4000-8000-00000000000d', 'ciclo@conv.test', 'professor')$$),
+  'convite_reenvio_cedo', 'C10: os 60 segundos valem entre academias');
 reset role;
 -- O primeiro envio está quase saindo da janela e os outros quatro são de
 -- agora: a janela é móvel, e o sexto continua recusado.
@@ -274,6 +276,8 @@ set local role service_role;
 select public.__como_servico();
 select is(public.__hint_de($$select public.__cc('e7c00000-0000-4000-8000-0000000000a1', 'e7c00000-0000-4000-8000-00000000000a', 'ciclo@conv.test', 'professor')$$),
   'limite_convites', 'C10: o 6º e-mail para o mesmo endereço em 24 horas é recusado');
+select is(public.__hint_de($$select public.__cc('e7c00000-0000-4000-8000-0000000000f1', 'e7c00000-0000-4000-8000-00000000000d', 'ciclo@conv.test', 'professor')$$),
+  'limite_convites', 'C10: o teto de 5 por endereço vale entre academias');
 reset role;
 update public.convites_equipe
    set ultimo_envio_em = now() - interval '3 minutes',

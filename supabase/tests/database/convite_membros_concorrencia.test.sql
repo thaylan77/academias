@@ -14,6 +14,8 @@
 --   I. a conta de um admin está sendo apagada logicamente; o dono o promove
 --      a dono (espera a exclusão, que desativa o vínculo) e tenta sair: a
 --      saída é recusada.
+--   J. duas academias convidam o mesmo e-mail ao mesmo tempo: a segunda
+--      espera a trava do e-mail e esbarra nos 60 segundos.
 -- A espera é provada pelo pid: s2 está bloqueada e s1 está entre os que a
 -- bloqueiam. As fixtures são gravadas e confirmadas por uma conexão própria,
 -- apagadas antes (se uma execução anterior parou no meio) e depois, pela
@@ -21,7 +23,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 create extension if not exists dblink with schema extensions;
-select plan(46);
+select plan(51);
 
 create function pg_temp.conexao(p_nome text) returns text language sql as $$
   select format('host=%s port=%s dbname=%s user=postgres password=postgres application_name=%s',
@@ -341,6 +343,25 @@ select matches(pg_temp.resultado_s2(), 'HINT: +ultimo_dono', 'I: com o promovido
 select is((select count(*) from public.membros_academia m join auth.users u on u.id = m.user_id
            where m.academia_id = 'e7d00000-0000-4000-8000-00000000000c' and m.papel = 'dono' and m.ativo and u.deleted_at is null),
   1::bigint, 'I: sobrou um dono ativo com conta');
+
+-- ---------------------------------------------------------------------
+-- J. s1 (dono a2, em K) e s2 (dono b2, em L), como a Edge Function, convidam
+--    o mesmo e-mail; s1 não confirma.
+-- ---------------------------------------------------------------------
+select pg_temp.como('s1', 'service_role');
+select pg_temp.como('s2', 'service_role');
+select ok(pg_temp.ninguem_esperando(), 'J: antes do envio, s2 não espera ninguém');
+select extensions.dblink_exec('s1', 'begin');
+select extensions.dblink_exec('s1', $q$do $d$ begin perform public.criar_convite_interna(
+    'e7d00000-0000-4000-8000-0000000000a2', 'e7d00000-0000-4000-8000-00000000000a', 'disputa@concorre.test', 'professor'); end $d$$q$);
+select is(extensions.dblink_send_query('s2', $$select public.criar_convite_interna(
+    'e7d00000-0000-4000-8000-0000000000b2', 'e7d00000-0000-4000-8000-00000000000b', 'disputa@concorre.test', 'professor')::text$$),
+  1, 'J: s2 envia o convite pela outra academia');
+select ok(pg_temp.s2_espera_s1(), 'J: o segundo convite espera a trava do e-mail');
+select extensions.dblink_exec('s1', 'commit');
+select matches(pg_temp.resultado_s2(), 'HINT: +convite_reenvio_cedo', 'J: o segundo convite esbarra nos 60 segundos');
+select is((select count(*) from public.convites_equipe where email = 'disputa@concorre.test'),
+  1::bigint, 'J: um convite só para o endereço');
 
 -- ---------------------------------------------------------------------
 -- Limpeza.

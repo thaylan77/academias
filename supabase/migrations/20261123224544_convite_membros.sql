@@ -56,8 +56,8 @@ create unique index convites_equipe_pendente_uidx
   on public.convites_equipe (academia_id, email) where status = 'pendente';
 create index convites_equipe_email_idx
   on public.convites_equipe (email) where status = 'pendente';
-create index convites_equipe_academia_email_envio_idx
-  on public.convites_equipe (academia_id, email, ultimo_envio_em);
+create index convites_equipe_email_envio_idx
+  on public.convites_equipe (email, ultimo_envio_em);
 create index convites_equipe_academia_envio_idx
   on public.convites_equipe (academia_id, ultimo_envio_em);
 
@@ -142,9 +142,11 @@ revoke execute on function public.convite_de_quem_pode(public.convites_equipe) f
 -- 3. CRIAR (Edge Function convidar-membro, com o user_id do JWT)
 -- =====================================================================
 -- Limites de envio (C10):
---   * 60 segundos entre dois e-mails para o mesmo endereço na academia,
---     contando convites cancelados ou recusados (cancelar e recriar não fura);
---   * no máximo 5 e-mails para o mesmo endereço na academia em 24 horas;
+--   * 60 segundos entre dois e-mails para o mesmo endereço, em qualquer
+--     academia, contando convites cancelados ou recusados (cancelar e
+--     recriar, ou convidar por outra academia, não fura);
+--   * no máximo 5 e-mails para o mesmo endereço em 24 horas, em qualquer
+--     academia;
 --   * no máximo 30 convites com envio nas últimas 24 horas por academia
 --     (convite novo ou reenvio de um que não teve envio nesse período).
 
@@ -235,11 +237,14 @@ begin
       using hint = 'sem_permissao';
   end if;
 
-  -- 6. Limites por endereço (C10), contando todos os convites do e-mail.
+  -- 6. Limites por endereço (C10), no projeto todo: todos os convites do
+  --    e-mail, em qualquer academia. A trava pelo e-mail (depois da trava da
+  --    academia, sempre nessa ordem) serializa convites de academias
+  --    diferentes para o mesmo endereço.
+  perform pg_advisory_xact_lock(hashtextextended('convite_email:' || v_email, 0));
   if exists (
     select 1 from public.convites_equipe c
-    where c.academia_id = p_academia_id
-      and c.email = v_email
+    where c.email = v_email
       and c.ultimo_envio_em > now() - interval '60 seconds'
   ) then
     raise exception 'O convite acabou de ser enviado. Espere um minuto para reenviar.'
@@ -248,13 +253,11 @@ begin
   if (select count(*)
       from public.convites_equipe c
       cross join lateral unnest(c.envios_recentes) as e(enviado_em)
-      where c.academia_id = p_academia_id
-        and c.email = v_email
+      where c.email = v_email
         and e.enviado_em > now() - interval '24 hours') >= 5 then
-    raise exception 'Este e-mail já recebeu 5 convites da academia nas últimas 24 horas.'
+    raise exception 'Este e-mail já recebeu 5 convites nas últimas 24 horas. Tente de novo mais tarde.'
       using hint = 'limite_convites';
   end if;
-
 
   -- 7. Limite da academia (C10): convites com envio nas últimas 24 horas,
   --    sem contar o pendente que está sendo reenviado se ele já está nelas.
