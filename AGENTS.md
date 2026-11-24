@@ -53,6 +53,12 @@ supabase test db                    # roda os testes pgTAP no banco local
 - Depois de cada merge que traga migration, na pasta original (`academias`,
   em `main`, já linkada ao projeto): `npx supabase@2.119.0 db push`.
   Precisa de `supabase login` na máquina.
+- A configuração do Auth (`supabase/config.toml`, por exemplo a confirmação
+  de e-mail) não vai com o `db push`: depois do merge que a mudar, rode também
+  `npx supabase@2.119.0 config push` na mesma pasta e confira no painel do
+  Auth do projeto que "Confirm email" está ligado. O convite da equipe e o
+  vínculo do portal do aluno dependem disso. Um cadastro novo de teste só pode
+  ficar confirmado depois de abrir o link.
 - O front de dev aponta para o `honorteam-dev` só com a URL e a chave
   `anon`/publishable. A `service_role` desse projeto não vai para `.env`
   de front nem para o repositório.

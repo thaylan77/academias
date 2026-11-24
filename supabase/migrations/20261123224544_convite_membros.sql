@@ -710,6 +710,7 @@ as $$
   from public.convites_equipe c
   join public.academias a on a.id = c.academia_id
   where c.email = public.convite_email_do_login()
+    and public.sessao_valida(auth.uid(), public.jwt_sessao())  -- sessão revogada não lista
     and c.status = 'pendente'
     and c.expira_em > now()
     and public.convite_de_quem_pode(c)
@@ -794,8 +795,8 @@ begin
     -- Trava a própria conta (uma troca de e-mail no Auth espera o aceite) e
     -- relê e-mail e senha: podem ter mudado enquanto esperava as travas.
     perform 1 from auth.users u where u.id = auth.uid() for share;
-    -- A sessão do token ainda existe (uma sessão revogada não aceita).
-    if p_exige_senha and not public.sessao_valida(auth.uid(), public.jwt_sessao()) then
+    -- A sessão do token ainda existe (uma sessão revogada não aceita nem recusa).
+    if not public.sessao_valida(auth.uid(), public.jwt_sessao()) then
       raise exception 'Abra o link enviado ao seu e-mail para aceitar o convite.'
         using hint = 'convite_exige_link';
     end if;

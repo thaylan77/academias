@@ -4,7 +4,7 @@
 -- Academias A e B (ativas) e S (suspensa).
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(118);
+select plan(120);
 
 -- ---------------------------------------------------------------------
 -- Auxiliares
@@ -589,6 +589,9 @@ select is(public.__hint_de(format('select public.aceitar_convite(%L)', (public._
 select public.__como('e7c00000-0000-4000-8000-0000000000df');
 select is(public.__hint_de(format('select public.aceitar_convite(%L)', (public.__conv('e7c00000-0000-4000-8000-00000000000a', 'semsessao@conv.test')).id)),
   'convite_exige_link', 'token de sessão revogada não aceita');
+select is((select count(*) from public.meus_convites()), 0::bigint, 'token de sessão revogada não lista convites');
+select is(public.__hint_de(format('select public.recusar_convite(%L)', (public.__conv('e7c00000-0000-4000-8000-00000000000a', 'semsessao@conv.test')).id)),
+  'convite_exige_link', 'token de sessão revogada não recusa');
 reset role;
 insert into auth.sessions (id, user_id) values
   ('e7c00000-0000-4000-8000-0000000005a1', 'e7c00000-0000-4000-8000-0000000000d1'),
