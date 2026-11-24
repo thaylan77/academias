@@ -404,8 +404,10 @@ select public.__como('e7c00000-0000-4000-8000-0000000000d7');
 select is(public.__hint_de(format('select public.aceitar_convite(%L)', (public.__conv('e7c00000-0000-4000-8000-00000000000a', 'semquem@conv.test')).id)),
   'convite_invalido', 'convite de conta apagada (convidado_por nulo) não é aceito');
 
--- Exclusão lógica no Auth da conta de quem convidou (o vínculo continua).
+-- Exclusão lógica da conta de quem convidou, pelo SQL do projeto (o Auth é
+-- recusado; ver o bloco do último dono).
 reset role;
+select public.__sem_jwt();
 update auth.users set deleted_at = now() where id = 'e7c00000-0000-4000-8000-0000000000a2';
 set local role authenticated;
 select public.__como('e7c00000-0000-4000-8000-0000000000da');
@@ -518,23 +520,26 @@ select is(public.__hint_de($$update public.membros_academia set papel = 'admin'
                              where academia_id = 'e7c00000-0000-4000-8000-00000000000a' and user_id = 'e7c00000-0000-4000-8000-0000000000a1'$$),
   'ultimo_dono', 'o dono que sobrou não se rebaixa');
 
--- Exclusão lógica no Auth: em D (donos x e y), apagar y passa; depois, x
--- não sai, e apagar x é recusado.
+-- Exclusão lógica: o Auth é recusado; o SQL do projeto (sem JWT) consegue e
+-- desativa os vínculos. Em D (donos x e y), apagar y pelo SQL do projeto
+-- deixa x como único dono com conta, e x não sai.
 reset role;
 select public.__como_auth();
 select is(public.__hint_de($$update auth.users set deleted_at = now() where id = 'e7c00000-0000-4000-8000-0000000000f2'$$),
-  'sem erro', 'Auth apaga logicamente um dono quando sobra outro');
+  'exclusao_logica_bloqueada', 'o Auth não apaga logicamente uma conta');
+select public.__sem_jwt();
+update auth.users set deleted_at = now() where id = 'e7c00000-0000-4000-8000-0000000000f2';
 select is(public.__membro('e7c00000-0000-4000-8000-00000000000d', 'e7c00000-0000-4000-8000-0000000000f2'), 'dono (inativo)',
-  'o vínculo do dono apagado logicamente fica inativo');
+  'pelo SQL do projeto, a exclusão lógica desativa os vínculos da conta');
 set local role authenticated;
 select public.__como('e7c00000-0000-4000-8000-0000000000f1');
 select is(public.__hint_de($$update public.membros_academia set papel = 'admin'
                              where academia_id = 'e7c00000-0000-4000-8000-00000000000d' and user_id = 'e7c00000-0000-4000-8000-0000000000f1'$$),
   'ultimo_dono', 'dono apagado logicamente não conta: o outro não se rebaixa');
 reset role;
-select public.__como_auth();
+select public.__como_servico();
 select is(public.__hint_de($$update auth.users set deleted_at = now() where id = 'e7c00000-0000-4000-8000-0000000000f1'$$),
-  'ultimo_dono', 'Auth não apaga logicamente o último dono com acesso');
+  'exclusao_logica_bloqueada', 'nem uma requisição service_role apaga logicamente uma conta');
 set local role authenticated;
 
 -- service_role e sessão administrativa sem JWT passam.

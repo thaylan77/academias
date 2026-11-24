@@ -301,7 +301,7 @@ select is((select count(*) from public.membros_academia
   0::bigint, 'G: u6 não entrou na equipe');
 
 -- ---------------------------------------------------------------------
--- H. s1 (conexão administrativa, como o Auth) apaga logicamente a conta de
+-- H. s1 (conexão administrativa, SQL do projeto) apaga logicamente a conta de
 --    b5 sem confirmar; u7 aceita em s2 o convite que b5 fez.
 -- ---------------------------------------------------------------------
 select pg_temp.como('s2', 'e7d00000-0000-4000-8000-0000000000d7');
@@ -318,11 +318,12 @@ select is((select count(*) from public.membros_academia
   0::bigint, 'H: u7 não entrou na equipe');
 
 -- ---------------------------------------------------------------------
--- I. s1, como o Auth, apaga logicamente a conta do admin b7 sem confirmar
---    (o gatilho desativa o vínculo dele); o dono b6 promove b7 a dono em s2 e
+-- I. s1, pelo SQL do projeto (sem JWT; o Auth é recusado), apaga
+--    logicamente a conta do admin b7 sem confirmar (o gatilho desativa o
+--    vínculo dele); o dono b6 promove b7 a dono em s2 e
 --    depois tenta sair.
 -- ---------------------------------------------------------------------
-select extensions.dblink_exec('s1', $q$set request.jwt.claim.sub = ''; set request.jwt.claim.role = 'supabase_auth_admin'; set request.jwt.claims = '{"role":"supabase_auth_admin"}'$q$);
+select extensions.dblink_exec('s1', $q$set request.jwt.claim.sub = ''; set request.jwt.claim.role = ''; set request.jwt.claims = ''$q$);
 select pg_temp.como('s2', 'e7d00000-0000-4000-8000-0000000000b6');
 select ok(pg_temp.ninguem_esperando(), 'I: antes do envio, s2 não espera ninguém');
 select extensions.dblink_exec('s1', 'begin');

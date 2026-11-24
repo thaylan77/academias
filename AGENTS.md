@@ -127,10 +127,11 @@ Helpers SQL:
 
 Gatilho `membros_academia_ultimo_dono`: nenhuma alteração pela API deixa a
 academia sem dono ativo (`hint = ultimo_dono`), e a perda de poder de um dono
-ou admin trava a academia, como as funções de convite. Dono com a conta
-apagada logicamente no Auth não conta. O gatilho `auth_users_exclusao_logica`
-recusa apagar logicamente o último dono e, na exclusão lógica, desativa todos
-os vínculos da conta (um JWT antigo deixa de passar pelo RLS).
+ou admin trava a academia, como as funções de convite. Exclusão lógica de conta
+no Auth (`deleted_at`) é proibida: o gatilho `auth_users_exclusao_logica`
+recusa (`exclusao_logica_bloqueada`); conta se apaga de verdade. Só o SQL do
+projeto, sem JWT, consegue, e aí desativa os vínculos da conta. Dono com conta
+apagada logicamente não conta como dono.
 
 **Única exceção** à regra "suspensa lê, mas não altera": `anonimizar_aluno`
 usa `tem_papel` (dono, admin) sem checar a assinatura, porque pedido de
