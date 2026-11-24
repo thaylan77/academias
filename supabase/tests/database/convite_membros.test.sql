@@ -4,7 +4,7 @@
 -- Academias A e B (ativas) e S (suspensa).
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(104);
+select plan(105);
 
 -- ---------------------------------------------------------------------
 -- Auxiliares
@@ -388,12 +388,17 @@ update public.convites_equipe set ultimo_envio_em = now() - interval '25 hours',
 update public.convites_envios set reservado_em = now() - interval '25 hours' where email = 'tardio@conv.test';
 set local role service_role;
 select public.__como_servico();
-select public.__cc('e7c00000-0000-4000-8000-0000000000a1', 'e7c00000-0000-4000-8000-00000000000a', 'tardio@conv.test', 'professor');
+select is(public.__cc('e7c00000-0000-4000-8000-0000000000a1', 'e7c00000-0000-4000-8000-00000000000a', 'tardio@conv.test', 'professor') ->> 'enviar',
+  'false', 'reserva sem resultado de 25 h ainda bloqueia o endereço (até ser resolvida)');
 select public.liberar_envio_convite_interna((select id from public.convites_envios
                                              where email = 'tardio@conv.test' and reservado_em = now() - interval '25 hours'));
-select is((select count(*) filter (where liberado_em is not null) || '/' || count(*) filter (where liberado_em is null and enviado_em is null)
-           from public.convites_envios where email = 'tardio@conv.test'),
-  '1/1', 'recusa tardia da reserva antiga, depois do reenvio: só ela sai da cota');
+reset role;
+update public.convites_equipe set ultimo_envio_em = now() - interval '25 hours', envios_recentes = array[now() - interval '25 hours']
+ where email = 'tardio@conv.test';
+set local role service_role;
+select public.__como_servico();
+select is(public.__cc('e7c00000-0000-4000-8000-0000000000a1', 'e7c00000-0000-4000-8000-00000000000a', 'tardio@conv.test', 'professor') ->> 'enviar',
+  'true', 'depois da recusa tardia da reserva antiga, o endereço volta a receber');
 select public.confirmar_envio_convite_interna((select id from public.convites_envios
                                                where email = 'tardio@conv.test' and liberado_em is null));
 select ok((select count(*) = 1 from public.convites_envios where email = 'tardio@conv.test' and enviado_em is not null),

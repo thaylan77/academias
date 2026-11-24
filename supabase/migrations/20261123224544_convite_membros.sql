@@ -88,10 +88,11 @@ grant select on public.convites_equipe to authenticated;
 -- anon e authenticated: ninguém lê pela API (revelaria se outra academia
 -- convidou o endereço). Só as funções *_interna mexem aqui.
 --   reservado_em: quando criar_convite_interna liberou o envio. Enquanto a
---     Edge Function não confirma nem libera, o resultado é incerto (o
---     provedor pode aceitar a qualquer momento): a reserva bloqueia o
---     intervalo de 60 segundos por 24 horas e conta no teto de 5 por 48
---     horas. É o lado conservador: a função deve resolver logo cada reserva.
+--     Edge Function não confirma nem libera, o resultado é incerto: a
+--     reserva bloqueia o intervalo de 60 segundos e conta no teto de 5 até
+--     ser resolvida. Só o expurgo, depois de 3 dias, tira uma reserva
+--     abandonada; a essa altura nenhuma chamada da Edge Function (limitada
+--     a minutos de execução) ainda pode estar em andamento.
 --   enviado_em: quando o provedor aceitou (confirmar_envio_convite_interna).
 --     Conta 24 horas daí, e o intervalo de 60 segundos também.
 --   liberado_em: quando o provedor recusou de vez
@@ -362,17 +363,16 @@ begin
       where v.email = v_email
         and v.liberado_em is null
         and (v.enviado_em > v_agora - interval '60 seconds'
-             or (v.enviado_em is null and v.reservado_em > v_agora - interval '24 hours'))
+             or v.enviado_em is null)
     )
     -- Envio confirmado conta 24 horas do horário real. Reserva sem resultado
-    -- conta 48 horas: o e-mail pode ter saído a qualquer momento depois dela.
+    -- conta até ser resolvida: o e-mail ainda pode sair.
     or (select count(*)
         from public.convites_envios v
         where v.email = v_email
           and v.liberado_em is null
           and (v.enviado_em > v_agora - interval '24 hours'
-               or (v.enviado_em is null
-                   and v.reservado_em > v_agora - interval '48 hours'))) >= 5
+               or v.enviado_em is null)) >= 5
   );
 
   -- 7. Limite da academia (C10): convites criados ou com envio nas últimas
@@ -460,10 +460,9 @@ grant execute on function public.criar_convite_interna(uuid, uuid, text, text) t
 --     academia vê).
 -- As duas valem para qualquer reserva ainda sem resultado (cada uma tem o
 -- próprio id, mesmo depois de um reenvio) e são idempotentes. Enquanto não
--- há resultado, o provedor pode aceitar a qualquer momento: a reserva
--- bloqueia o intervalo de 60 segundos por 24 horas e conta no teto por 48.
--- Reserva abandonada (a função caiu antes de saber) segura o endereço por
--- esse tempo: lado seguro contra spam. Só mexem em convites_envios: nada do que a academia lê
+-- há resultado, a reserva bloqueia o intervalo de 60 segundos e conta no
+-- teto. Reserva abandonada (a função caiu antes de saber) segura o endereço
+-- até o expurgo de 3 dias: lado seguro contra spam. Só mexem em convites_envios: nada do que a academia lê
 -- muda.
 create or replace function public.confirmar_envio_convite_interna(p_envio_id uuid)
 returns void
@@ -984,8 +983,8 @@ create trigger auth_users_exclusao_logica
 -- 8. EXPURGO DE convites_envios
 -- =====================================================================
 -- O registro global só serve aos limites da C10: um envio confirmado conta
--- 24 horas, e uma reserva sem resultado conta 48 horas. Passado isso (com
--- margem: 3 dias), o registro não tem mais função e sai, para o
+-- 24 horas, e uma reserva sem resultado conta até ser resolvida. Passados 3
+-- dias (nenhuma chamada da Edge Function dura tanto), o registro não tem mais função e sai, para o
 -- endereço não ficar guardado sem motivo, inclusive depois de a academia ser
 -- apagada. Roda todo dia pelo pg_cron, em lotes, e devolve quantos apagou.
 create or replace function public.expurgar_convites_envios(p_lote integer default 5000)
