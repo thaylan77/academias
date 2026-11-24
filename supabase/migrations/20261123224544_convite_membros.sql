@@ -998,6 +998,11 @@ declare
   v_total integer := 0;
   v_lote  integer;
 begin
+  if p_lote is null or p_lote < 1 then
+    raise exception 'O lote do expurgo precisa ser um inteiro positivo.'
+      using hint = 'dados_invalidos';
+  end if;
+
   loop
     -- Os critérios valem também na linha apagada: uma confirmação concorrente
     -- é reavaliada depois do commit dela, e a linha confirmada fica.

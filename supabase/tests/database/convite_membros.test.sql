@@ -4,7 +4,7 @@
 -- Academias A e B (ativas) e S (suspensa).
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(103);
+select plan(104);
 
 -- ---------------------------------------------------------------------
 -- Auxiliares
@@ -701,6 +701,9 @@ insert into public.convites_envios (email, reservado_em, enviado_em) values
 select public.expurgar_convites_envios(1);
 select is((select count(*) from public.convites_envios where email = 'velho@conv.test'), 0::bigint,
   'expurgo apaga o registro antigo de um endereço sem novo convite (em lotes)');
+select is(public.__hint_de('select public.expurgar_convites_envios(0)') || '/'
+          || public.__hint_de('select public.expurgar_convites_envios(null)'),
+  'dados_invalidos/dados_invalidos', 'expurgo recusa lote zero ou nulo, antes de apagar');
 select is((select count(*) from public.convites_envios where email = 'apagada@conv.test'), 5::bigint,
   'expurgo mantém a cota vigente, inclusive da academia apagada');
 
