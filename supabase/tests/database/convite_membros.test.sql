@@ -4,7 +4,7 @@
 -- Academias A e B (ativas) e S (suspensa).
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(102);
+select plan(103);
 
 -- ---------------------------------------------------------------------
 -- Auxiliares
@@ -398,6 +398,18 @@ select public.confirmar_envio_convite_interna((select id from public.convites_en
                                                where email = 'tardio@conv.test' and liberado_em is null));
 select ok((select count(*) = 1 from public.convites_envios where email = 'tardio@conv.test' and enviado_em is not null),
   'a reserva nova é confirmada pela própria identidade');
+
+-- Reserva antiga (3 dias) confirmada agora: um novo convite para o endereço
+-- não apaga o registro, que ainda conta na cota global.
+reset role;
+insert into public.convites_envios (email, reservado_em) values ('antiga@conv.test', now() - interval '3 days');
+set local role service_role;
+select public.__como_servico();
+select public.confirmar_envio_convite_interna((select id from public.convites_envios where email = 'antiga@conv.test'));
+select public.__cc('e7c00000-0000-4000-8000-0000000000a1', 'e7c00000-0000-4000-8000-00000000000a', 'antiga@conv.test', 'professor');
+select is((select count(*) from public.convites_envios
+           where email = 'antiga@conv.test' and reservado_em = now() - interval '3 days' and enviado_em > now()),
+  1::bigint, 'criar um convite não apaga a confirmação recente de uma reserva antiga');
 
 -- O reenvio do mesmo pendente registra cada envio na janela.
 select public.__cc('e7c00000-0000-4000-8000-0000000000a1', 'e7c00000-0000-4000-8000-00000000000a', 'reenvio@conv.test', 'professor');

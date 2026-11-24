@@ -391,10 +391,9 @@ begin
     returning id into v_id;
   end if;
 
-  -- 9. Reserva do envio real, se vai sair. Registros velhos do endereço
-  --    (fora de qualquer janela) saem aqui.
-  delete from public.convites_envios v
-   where v.email = v_email and v.reservado_em < v_agora - interval '2 days';
+  -- 9. Reserva do envio real, se vai sair. A retenção do registro é só do
+  --    expurgo diário (expurgar_convites_envios), que olha a reserva e a
+  --    confirmação.
   if v_enviar then
     insert into public.convites_envios (email, convite_id, reservado_em)
     values (v_email, v_id, v_agora)
