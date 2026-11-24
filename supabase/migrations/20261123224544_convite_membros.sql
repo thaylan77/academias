@@ -39,11 +39,12 @@ create table public.convites_equipe (
   -- authenticated não lê (revelariam se outra academia convidou o endereço).
   -- envio_real_em: o último envio confirmado pelo provedor. envios_reais:
   -- confirmados e a reserva em andamento (contam na janela de 24 horas).
-  -- envio_reservado_em: a reserva que a Edge Function ainda não confirmou nem
-  -- liberou; bloqueia o endereço por até 5 minutos.
+  -- envios_reservados: as reservas que a Edge Function ainda não confirmou
+  -- nem liberou, cada uma com o próprio horário; cada uma bloqueia o endereço
+  -- por até 5 minutos.
   envio_real_em        timestamptz,
   envios_reais         timestamptz[] not null default '{}',
-  envio_reservado_em   timestamptz,
+  envios_reservados    timestamptz[] not null default '{}',
   aceito_por           uuid references auth.users (id) on delete set null,
   aceito_em            timestamptz,
   encerrado_por        uuid references auth.users (id) on delete set null,
@@ -79,8 +80,8 @@ language plpgsql
 set search_path = ''
 as $$
 begin
-  if (to_jsonb(new) - 'envio_real_em' - 'envios_reais' - 'envio_reservado_em' - 'updated_at')
-     is distinct from (to_jsonb(old) - 'envio_real_em' - 'envios_reais' - 'envio_reservado_em' - 'updated_at') then
+  if (to_jsonb(new) - 'envio_real_em' - 'envios_reais' - 'envios_reservados' - 'updated_at')
+     is distinct from (to_jsonb(old) - 'envio_real_em' - 'envios_reais' - 'envios_reservados' - 'updated_at') then
     new.updated_at := now();
   else
     new.updated_at := old.updated_at;
@@ -313,7 +314,8 @@ begin
       select 1 from public.convites_equipe c
       where c.email = v_email
         and (c.envio_real_em > v_agora - interval '60 seconds'
-             or c.envio_reservado_em > v_agora - interval '5 minutes')
+             or exists (select 1 from unnest(c.envios_reservados) as r
+                        where r > v_agora - interval '5 minutes'))
     )
     or (select count(*)
         from public.convites_equipe c
@@ -350,7 +352,11 @@ begin
              select e from unnest(c.envios_recentes) as e
              where e > v_agora - interval '24 hours'
              order by e) || v_agora,
-           envio_reservado_em = case when v_enviar then v_agora else c.envio_reservado_em end,
+           envios_reservados = case when v_enviar then array(
+             select r from unnest(c.envios_reservados) as r
+             where r > v_agora - interval '24 hours'
+             order by r) || v_agora
+             else c.envios_reservados end,
            envios_reais = case when v_enviar then array(
              select e from unnest(c.envios_reais) as e
              where e > v_agora - interval '24 hours'
@@ -361,10 +367,10 @@ begin
   else
     -- 8b. Convite novo.
     insert into public.convites_equipe (academia_id, email, papel, convidado_por, expira_em,
-                                        ultimo_envio_em, envios_recentes, envio_reservado_em, envios_reais)
+                                        ultimo_envio_em, envios_recentes, envios_reservados, envios_reais)
     values (p_academia_id, v_email, p_papel, p_user_id, v_agora + interval '7 days',
             v_agora, array[v_agora],
-            case when v_enviar then v_agora end,
+            case when v_enviar then array[v_agora] else '{}'::timestamptz[] end,
             case when v_enviar then array[v_agora] else '{}'::timestamptz[] end)
     returning id into v_id;
   end if;
@@ -403,7 +409,8 @@ grant execute on function public.criar_convite_interna(uuid, uuid, text, text) t
 --   * provedor recusou de vez: liberar_envio_convite_interna. O envio sai da
 --     cota do projeto todo, para a falha não suprimir convites de outras
 --     academias. A tentativa continua registrada (é o que a academia vê).
--- As duas são idempotentes. Reserva abandonada (a função caiu antes de
+-- As duas valem para qualquer reserva ainda aberta do convite (mesmo depois
+-- de um reenvio ter feito outra) e são idempotentes. Reserva abandonada (a função caiu antes de
 -- saber) bloqueia o endereço por 5 minutos e conta na janela de 24 horas:
 -- lado seguro contra spam.
 create or replace function public.confirmar_envio_convite_interna(p_convite_id uuid, p_enviado_em timestamptz)
@@ -430,10 +437,10 @@ begin
 
   update public.convites_equipe c
      set envios_reais = array_replace(c.envios_reais, p_enviado_em, v_agora),
-         envio_real_em = v_agora,
-         envio_reservado_em = null
+         envio_real_em = greatest(c.envio_real_em, v_agora),
+         envios_reservados = array_remove(c.envios_reservados, p_enviado_em)
    where c.id = p_convite_id
-     and c.envio_reservado_em = p_enviado_em;
+     and p_enviado_em = any (c.envios_reservados);
 end
 $$;
 
@@ -462,9 +469,9 @@ begin
 
   update public.convites_equipe c
      set envios_reais = array_remove(c.envios_reais, p_enviado_em),
-         envio_reservado_em = null
+         envios_reservados = array_remove(c.envios_reservados, p_enviado_em)
    where c.id = p_convite_id
-     and c.envio_reservado_em = p_enviado_em;
+     and p_enviado_em = any (c.envios_reservados);
 end
 $$;
 
@@ -658,39 +665,47 @@ begin
       using hint = 'academia_suspensa';
   end if;
 
-  select m.* into v_membro
-  from public.membros_academia m
-  where m.academia_id = v_conv.academia_id and m.user_id = auth.uid()
-  for update;
+  -- 7 a 9. O vínculo pode aparecer no meio do caminho (o portal grava o papel
+  -- aluno sem a trava da academia): se o insert esbarrar nele, relê, trava e
+  -- aplica as mesmas regras.
+  loop
+    select m.* into v_membro
+    from public.membros_academia m
+    where m.academia_id = v_conv.academia_id and m.user_id = auth.uid()
+    for update;
 
-  -- A linha do membro pode ter ficado travada por outra transação: o convite
-  -- pode ter vencido nessa espera.
-  if v_conv.expira_em <= clock_timestamp() then
-    raise exception 'Convite não encontrado, vencido ou já respondido.'
-      using hint = 'convite_invalido';
-  end if;
-
-  if v_membro.user_id is not null then
-    -- 7. Já está na academia como equipe (inclusive reativado depois do
-    --    convite) ou como totem.
-    if v_membro.papel = 'totem' or (v_membro.ativo and v_membro.papel <> 'aluno') then
-      raise exception 'Você já faz parte desta academia.'
-        using hint = 'ja_membro';
-    end if;
-    -- 8. Dono inativo só volta com outro papel por convite de um dono.
-    if v_membro.papel = 'dono' and v_conv.papel <> 'dono' and v_papel_quem <> 'dono' then
+    -- A linha do membro pode ter ficado travada por outra transação: o
+    -- convite pode ter vencido nessa espera.
+    if v_conv.expira_em <= clock_timestamp() then
       raise exception 'Convite não encontrado, vencido ou já respondido.'
         using hint = 'convite_invalido';
     end if;
-    -- 9a. Reativação, ou troca do papel aluno pelo da equipe.
-    update public.membros_academia m
-       set papel = v_conv.papel, ativo = true
-     where m.academia_id = v_conv.academia_id and m.user_id = auth.uid();
-  else
-    -- 9b. Membro novo.
+
+    if v_membro.user_id is not null then
+      -- 7. Já está na academia como equipe (inclusive reativado depois do
+      --    convite) ou como totem.
+      if v_membro.papel = 'totem' or (v_membro.ativo and v_membro.papel <> 'aluno') then
+        raise exception 'Você já faz parte desta academia.'
+          using hint = 'ja_membro';
+      end if;
+      -- 8. Dono inativo só volta com outro papel por convite de um dono.
+      if v_membro.papel = 'dono' and v_conv.papel <> 'dono' and v_papel_quem <> 'dono' then
+        raise exception 'Convite não encontrado, vencido ou já respondido.'
+          using hint = 'convite_invalido';
+      end if;
+      -- 9a. Reativação, ou troca do papel aluno pelo da equipe.
+      update public.membros_academia m
+         set papel = v_conv.papel, ativo = true
+       where m.academia_id = v_conv.academia_id and m.user_id = auth.uid();
+      exit;
+    end if;
+
+    -- 9b. Membro novo. Se o vínculo apareceu agora, volta ao começo.
     insert into public.membros_academia (academia_id, user_id, papel)
-    values (v_conv.academia_id, auth.uid(), v_conv.papel);
-  end if;
+    values (v_conv.academia_id, auth.uid(), v_conv.papel)
+    on conflict (academia_id, user_id) do nothing;
+    exit when found;
+  end loop;
 
   update public.convites_equipe c
      set status = 'aceito', aceito_por = auth.uid(), aceito_em = now()
