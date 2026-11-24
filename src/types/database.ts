@@ -629,7 +629,7 @@ isOneToOne: false
 { Args: { "p_academia_id": string,"p_user_id": string }; Returns: string
                            },
 "convite_papel_ativo_iat":
-{ Args: { "p_academia_id": string,"p_iat": number,"p_user_id": string }; Returns: string
+{ Args: { "p_academia_id": string,"p_iat": number,"p_sessao": string,"p_user_id": string }; Returns: string
                            },
 "convite_papel_ativo_sessao":
 { Args: { "p_academia_id": string }; Returns: string
@@ -638,7 +638,7 @@ isOneToOne: false
 { Args: { "p_nome": string,"p_slug": string }; Returns: string
                            },
 "criar_convite_interna":
-{ Args: { "p_academia_id": string,"p_email": string,"p_iat"?: number,"p_papel": string,"p_user_id": string }; Returns: Json
+{ Args: { "p_academia_id": string,"p_email": string,"p_iat"?: number,"p_papel": string,"p_sessao"?: string,"p_user_id": string }; Returns: Json
                            },
 "criar_matricula":
 { Args: { "p_academia_id": string,"p_dados": Json }; Returns: string
@@ -684,6 +684,9 @@ isOneToOne: false
 "jwt_iat":
 { Args: Record<PropertyKey, never>; Returns: number
                            },
+"jwt_sessao":
+{ Args: Record<PropertyKey, never>; Returns: string
+                           },
 "liberar_emissao_interna":
 { Args: { "p_cobranca_id": string,"p_recusa": string,"p_tentativa": string }; Returns: undefined
                            },
@@ -724,6 +727,9 @@ isOneToOne: false
                            },
 "salvar_turma":
 { Args: { "p_academia_id": string,"p_dados": Json,"p_turma_id"?: string }; Returns: string
+                           },
+"sessao_valida":
+{ Args: { "p_sessao": string,"p_user_id": string }; Returns: boolean
                            },
 "sou_o_aluno":
 { Args: { "p_aluno_id": string }; Returns: boolean
