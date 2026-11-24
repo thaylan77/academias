@@ -805,6 +805,17 @@ begin
       raise exception 'Confirme o seu e-mail antes de responder ao convite.'
         using hint = 'email_nao_confirmado';
     end if;
+    -- A prova da senha nova de novo, com a conta travada: pode ter mudado
+    -- enquanto o aceite esperava.
+    if p_exige_senha and not exists (
+      select 1 from auth.users u
+      where u.id = auth.uid()
+        and (u.raw_app_meta_data ->> 'senha_redefinida_em')::bigint >= v_link_em
+        and u.raw_app_meta_data ->> 'senha_redefinida_sessao' = public.jwt_sessao()::text
+    ) then
+      raise exception 'Defina uma senha nova antes de aceitar o convite.'
+        using hint = 'senha_pendente';
+    end if;
     if p_exige_senha and exists (
       select 1 from auth.users u
       where u.id = auth.uid()

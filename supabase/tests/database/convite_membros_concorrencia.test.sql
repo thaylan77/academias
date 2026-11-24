@@ -32,6 +32,8 @@
 --   U. um dono promove um professor a dono pela API, a promoção espera a
 --      linha do professor e, nesse meio, o autor é revogado: a promoção é
 --      recusada.
+--   V. a prova da senha nova muda enquanto o aceite espera a trava: o aceite
+--      é recusado (senha_pendente), sem vínculo.
 -- A espera é provada pelo pid: s2 está bloqueada e s1 está entre os que a
 -- bloqueiam. As fixtures são gravadas e confirmadas por uma conexão própria,
 -- apagadas antes (se uma execução anterior parou no meio) e depois, pela
@@ -39,7 +41,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 create extension if not exists dblink with schema extensions;
-select plan(81);
+select plan(85);
 
 create function pg_temp.conexao(p_nome text) returns text language sql as $$
   select format('host=%s port=%s dbname=%s user=postgres password=postgres application_name=%s',
@@ -131,7 +133,7 @@ begin
       'e7d00000-0000-4000-8000-0000000000da', 'e7d00000-0000-4000-8000-0000000000b8',
       'e7d00000-0000-4000-8000-0000000000b9', 'e7d00000-0000-4000-8000-0000000000db',
       'e7d00000-0000-4000-8000-0000000000bc', 'e7d00000-0000-4000-8000-0000000000bd',
-      'e7d00000-0000-4000-8000-0000000000dd',
+      'e7d00000-0000-4000-8000-0000000000dd', 'e7d00000-0000-4000-8000-0000000000de',
       'e7d00000-0000-4000-8000-0000000000d1', 'e7d00000-0000-4000-8000-0000000000d2');
   $f$);
 end
@@ -172,7 +174,8 @@ select extensions.dblink_exec('prep', $f$
     ('e7d00000-0000-4000-8000-0000000000db', 'u11@concorre.test',   now()),
     ('e7d00000-0000-4000-8000-0000000000bc', 'dono12@concorre.test', now()),
     ('e7d00000-0000-4000-8000-0000000000bd', 'dono13@concorre.test', now()),
-    ('e7d00000-0000-4000-8000-0000000000dd', 'u12@concorre.test',   now());
+    ('e7d00000-0000-4000-8000-0000000000dd', 'u12@concorre.test',   now()),
+    ('e7d00000-0000-4000-8000-0000000000de', 'u13@concorre.test',   now());
   -- Senha nova já definida (concluir-senha), como pede o aceite.
   -- Cada usuário com uma sessão (id = o próprio id do usuário, como o
   -- session_id que pg_temp.como põe no JWT) e a senha nova definida nela.
@@ -234,7 +237,9 @@ select extensions.dblink_exec('prep', $f$
     ('e7d00000-0000-4000-8000-0000000002cd', 'e7d00000-0000-4000-8000-00000000000b', 'u10@concorre.test', 'recepcao',
      'e7d00000-0000-4000-8000-0000000000b2', now() + interval '7 days'),
     ('e7d00000-0000-4000-8000-0000000002ce', 'e7d00000-0000-4000-8000-00000000000d', 'u11@concorre.test', 'professor',
-     'e7d00000-0000-4000-8000-0000000000b9', now() + interval '7 days');
+     'e7d00000-0000-4000-8000-0000000000b9', now() + interval '7 days'),
+    ('e7d00000-0000-4000-8000-0000000002cf', 'e7d00000-0000-4000-8000-00000000000e', 'u13@concorre.test', 'professor',
+     'e7d00000-0000-4000-8000-0000000000bd', now() + interval '7 days');
 $f$);
 
 -- ---------------------------------------------------------------------
@@ -614,6 +619,25 @@ select matches(pg_temp.resultado_s2(), 'HINT: +sem_permissao', 'U: o autor foi r
 select is((select papel from public.membros_academia
            where academia_id = 'e7d00000-0000-4000-8000-00000000000e' and user_id = 'e7d00000-0000-4000-8000-0000000000dd'),
   'professor', 'U: o professor não virou dono');
+
+-- ---------------------------------------------------------------------
+-- V. s1 (administrativa) segura a academia O; u13 aceita em s2 e espera;
+--    prep troca a prova de senha de u13 para outra sessão; s1 confirma.
+-- ---------------------------------------------------------------------
+select pg_temp.como('s2', 'e7d00000-0000-4000-8000-0000000000de');
+select extensions.dblink_exec('s1', 'begin');
+select extensions.dblink_exec('s1', $$update public.academias set updated_at = updated_at where id = 'e7d00000-0000-4000-8000-00000000000e'$$);
+select is(extensions.dblink_send_query('s2', $$select public.aceitar_convite('e7d00000-0000-4000-8000-0000000002cf')$$),
+  1, 'V: s2 envia o aceite');
+select ok(pg_temp.s2_espera_s1(), 'V: o aceite espera a trava da academia');
+select extensions.dblink_exec('prep', $$update auth.users
+  set raw_app_meta_data = raw_app_meta_data || '{"senha_redefinida_sessao": "e7d00000-0000-4000-8000-0000000005ff"}'
+  where id = 'e7d00000-0000-4000-8000-0000000000de'$$);
+select extensions.dblink_exec('s1', 'commit');
+select matches(pg_temp.resultado_s2(), 'HINT: +senha_pendente', 'V: com a prova trocada no meio, o aceite é recusado');
+select is((select count(*) from public.membros_academia
+           where academia_id = 'e7d00000-0000-4000-8000-00000000000e' and user_id = 'e7d00000-0000-4000-8000-0000000000de'),
+  0::bigint, 'V: u13 não entrou na equipe');
 
 -- ---------------------------------------------------------------------
 -- Limpeza.
