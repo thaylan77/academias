@@ -1071,14 +1071,14 @@ begin
   -- trava academia alheia).
   if public.convite_papel_ativo(auth.uid(), p_academia_id) is null then
     raise exception 'Você não tem mais permissão para alterar esta equipe.'
-      using hint = 'sem_permissao';
+      using errcode = '42501', hint = 'sem_permissao';
   end if;
   perform 1 from public.academias a where a.id = p_academia_id for no key update;
   v_papel := public.convite_papel_ativo(auth.uid(), p_academia_id);
   if v_papel is null
      or ((p_papel_antes = 'dono' or p_papel_depois = 'dono') and v_papel <> 'dono') then
     raise exception 'Você não tem mais permissão para alterar esta equipe.'
-      using hint = 'sem_permissao';
+      using errcode = '42501', hint = 'sem_permissao';
   end if;
   if not public.academia_ativa_agora(p_academia_id) then
     raise exception 'A assinatura da academia está suspensa: não é possível alterar a equipe.'
@@ -1110,7 +1110,7 @@ begin
      and new.papel is distinct from old.papel
      and (old.papel in ('aluno', 'totem') or new.papel in ('aluno', 'totem')) then
     raise exception 'Para entrar na equipe, a pessoa precisa aceitar um convite.'
-      using hint = 'sem_permissao';
+      using errcode = '42501', hint = 'sem_permissao';
   end if;
   perform public.membros_reconfere_autor(old.academia_id, old.papel,
                                          case when tg_op = 'UPDATE' then new.papel else old.papel end);
