@@ -339,13 +339,13 @@ isOneToOne: false
                   ]
                 },"membros_academia": {
                   Row: {
-                    "academia_id": string,"ativo": boolean,"created_at": string,"papel": string,"user_id": string
+                    "academia_id": string,"ativo": boolean,"created_at": string,"papel": string,"user_id": string,"vale_a_partir": string | null
                   }
                   Insert: {
-                    "academia_id": string,"ativo"?: boolean,"created_at"?: string,"papel": string,"user_id": string
+                    "academia_id": string,"ativo"?: boolean,"created_at"?: string,"papel": string,"user_id": string,"vale_a_partir"?: string | null
                   }
                   Update: {
-                    "academia_id"?: string,"ativo"?: boolean,"created_at"?: string,"papel"?: string,"user_id"?: string
+                    "academia_id"?: string,"ativo"?: boolean,"created_at"?: string,"papel"?: string,"user_id"?: string,"vale_a_partir"?: string | null
                   }
                   Relationships: [
                     {
@@ -628,11 +628,17 @@ isOneToOne: false
 "convite_papel_ativo":
 { Args: { "p_academia_id": string,"p_user_id": string }; Returns: string
                            },
+"convite_papel_ativo_iat":
+{ Args: { "p_academia_id": string,"p_iat": number,"p_user_id": string }; Returns: string
+                           },
+"convite_papel_ativo_sessao":
+{ Args: { "p_academia_id": string }; Returns: string
+                           },
 "criar_academia":
 { Args: { "p_nome": string,"p_slug": string }; Returns: string
                            },
 "criar_convite_interna":
-{ Args: { "p_academia_id": string,"p_email": string,"p_papel": string,"p_user_id": string }; Returns: Json
+{ Args: { "p_academia_id": string,"p_email": string,"p_iat"?: number,"p_papel": string,"p_user_id": string }; Returns: Json
                            },
 "criar_matricula":
 { Args: { "p_academia_id": string,"p_dados": Json }; Returns: string
@@ -674,6 +680,9 @@ isOneToOne: false
                            },
 "hoje_academia":
 { Args: { "p_academia_id": string }; Returns: string
+                           },
+"jwt_iat":
+{ Args: Record<PropertyKey, never>; Returns: number
                            },
 "liberar_emissao_interna":
 { Args: { "p_cobranca_id": string,"p_recusa": string,"p_tentativa": string }; Returns: undefined
