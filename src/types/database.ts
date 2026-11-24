@@ -130,15 +130,34 @@ isOneToOne: false
       referencedColumns: ["id"]
     }
                   ]
-                },"convites_equipe": {
+                },"convites_envios": {
                   Row: {
-                    "academia_id": string,"aceito_em": string | null,"aceito_por": string | null,"convidado_por": string | null,"created_at": string,"email": string,"encerrado_em": string | null,"encerrado_por": string | null,"envio_real_em": string | null,"envios_reais": (string)[],"envios_recentes": (string)[],"envios_reservados": (string)[],"expira_em": string,"id": string,"papel": string,"status": string,"ultimo_envio_em": string | null,"updated_at": string,"convite_de_quem_pode": boolean | null
+                    "convite_id": string | null,"email": string,"enviado_em": string | null,"id": string,"liberado_em": string | null,"reservado_em": string
                   }
                   Insert: {
-                    "academia_id": string,"aceito_em"?: string | null,"aceito_por"?: string | null,"convidado_por"?: string | null,"created_at"?: string,"email": string,"encerrado_em"?: string | null,"encerrado_por"?: string | null,"envio_real_em"?: string | null,"envios_reais"?: (string)[],"envios_recentes"?: (string)[],"envios_reservados"?: (string)[],"expira_em": string,"id"?: string,"papel": string,"status"?: string,"ultimo_envio_em"?: string | null,"updated_at"?: string
+                    "convite_id"?: string | null,"email": string,"enviado_em"?: string | null,"id"?: string,"liberado_em"?: string | null,"reservado_em": string
                   }
                   Update: {
-                    "academia_id"?: string,"aceito_em"?: string | null,"aceito_por"?: string | null,"convidado_por"?: string | null,"created_at"?: string,"email"?: string,"encerrado_em"?: string | null,"encerrado_por"?: string | null,"envio_real_em"?: string | null,"envios_reais"?: (string)[],"envios_recentes"?: (string)[],"envios_reservados"?: (string)[],"expira_em"?: string,"id"?: string,"papel"?: string,"status"?: string,"ultimo_envio_em"?: string | null,"updated_at"?: string
+                    "convite_id"?: string | null,"email"?: string,"enviado_em"?: string | null,"id"?: string,"liberado_em"?: string | null,"reservado_em"?: string
+                  }
+                  Relationships: [
+                    {
+      foreignKeyName: "convites_envios_convite_id_fkey"
+      columns: ["convite_id"]
+isOneToOne: false
+      referencedRelation: "convites_equipe"
+      referencedColumns: ["id"]
+    }
+                  ]
+                },"convites_equipe": {
+                  Row: {
+                    "academia_id": string,"aceito_em": string | null,"aceito_por": string | null,"convidado_por": string | null,"created_at": string,"email": string,"encerrado_em": string | null,"encerrado_por": string | null,"envios_recentes": (string)[],"expira_em": string,"id": string,"papel": string,"status": string,"ultimo_envio_em": string | null,"updated_at": string,"convite_de_quem_pode": boolean | null
+                  }
+                  Insert: {
+                    "academia_id": string,"aceito_em"?: string | null,"aceito_por"?: string | null,"convidado_por"?: string | null,"created_at"?: string,"email": string,"encerrado_em"?: string | null,"encerrado_por"?: string | null,"envios_recentes"?: (string)[],"expira_em": string,"id"?: string,"papel": string,"status"?: string,"ultimo_envio_em"?: string | null,"updated_at"?: string
+                  }
+                  Update: {
+                    "academia_id"?: string,"aceito_em"?: string | null,"aceito_por"?: string | null,"convidado_por"?: string | null,"created_at"?: string,"email"?: string,"encerrado_em"?: string | null,"encerrado_por"?: string | null,"envios_recentes"?: (string)[],"expira_em"?: string,"id"?: string,"papel"?: string,"status"?: string,"ultimo_envio_em"?: string | null,"updated_at"?: string
                   }
                   Relationships: [
                     {
@@ -571,7 +590,7 @@ isOneToOne: false
 { Args: { "p_janela": number,"p_turma_id": string }; Returns: string
                            },
 "confirmar_envio_convite_interna":
-{ Args: { "p_convite_id": string,"p_enviado_em": string }; Returns: undefined
+{ Args: { "p_envio_id": string }; Returns: undefined
                            },
 "convite_de_quem_pode":
 { Args: { "p_convite": Database["public"]['Tables']["convites_equipe"]['Row'] }; Returns: boolean
@@ -586,10 +605,7 @@ isOneToOne: false
 "email": string,
 "encerrado_em": string | null,
 "encerrado_por": string | null,
-"envio_real_em": string | null,
-"envios_reais": (string)[],
 "envios_recentes": (string)[],
-"envios_reservados": (string)[],
 "expira_em": string,
 "id": string,
 "papel": string,
@@ -657,7 +673,7 @@ isOneToOne: false
 { Args: { "p_cobranca_id": string,"p_recusa": string,"p_tentativa": string }; Returns: undefined
                            },
 "liberar_envio_convite_interna":
-{ Args: { "p_convite_id": string,"p_enviado_em": string }; Returns: undefined
+{ Args: { "p_envio_id": string }; Returns: undefined
                            },
 "matricula_online":
 { Args: { "p_dados": Json,"p_slug": string }; Returns: string
