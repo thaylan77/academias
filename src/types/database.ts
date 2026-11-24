@@ -132,13 +132,13 @@ isOneToOne: false
                   ]
                 },"convites_equipe": {
                   Row: {
-                    "academia_id": string,"aceito_em": string | null,"aceito_por": string | null,"convidado_por": string | null,"created_at": string,"email": string,"encerrado_em": string | null,"encerrado_por": string | null,"envio_real_em": string | null,"envio_reservado_em": string | null,"envios_reais": (string)[],"envios_recentes": (string)[],"expira_em": string,"id": string,"papel": string,"status": string,"ultimo_envio_em": string | null,"updated_at": string,"convite_de_quem_pode": boolean | null
+                    "academia_id": string,"aceito_em": string | null,"aceito_por": string | null,"convidado_por": string | null,"created_at": string,"email": string,"encerrado_em": string | null,"encerrado_por": string | null,"envio_real_em": string | null,"envios_reais": (string)[],"envios_recentes": (string)[],"envios_reservados": (string)[],"expira_em": string,"id": string,"papel": string,"status": string,"ultimo_envio_em": string | null,"updated_at": string,"convite_de_quem_pode": boolean | null
                   }
                   Insert: {
-                    "academia_id": string,"aceito_em"?: string | null,"aceito_por"?: string | null,"convidado_por"?: string | null,"created_at"?: string,"email": string,"encerrado_em"?: string | null,"encerrado_por"?: string | null,"envio_real_em"?: string | null,"envio_reservado_em"?: string | null,"envios_reais"?: (string)[],"envios_recentes"?: (string)[],"expira_em": string,"id"?: string,"papel": string,"status"?: string,"ultimo_envio_em"?: string | null,"updated_at"?: string
+                    "academia_id": string,"aceito_em"?: string | null,"aceito_por"?: string | null,"convidado_por"?: string | null,"created_at"?: string,"email": string,"encerrado_em"?: string | null,"encerrado_por"?: string | null,"envio_real_em"?: string | null,"envios_reais"?: (string)[],"envios_recentes"?: (string)[],"envios_reservados"?: (string)[],"expira_em": string,"id"?: string,"papel": string,"status"?: string,"ultimo_envio_em"?: string | null,"updated_at"?: string
                   }
                   Update: {
-                    "academia_id"?: string,"aceito_em"?: string | null,"aceito_por"?: string | null,"convidado_por"?: string | null,"created_at"?: string,"email"?: string,"encerrado_em"?: string | null,"encerrado_por"?: string | null,"envio_real_em"?: string | null,"envio_reservado_em"?: string | null,"envios_reais"?: (string)[],"envios_recentes"?: (string)[],"expira_em"?: string,"id"?: string,"papel"?: string,"status"?: string,"ultimo_envio_em"?: string | null,"updated_at"?: string
+                    "academia_id"?: string,"aceito_em"?: string | null,"aceito_por"?: string | null,"convidado_por"?: string | null,"created_at"?: string,"email"?: string,"encerrado_em"?: string | null,"encerrado_por"?: string | null,"envio_real_em"?: string | null,"envios_reais"?: (string)[],"envios_recentes"?: (string)[],"envios_reservados"?: (string)[],"expira_em"?: string,"id"?: string,"papel"?: string,"status"?: string,"ultimo_envio_em"?: string | null,"updated_at"?: string
                   }
                   Relationships: [
                     {
@@ -584,9 +584,9 @@ isOneToOne: false
 "encerrado_em": string | null,
 "encerrado_por": string | null,
 "envio_real_em": string | null,
-"envio_reservado_em": string | null,
 "envios_reais": (string)[],
 "envios_recentes": (string)[],
+"envios_reservados": (string)[],
 "expira_em": string,
 "id": string,
 "papel": string,
