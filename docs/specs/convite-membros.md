@@ -234,12 +234,16 @@ A entrada é `{ academia_id, email, papel }`, com o JWT de quem convida.
    variável de ambiente da função, nunca do pedido. O e-mail usado é o
    **normalizado**, devolvido pela função interna.
 3. Se o e-mail não sair, o convite fica pendente e a tela mostra "Convite
-   criado, mas o e-mail não saiu. Tente reenviar em um minuto." Se o
-   provedor recusou de vez um envio liberado (`enviar = true`), a função
-   chama `liberar_envio_convite_interna(convite_id, enviado_em)`: o envio sai
-   da cota do endereço no projeto todo, para a falha não suprimir convites de
-   outras academias. Se a função cair antes de saber o resultado, o envio
-   continua contando (lado seguro contra spam) e sai da conta em 24 horas.
+   criado, mas o e-mail não saiu. Tente reenviar em um minuto."
+   Para cada envio liberado (`enviar = true`), o `enviado_em` devolvido é
+   uma reserva: com o provedor aceitando, a função chama
+   `confirmar_envio_convite_interna(convite_id, enviado_em)`, e o intervalo de
+   60 segundos passa a contar dali; com o provedor recusando de vez, chama
+   `liberar_envio_convite_interna(convite_id, enviado_em)`, e o envio sai da
+   cota do endereço no projeto todo, para a falha não suprimir convites de
+   outras academias. Se a função cair antes de saber o resultado, a reserva
+   bloqueia o endereço por 5 minutos e conta na janela de 24 horas (lado
+   seguro contra spam).
 
 Reenviar é chamar a mesma função com o mesmo e-mail (C9 e C10). No
 reenvio, a conta criada pelo primeiro convite aparece como `nao_confirmada`

@@ -37,8 +37,13 @@ create table public.convites_equipe (
   envios_recentes      timestamptz[] not null default '{}',
   -- Envios de e-mail que de fato saíram. Só os limites do projeto todo usam;
   -- authenticated não lê (revelariam se outra academia convidou o endereço).
+  -- envio_real_em: o último envio confirmado pelo provedor. envios_reais:
+  -- confirmados e a reserva em andamento (contam na janela de 24 horas).
+  -- envio_reservado_em: a reserva que a Edge Function ainda não confirmou nem
+  -- liberou; bloqueia o endereço por até 5 minutos.
   envio_real_em        timestamptz,
   envios_reais         timestamptz[] not null default '{}',
+  envio_reservado_em   timestamptz,
   aceito_por           uuid references auth.users (id) on delete set null,
   aceito_em            timestamptz,
   encerrado_por        uuid references auth.users (id) on delete set null,
@@ -74,8 +79,8 @@ language plpgsql
 set search_path = ''
 as $$
 begin
-  if (to_jsonb(new) - 'envio_real_em' - 'envios_reais' - 'updated_at')
-     is distinct from (to_jsonb(old) - 'envio_real_em' - 'envios_reais' - 'updated_at') then
+  if (to_jsonb(new) - 'envio_real_em' - 'envios_reais' - 'envio_reservado_em' - 'updated_at')
+     is distinct from (to_jsonb(old) - 'envio_real_em' - 'envios_reais' - 'envio_reservado_em' - 'updated_at') then
     new.updated_at := now();
   else
     new.updated_at := old.updated_at;
@@ -307,7 +312,8 @@ begin
     exists (
       select 1 from public.convites_equipe c
       where c.email = v_email
-        and c.envio_real_em > v_agora - interval '60 seconds'
+        and (c.envio_real_em > v_agora - interval '60 seconds'
+             or c.envio_reservado_em > v_agora - interval '5 minutes')
     )
     or (select count(*)
         from public.convites_equipe c
@@ -344,7 +350,7 @@ begin
              select e from unnest(c.envios_recentes) as e
              where e > v_agora - interval '24 hours'
              order by e) || v_agora,
-           envio_real_em = case when v_enviar then v_agora else c.envio_real_em end,
+           envio_reservado_em = case when v_enviar then v_agora else c.envio_reservado_em end,
            envios_reais = case when v_enviar then array(
              select e from unnest(c.envios_reais) as e
              where e > v_agora - interval '24 hours'
@@ -355,7 +361,7 @@ begin
   else
     -- 8b. Convite novo.
     insert into public.convites_equipe (academia_id, email, papel, convidado_por, expira_em,
-                                        ultimo_envio_em, envios_recentes, envio_real_em, envios_reais)
+                                        ultimo_envio_em, envios_recentes, envio_reservado_em, envios_reais)
     values (p_academia_id, v_email, p_papel, p_user_id, v_agora + interval '7 days',
             v_agora, array[v_agora],
             case when v_enviar then v_agora end,
@@ -389,13 +395,51 @@ $$;
 revoke execute on function public.criar_convite_interna(uuid, uuid, text, text) from public, anon, authenticated;
 grant execute on function public.criar_convite_interna(uuid, uuid, text, text) to service_role;
 
--- A Edge Function chama quando o provedor recusa de vez o envio que
--- criar_convite_interna liberou (enviar = true): o envio deixa de contar nos
--- limites do projeto todo, e uma falha do provedor não suprime convites de
--- outras academias. A tentativa continua registrada (é o que a academia vê).
--- Idempotente: liberar de novo, ou um horário que não está lá, não faz nada.
--- Reserva abandonada (a função caiu antes de saber) continua contando: é o
--- lado seguro contra spam, e sai da conta em 24 horas.
+-- Contrato com a Edge Function para cada envio liberado (enviar = true), com
+-- o enviado_em devolvido por criar_convite_interna (é a reserva):
+--   * provedor aceitou: confirmar_envio_convite_interna. O envio passa a
+--     contar do horário da confirmação (o intervalo de 60 segundos conta do
+--     envio de verdade, não da reserva);
+--   * provedor recusou de vez: liberar_envio_convite_interna. O envio sai da
+--     cota do projeto todo, para a falha não suprimir convites de outras
+--     academias. A tentativa continua registrada (é o que a academia vê).
+-- As duas são idempotentes. Reserva abandonada (a função caiu antes de
+-- saber) bloqueia o endereço por 5 minutos e conta na janela de 24 horas:
+-- lado seguro contra spam.
+create or replace function public.confirmar_envio_convite_interna(p_convite_id uuid, p_enviado_em timestamptz)
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_email    text;
+  v_academia uuid;
+  v_agora    timestamptz;
+begin
+  select c.email, c.academia_id into v_email, v_academia
+  from public.convites_equipe c where c.id = p_convite_id;
+  if v_email is null then
+    return;
+  end if;
+
+  -- Mesma ordem de travas de criar_convite_interna.
+  perform 1 from public.academias a where a.id = v_academia for update;
+  perform pg_advisory_xact_lock(hashtextextended('convite_email:' || v_email, 0));
+  v_agora := clock_timestamp();
+
+  update public.convites_equipe c
+     set envios_reais = array_replace(c.envios_reais, p_enviado_em, v_agora),
+         envio_real_em = v_agora,
+         envio_reservado_em = null
+   where c.id = p_convite_id
+     and c.envio_reservado_em = p_enviado_em;
+end
+$$;
+
+revoke execute on function public.confirmar_envio_convite_interna(uuid, timestamptz) from public, anon, authenticated;
+grant execute on function public.confirmar_envio_convite_interna(uuid, timestamptz) to service_role;
+
 create or replace function public.liberar_envio_convite_interna(p_convite_id uuid, p_enviado_em timestamptz)
 returns void
 language plpgsql
@@ -403,7 +447,7 @@ security definer
 set search_path = ''
 as $$
 declare
-  v_email text;
+  v_email    text;
   v_academia uuid;
 begin
   select c.email, c.academia_id into v_email, v_academia
@@ -418,9 +462,9 @@ begin
 
   update public.convites_equipe c
      set envios_reais = array_remove(c.envios_reais, p_enviado_em),
-         envio_real_em = (select max(e) from unnest(array_remove(c.envios_reais, p_enviado_em)) as e)
+         envio_reservado_em = null
    where c.id = p_convite_id
-     and p_enviado_em = any (c.envios_reais);
+     and c.envio_reservado_em = p_enviado_em;
 end
 $$;
 

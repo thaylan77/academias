@@ -178,7 +178,7 @@ select extensions.dblink_exec('prep', $f$
     ('e7d00000-0000-4000-8000-0000000002ca', 'e7d00000-0000-4000-8000-00000000000b', 'u8@concorre.test', 'recepcao',
      'e7d00000-0000-4000-8000-0000000000b2', now() + interval '7 days');
   insert into public.convites_equipe (id, academia_id, email, papel, convidado_por, expira_em,
-                                      ultimo_envio_em, envios_recentes, envio_real_em, envios_reais) values
+                                      ultimo_envio_em, envios_recentes, envio_reservado_em, envios_reais) values
     ('e7d00000-0000-4000-8000-0000000002cb', 'e7d00000-0000-4000-8000-00000000000b', 'liberar@concorre.test', 'professor',
      'e7d00000-0000-4000-8000-0000000000b2', now() + interval '7 days',
      '2026-11-23 10:00:00+00', array['2026-11-23 10:00:00+00'::timestamptz],
@@ -334,7 +334,7 @@ select is(extensions.dblink_send_query('s2', $$select public.criar_convite_inter
 select ok(pg_temp.s2_espera_s1(), 'J: o segundo convite espera a trava do e-mail');
 select extensions.dblink_exec('s1', 'commit');
 select is(pg_temp.resultado_s2(), 'ok', 'J: o segundo convite não dá erro que revele a outra academia');
-select is((select string_agg(a.slug || '=' || (c.envio_real_em is not null)::text, ',' order by a.slug)
+select is((select string_agg(a.slug || '=' || (cardinality(c.envios_reais) > 0)::text, ',' order by a.slug)
            from public.convites_equipe c join public.academias a on a.id = c.academia_id
            where c.email = 'disputa@concorre.test'),
   'convite-concorre-k=true,convite-concorre-l=false', 'J: um envio real só para o endereço; o de L fica gravado sem envio real');

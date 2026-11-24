@@ -4,7 +4,7 @@
 -- Academias A e B (ativas) e S (suspensa).
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(89);
+select plan(93);
 
 -- ---------------------------------------------------------------------
 -- Auxiliares
@@ -277,6 +277,7 @@ update public.convites_equipe
    set ultimo_envio_em = now() - interval '7 minutes',
        envios_recentes = array[now() - interval '23 hours 50 minutes', now() - interval '10 minutes',
                                now() - interval '9 minutes', now() - interval '8 minutes', now() - interval '7 minutes']
+       , envio_reservado_em = null
        , envio_real_em = now() - interval '7 minutes',
        envios_reais = array[now() - interval '23 hours 50 minutes', now() - interval '10 minutes',
                                now() - interval '9 minutes', now() - interval '8 minutes', now() - interval '7 minutes']
@@ -299,6 +300,7 @@ update public.convites_equipe
    set ultimo_envio_em = now() - interval '3 minutes',
        envios_recentes = array[now() - interval '25 hours', now() - interval '25 hours', now() - interval '25 hours',
                                now() - interval '25 hours', now() - interval '3 minutes']
+       , envio_reservado_em = null
        , envio_real_em = now() - interval '3 minutes',
        envios_reais = array[now() - interval '25 hours', now() - interval '25 hours', now() - interval '25 hours',
                                now() - interval '25 hours', now() - interval '3 minutes']
@@ -312,7 +314,7 @@ select is(public.__cc('e7c00000-0000-4000-8000-0000000000a1', 'e7c00000-0000-400
 -- todo, e outra academia volta a conseguir enviar.
 select public.__cc('e7c00000-0000-4000-8000-0000000000a1', 'e7c00000-0000-4000-8000-00000000000a', 'falha@conv.test', 'professor');
 select public.liberar_envio_convite_interna((public.__conv('e7c00000-0000-4000-8000-00000000000a', 'falha@conv.test')).id,
-                                            (public.__conv('e7c00000-0000-4000-8000-00000000000a', 'falha@conv.test')).envio_real_em);
+                                            (public.__conv('e7c00000-0000-4000-8000-00000000000a', 'falha@conv.test')).envio_reservado_em);
 select is(cardinality((public.__conv('e7c00000-0000-4000-8000-00000000000a', 'falha@conv.test')).envios_reais) || '/'
           || coalesce((public.__conv('e7c00000-0000-4000-8000-00000000000a', 'falha@conv.test')).envio_real_em::text, '-'),
   '0/-', 'liberar o envio que falhou tira ele da cota do projeto todo');
@@ -321,6 +323,34 @@ select is(public.__cc('e7c00000-0000-4000-8000-0000000000f1', 'e7c00000-0000-400
 select is(public.__hint_de(format('select public.liberar_envio_convite_interna(%L, now())',
             (public.__conv('e7c00000-0000-4000-8000-00000000000a', 'falha@conv.test')).id)),
   'sem erro', 'liberar de novo, ou um horário que não está lá, não faz nada');
+
+-- Envio confirmado: a reserva em andamento bloqueia o endereço mesmo depois
+-- de 60 s, e o intervalo conta da confirmação.
+select public.__cc('e7c00000-0000-4000-8000-0000000000a1', 'e7c00000-0000-4000-8000-00000000000a', 'atraso@conv.test', 'professor');
+reset role;
+update public.convites_equipe
+   set envio_reservado_em = now() - interval '70 seconds', envios_reais = array[now() - interval '70 seconds'],
+       ultimo_envio_em = now() - interval '70 seconds', envios_recentes = array[now() - interval '70 seconds']
+ where email = 'atraso@conv.test' and academia_id = 'e7c00000-0000-4000-8000-00000000000a';
+set local role service_role;
+select public.__como_servico();
+select is(public.__cc('e7c00000-0000-4000-8000-0000000000f1', 'e7c00000-0000-4000-8000-00000000000d', 'atraso@conv.test', 'professor') ->> 'enviar',
+  'false', 'reserva ainda não confirmada bloqueia o endereço mesmo depois de 60 segundos');
+select public.confirmar_envio_convite_interna((public.__conv('e7c00000-0000-4000-8000-00000000000a', 'atraso@conv.test')).id,
+                                              (public.__conv('e7c00000-0000-4000-8000-00000000000a', 'atraso@conv.test')).envio_reservado_em);
+select ok((select c.envio_reservado_em is null and c.envio_real_em > now() and c.envios_reais = array[c.envio_real_em]
+           from public.__conv('e7c00000-0000-4000-8000-00000000000a', 'atraso@conv.test') c),
+  'confirmar troca a reserva pelo horário da confirmação');
+reset role;
+update public.convites_equipe set ultimo_envio_em = null, envios_recentes = '{}'
+ where email = 'atraso@conv.test' and academia_id = 'e7c00000-0000-4000-8000-00000000000d';
+set local role service_role;
+select public.__como_servico();
+select is(public.__cc('e7c00000-0000-4000-8000-0000000000f1', 'e7c00000-0000-4000-8000-00000000000d', 'atraso@conv.test', 'professor') ->> 'enviar',
+  'false', 'o intervalo de 60 segundos conta da confirmação');
+select is(public.__hint_de(format('select public.confirmar_envio_convite_interna(%L, now())',
+            (public.__conv('e7c00000-0000-4000-8000-00000000000a', 'atraso@conv.test')).id)),
+  'sem erro', 'confirmar de novo não faz nada');
 
 -- O reenvio do mesmo pendente registra cada envio na janela.
 select public.__cc('e7c00000-0000-4000-8000-0000000000a1', 'e7c00000-0000-4000-8000-00000000000a', 'reenvio@conv.test', 'professor');
