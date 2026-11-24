@@ -27,6 +27,8 @@
 --      recusada (isolamento_nao_suportado): as travas supõem read committed.
 --   S. o expurgo espera uma confirmação em andamento e não apaga a linha
 --      confirmada.
+--   T. o Auth (sessão supabase_auth_admin, sem JWT) apagando contas: o
+--      último dono não sai; o admin que convidou sai, e o convite dele morre.
 -- A espera é provada pelo pid: s2 está bloqueada e s1 está entre os que a
 -- bloqueiam. As fixtures são gravadas e confirmadas por uma conexão própria,
 -- apagadas antes (se uma execução anterior parou no meio) e depois, pela
@@ -34,7 +36,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 create extension if not exists dblink with schema extensions;
-select plan(71);
+select plan(76);
 
 create function pg_temp.conexao(p_nome text) returns text language sql as $$
   select format('host=%s port=%s dbname=%s user=postgres password=postgres application_name=%s',
@@ -111,7 +113,7 @@ create function pg_temp.limpa() returns void language plpgsql as $$
 begin
   perform extensions.dblink_exec('prep', $f$
     delete from public.convites_envios where email like '%@concorre.test';
-    delete from public.academias where id in ('e7d00000-0000-4000-8000-00000000000a', 'e7d00000-0000-4000-8000-00000000000b', 'e7d00000-0000-4000-8000-00000000000c');
+    delete from public.academias where id in ('e7d00000-0000-4000-8000-00000000000a', 'e7d00000-0000-4000-8000-00000000000b', 'e7d00000-0000-4000-8000-00000000000c', 'e7d00000-0000-4000-8000-00000000000d');
     delete from auth.users where id in (
       'e7d00000-0000-4000-8000-0000000000a1', 'e7d00000-0000-4000-8000-0000000000a2',
       'e7d00000-0000-4000-8000-0000000000b1', 'e7d00000-0000-4000-8000-0000000000b2',
@@ -121,7 +123,8 @@ begin
       'e7d00000-0000-4000-8000-0000000000b5', 'e7d00000-0000-4000-8000-0000000000d7',
       'e7d00000-0000-4000-8000-0000000000b6', 'e7d00000-0000-4000-8000-0000000000b7',
       'e7d00000-0000-4000-8000-0000000000d8', 'e7d00000-0000-4000-8000-0000000000d9',
-      'e7d00000-0000-4000-8000-0000000000da',
+      'e7d00000-0000-4000-8000-0000000000da', 'e7d00000-0000-4000-8000-0000000000b8',
+      'e7d00000-0000-4000-8000-0000000000b9', 'e7d00000-0000-4000-8000-0000000000db',
       'e7d00000-0000-4000-8000-0000000000d1', 'e7d00000-0000-4000-8000-0000000000d2');
   $f$);
 end
@@ -156,11 +159,15 @@ select extensions.dblink_exec('prep', $f$
     ('e7d00000-0000-4000-8000-0000000000b7', 'admin7@concorre.test', now()),
     ('e7d00000-0000-4000-8000-0000000000d8', 'u8@concorre.test',    now()),
     ('e7d00000-0000-4000-8000-0000000000d9', 'u9@concorre.test',    now()),
-    ('e7d00000-0000-4000-8000-0000000000da', 'u10@concorre.test',   now());
+    ('e7d00000-0000-4000-8000-0000000000da', 'u10@concorre.test',   now()),
+    ('e7d00000-0000-4000-8000-0000000000b8', 'dono8@concorre.test',  now()),
+    ('e7d00000-0000-4000-8000-0000000000b9', 'admin9@concorre.test', now()),
+    ('e7d00000-0000-4000-8000-0000000000db', 'u11@concorre.test',   now());
   insert into public.academias (id, nome, slug, status) values
     ('e7d00000-0000-4000-8000-00000000000a', 'Concorre K', 'convite-concorre-k', 'ativa'),
     ('e7d00000-0000-4000-8000-00000000000b', 'Concorre L', 'convite-concorre-l', 'ativa'),
-    ('e7d00000-0000-4000-8000-00000000000c', 'Concorre M', 'convite-concorre-m', 'ativa');
+    ('e7d00000-0000-4000-8000-00000000000c', 'Concorre M', 'convite-concorre-m', 'ativa'),
+    ('e7d00000-0000-4000-8000-00000000000d', 'Concorre N', 'convite-concorre-n', 'ativa');
   insert into public.membros_academia (academia_id, user_id, papel) values
     ('e7d00000-0000-4000-8000-00000000000a', 'e7d00000-0000-4000-8000-0000000000a1', 'dono'),
     ('e7d00000-0000-4000-8000-00000000000a', 'e7d00000-0000-4000-8000-0000000000a2', 'dono'),
@@ -171,7 +178,9 @@ select extensions.dblink_exec('prep', $f$
     ('e7d00000-0000-4000-8000-00000000000b', 'e7d00000-0000-4000-8000-0000000000b5', 'admin'),
     ('e7d00000-0000-4000-8000-00000000000c', 'e7d00000-0000-4000-8000-0000000000b6', 'dono'),
     ('e7d00000-0000-4000-8000-00000000000c', 'e7d00000-0000-4000-8000-0000000000b7', 'admin'),
-    ('e7d00000-0000-4000-8000-00000000000b', 'e7d00000-0000-4000-8000-0000000000d8', 'aluno');
+    ('e7d00000-0000-4000-8000-00000000000b', 'e7d00000-0000-4000-8000-0000000000d8', 'aluno'),
+    ('e7d00000-0000-4000-8000-00000000000d', 'e7d00000-0000-4000-8000-0000000000b8', 'dono'),
+    ('e7d00000-0000-4000-8000-00000000000d', 'e7d00000-0000-4000-8000-0000000000b9', 'admin');
   insert into public.convites_equipe (id, academia_id, email, papel, convidado_por, expira_em) values
     ('e7d00000-0000-4000-8000-0000000002c1', 'e7d00000-0000-4000-8000-00000000000a', 'u1@concorre.test', 'professor',
      'e7d00000-0000-4000-8000-0000000000a1', now() + interval '7 days'),
@@ -202,7 +211,9 @@ select extensions.dblink_exec('prep', $f$
     ('e7d00000-0000-4000-8000-0000000002cc', 'e7d00000-0000-4000-8000-00000000000b', 'u9@concorre.test', 'recepcao',
      'e7d00000-0000-4000-8000-0000000000b2', now() + interval '7 days'),
     ('e7d00000-0000-4000-8000-0000000002cd', 'e7d00000-0000-4000-8000-00000000000b', 'u10@concorre.test', 'recepcao',
-     'e7d00000-0000-4000-8000-0000000000b2', now() + interval '7 days');
+     'e7d00000-0000-4000-8000-0000000000b2', now() + interval '7 days'),
+    ('e7d00000-0000-4000-8000-0000000002ce', 'e7d00000-0000-4000-8000-00000000000d', 'u11@concorre.test', 'professor',
+     'e7d00000-0000-4000-8000-0000000000b9', now() + interval '7 days');
 $f$);
 
 -- ---------------------------------------------------------------------
@@ -526,6 +537,36 @@ select extensions.dblink_exec('s1', 'commit');
 select is(pg_temp.resultado_s2(), 'ok', 'S: o expurgo termina sem erro');
 select ok((select enviado_em is not null from public.convites_envios where id = 'e7d00000-0000-4000-8000-0000000003cc'),
   'S: a linha confirmada durante o expurgo continua');
+
+-- ---------------------------------------------------------------------
+-- T. Conexão como o Auth: session_user supabase_auth_admin, sem JWT.
+-- ---------------------------------------------------------------------
+select extensions.dblink_connect('auth', replace(pg_temp.conexao('teste_convite_auth'), 'user=postgres', 'user=supabase_auth_admin'));
+create function pg_temp.resultado(p_conn text) returns text language plpgsql as $$
+declare
+  v_msg text;
+begin
+  perform * from extensions.dblink_get_result(p_conn, false) as r(x text);
+  v_msg := extensions.dblink_error_message(p_conn);
+  perform * from extensions.dblink_get_result(p_conn, false) as r(x text);
+  return case when v_msg is null or v_msg = 'OK' then 'ok' else v_msg end;
+end
+$$;
+select extensions.dblink_send_query('auth', $$delete from auth.users where id = 'e7d00000-0000-4000-8000-0000000000b8'$$);
+select matches(pg_temp.resultado('auth'), 'HINT: +ultimo_dono', 'T: o Auth não apaga a conta do único dono');
+select ok(exists (select 1 from auth.users where id = 'e7d00000-0000-4000-8000-0000000000b8')
+          and exists (select 1 from public.membros_academia
+                      where academia_id = 'e7d00000-0000-4000-8000-00000000000d'
+                        and user_id = 'e7d00000-0000-4000-8000-0000000000b8' and papel = 'dono' and ativo),
+  'T: a conta e o vínculo do único dono ficam');
+select extensions.dblink_send_query('auth', $$delete from auth.users where id = 'e7d00000-0000-4000-8000-0000000000b9'$$);
+select is(pg_temp.resultado('auth'), 'ok', 'T: o Auth apaga a conta do admin');
+select is((select count(*) from public.membros_academia where user_id = 'e7d00000-0000-4000-8000-0000000000b9'),
+  0::bigint, 'T: o vínculo do admin saiu junto');
+select pg_temp.como('s2', 'e7d00000-0000-4000-8000-0000000000db');
+select extensions.dblink_send_query('s2', $$select public.aceitar_convite('e7d00000-0000-4000-8000-0000000002ce')$$);
+select matches(pg_temp.resultado_s2(), 'HINT: +convite_invalido', 'T: o convite do admin apagado não pode mais ser aceito');
+select extensions.dblink_disconnect('auth');
 
 -- ---------------------------------------------------------------------
 -- Limpeza.
