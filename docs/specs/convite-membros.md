@@ -243,9 +243,12 @@ A entrada é `{ academia_id, email, papel }`, com o JWT de quem convida.
    60 segundos passa a contar dali; com o provedor recusando de vez, chama
    `liberar_envio_convite_interna(convite_id, enviado_em)`, e o envio sai da
    cota do endereço no projeto todo, para a falha não suprimir convites de
-   outras academias. Se a função cair antes de saber o resultado, a reserva
-   bloqueia o endereço por 5 minutos e conta na janela de 24 horas (lado
-   seguro contra spam).
+   outras academias. A função só despacha até 4 minutos depois da reserva; passado isso,
+   libera. Cada reserva bloqueia o endereço por 6 minutos, então o envio
+   aceito fica sempre a mais de 60 segundos do próximo, não importa quando a
+   confirmação chegue. Se a função cair antes de saber o resultado, a reserva
+   bloqueia por 6 minutos e conta na janela de 24 horas (lado seguro contra
+   spam).
 
 Reenviar é chamar a mesma função com o mesmo e-mail (C9 e C10). No
 reenvio, a conta criada pelo primeiro convite aparece como `nao_confirmada`

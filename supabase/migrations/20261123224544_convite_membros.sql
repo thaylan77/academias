@@ -43,7 +43,8 @@ create table public.convites_equipe (
   -- confirmados e a reserva em andamento (contam na janela de 24 horas).
   -- envios_reservados: as reservas que a Edge Function ainda não confirmou
   -- nem liberou, cada uma com o próprio horário; cada uma bloqueia o endereço
-  -- por até 5 minutos.
+  -- por 6 minutos (a Edge Function só despacha até 4 minutos depois da
+  -- reserva: o envio aceito fica sempre a mais de 60 s do próximo).
   envio_real_em        timestamptz,
   envios_reais         timestamptz[] not null default '{}',
   envios_reservados    timestamptz[] not null default '{}',
@@ -303,6 +304,12 @@ begin
   -- Relógio lido depois das travas: uma espera longa não deixa o envio
   -- registrado com um horário antigo (now() é o início da transação).
   v_agora := clock_timestamp();
+  -- A assinatura de novo, com o relógio de agora: a espera pelas travas pode
+  -- ter passado da virada do dia do trial.
+  if not public.academia_ativa_agora(p_academia_id) then
+    raise exception 'A assinatura da academia está suspensa: não é possível convidar.'
+      using hint = 'academia_suspensa';
+  end if;
 
   -- 6a. Com o histórico desta academia, o erro é explícito: só revela dados
   --     dela mesma.
@@ -336,7 +343,7 @@ begin
       where c.email = v_email
         and (c.envio_real_em > v_agora - interval '60 seconds'
              or exists (select 1 from unnest(c.envios_reservados) as r
-                        where r > v_agora - interval '5 minutes'))
+                        where r > v_agora - interval '6 minutes'))
     )
     or (select count(*)
         from public.convites_equipe c
@@ -431,9 +438,12 @@ grant execute on function public.criar_convite_interna(uuid, uuid, text, text) t
 --     cota do projeto todo, para a falha não suprimir convites de outras
 --     academias. A tentativa continua registrada (é o que a academia vê).
 -- As duas valem para qualquer reserva ainda aberta do convite (mesmo depois
--- de um reenvio ter feito outra) e são idempotentes. Reserva abandonada (a função caiu antes de
--- saber) bloqueia o endereço por 5 minutos e conta na janela de 24 horas:
--- lado seguro contra spam.
+-- de um reenvio ter feito outra) e são idempotentes. A Edge Function só
+-- despacha até 4 minutos depois da reserva; passado isso, libera. Como cada
+-- reserva bloqueia o endereço por 6 minutos, o envio aceito fica a mais de
+-- 60 s do próximo, não importa quando a confirmação chegue. Reserva
+-- abandonada (a função caiu antes de saber) bloqueia por 6 minutos e conta
+-- na janela de 24 horas: lado seguro contra spam.
 create or replace function public.confirmar_envio_convite_interna(p_convite_id uuid, p_enviado_em timestamptz)
 returns void
 language plpgsql
@@ -540,7 +550,7 @@ begin
   end if;
 
   -- 4. Academia suspensa não altera (C6).
-  if not public.academia_ativa(v_academia) then
+  if not public.academia_ativa_agora(v_academia) then
     raise exception 'A assinatura da academia está suspensa: não é possível alterar convites.'
       using hint = 'academia_suspensa';
   end if;
@@ -764,7 +774,7 @@ declare
 begin
   v_conv := public.convite_do_login_travado(p_convite_id, false);
 
-  if not public.academia_ativa(v_conv.academia_id) then
+  if not public.academia_ativa_agora(v_conv.academia_id) then
     raise exception 'A assinatura da academia está suspensa: o convite não pode ser respondido agora.'
       using hint = 'academia_suspensa';
   end if;

@@ -4,7 +4,7 @@
 -- Academias A e B (ativas) e S (suspensa).
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(95);
+select plan(96);
 
 -- ---------------------------------------------------------------------
 -- Auxiliares
@@ -352,18 +352,31 @@ select is(public.__hint_de(format('select public.confirmar_envio_convite_interna
             (public.__conv('e7c00000-0000-4000-8000-00000000000a', 'atraso@conv.test')).id)),
   'sem erro', 'confirmar de novo não faz nada');
 
+-- Uma reserva bloqueia o endereço por 6 minutos (a Edge Function só despacha
+-- até 4 minutos depois dela).
+select public.__cc('e7c00000-0000-4000-8000-0000000000a1', 'e7c00000-0000-4000-8000-00000000000a', 'seis@conv.test', 'professor');
+reset role;
+update public.convites_equipe
+   set envios_reservados = array[now() - interval '5 minutes 30 seconds'], envios_reais = array[now() - interval '5 minutes 30 seconds'],
+       ultimo_envio_em = now() - interval '5 minutes 30 seconds', envios_recentes = array[now() - interval '5 minutes 30 seconds']
+ where email = 'seis@conv.test';
+set local role service_role;
+select public.__como_servico();
+select is(public.__cc('e7c00000-0000-4000-8000-0000000000f1', 'e7c00000-0000-4000-8000-00000000000d', 'seis@conv.test', 'professor') ->> 'enviar',
+  'false', 'reserva de 5 min 30 s ainda bloqueia o endereço (o bloqueio é de 6 minutos)');
+
 -- Resultado tardio de uma reserva antiga, depois de um reenvio do mesmo
 -- convite: cada reserva é confirmada ou liberada pela própria identidade.
 select public.__cc('e7c00000-0000-4000-8000-0000000000a1', 'e7c00000-0000-4000-8000-00000000000a', 'tardio@conv.test', 'professor');
 reset role;
 update public.convites_equipe
-   set envios_reservados = array[now() - interval '6 minutes'], envios_reais = array[now() - interval '6 minutes'],
-       ultimo_envio_em = now() - interval '6 minutes', envios_recentes = array[now() - interval '6 minutes']
+   set envios_reservados = array[now() - interval '7 minutes'], envios_reais = array[now() - interval '7 minutes'],
+       ultimo_envio_em = now() - interval '7 minutes', envios_recentes = array[now() - interval '7 minutes']
  where email = 'tardio@conv.test';
 set local role service_role;
 select public.__como_servico();
 select public.__cc('e7c00000-0000-4000-8000-0000000000a1', 'e7c00000-0000-4000-8000-00000000000a', 'tardio@conv.test', 'professor');
-select public.liberar_envio_convite_interna((public.__conv('e7c00000-0000-4000-8000-00000000000a', 'tardio@conv.test')).id, now() - interval '6 minutes');
+select public.liberar_envio_convite_interna((public.__conv('e7c00000-0000-4000-8000-00000000000a', 'tardio@conv.test')).id, now() - interval '7 minutes');
 select is(cardinality((public.__conv('e7c00000-0000-4000-8000-00000000000a', 'tardio@conv.test')).envios_reservados) || '/'
           || cardinality((public.__conv('e7c00000-0000-4000-8000-00000000000a', 'tardio@conv.test')).envios_reais),
   '1/1', 'recusa tardia da reserva antiga, depois do reenvio: só ela sai da cota');
