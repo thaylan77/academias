@@ -23,6 +23,8 @@
 --      aceite espera, relê o vínculo e troca o papel, sem erro de chave;
 --   P. o mesmo, mas o convite vence na espera e o portal desfaz o vínculo:
 --      o aceite é recusado, sem vínculo e com o convite pendente.
+--   Q. em repeatable read, a saída de um dono é recusada
+--      (isolamento_nao_suportado): as travas supõem read committed.
 -- A espera é provada pelo pid: s2 está bloqueada e s1 está entre os que a
 -- bloqueiam. As fixtures são gravadas e confirmadas por uma conexão própria,
 -- apagadas antes (se uma execução anterior parou no meio) e depois, pela
@@ -30,7 +32,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 create extension if not exists dblink with schema extensions;
-select plan(63);
+select plan(65);
 
 create function pg_temp.conexao(p_nome text) returns text language sql as $$
   select format('host=%s port=%s dbname=%s user=postgres password=postgres application_name=%s',
@@ -480,6 +482,20 @@ select is((select count(*) from public.membros_academia
   0::bigint, 'P: nenhum vínculo ficou gravado');
 select is((select status from public.convites_equipe where id = 'e7d00000-0000-4000-8000-0000000002cd'),
   'pendente', 'P: o convite continua pendente (vencido)');
+
+-- ---------------------------------------------------------------------
+-- Q. b2 (dono de L) tenta sair numa transação repeatable read.
+-- ---------------------------------------------------------------------
+select pg_temp.como('s2', 'e7d00000-0000-4000-8000-0000000000b2');
+select extensions.dblink_exec('s2', 'begin isolation level repeatable read');
+select extensions.dblink_send_query('s2', $$delete from public.membros_academia
+  where academia_id = 'e7d00000-0000-4000-8000-00000000000b' and user_id = 'e7d00000-0000-4000-8000-0000000000b2'$$);
+select matches(pg_temp.resultado_s2(), 'HINT: +isolamento_nao_suportado',
+  'Q: em repeatable read, a saída de dono é recusada');
+select extensions.dblink_exec('s2', 'rollback');
+select is((select count(*) from public.membros_academia
+           where academia_id = 'e7d00000-0000-4000-8000-00000000000b' and papel = 'dono' and ativo),
+  1::bigint, 'Q: o dono continua');
 
 -- ---------------------------------------------------------------------
 -- Limpeza.

@@ -115,6 +115,7 @@ O código vai no `hint` do erro (`raise exception '<mensagem em português>' usi
 | `senha_pendente` | `aceitar_convite` | conta criada ou protegida pelo convite ainda sem senha definida (`app_metadata.definir_senha`) |
 | `ultimo_dono` | gravação em `membros_academia` (gatilho `membros_academia_ultimo_dono`) | a alteração deixaria a academia sem dono ativo com conta não apagada. Passam o `service_role`, a sessão administrativa sem JWT e o delete em cascata da academia |
 | `exclusao_logica_bloqueada` | `auth.users` (gatilho `auth_users_exclusao_logica`) | qualquer um (o Auth, uma requisição ou o SQL do projeto) tentou a exclusão lógica (`deleted_at`) de uma conta. Conta se apaga de verdade |
+| `isolamento_nao_suportado` | `criar_convite_interna`, `cancelar_convite`, `aceitar_convite`, `recusar_convite` e o gatilho de revogação de `membros_academia` | a transação está em repeatable read; as travas por academia supõem read committed (o padrão do PostgREST) |
 | `matricula_duplicada` | gravação em `matricula_turmas` e em `matriculas` | o aluno já tem matrícula não cancelada na turma em período sobreposto. O `detail` traz `matricula_id` e `turma_id` em conflito. Regra em `docs/specs/matricula-duplicada.md` |
 
 

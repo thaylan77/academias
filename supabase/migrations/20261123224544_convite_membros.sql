@@ -188,6 +188,27 @@ $$;
 revoke execute on function public.convite_de_quem_pode(public.convites_equipe) from public, anon, authenticated;
 revoke execute on function public.academia_ativa_agora(uuid) from public, anon, authenticated;
 
+-- As travas por academia supõem read committed (o padrão, e o que o
+-- PostgREST usa): cada comando depois de uma espera vê o que já foi
+-- confirmado. Em repeatable read, uma transação que esperou a trava ainda
+-- leria o snapshot antigo (duas saídas de dono, por exemplo, poderiam passar
+-- juntas). Serializable detecta esses casos sozinho. Repeatable read é
+-- recusado.
+create or replace function public.convite_exige_read_committed()
+returns void
+language plpgsql
+set search_path = ''
+as $$
+begin
+  if current_setting('transaction_isolation') = 'repeatable read' then
+    raise exception 'Esta operação exige o isolamento read committed (o padrão).'
+      using hint = 'isolamento_nao_suportado';
+  end if;
+end
+$$;
+
+revoke execute on function public.convite_exige_read_committed() from public, anon, authenticated;
+
 -- =====================================================================
 -- 3. CRIAR (Edge Function convidar-membro, com o user_id do JWT)
 -- =====================================================================
@@ -222,6 +243,8 @@ declare
   v_enviar    boolean;
   v_envio_id  uuid;
 begin
+  perform public.convite_exige_read_committed();
+
   -- 1. Entrada.
   if v_email !~ '^[^@[:space:]]+@[^@[:space:]]+\.[^@[:space:]]+$'
      or p_papel is null
@@ -514,6 +537,8 @@ declare
   v_conv     public.convites_equipe;
   v_papel_eu text;
 begin
+  perform public.convite_exige_read_committed();
+
   -- 1. Inexistente ou de academia que quem chama não gere: o mesmo código,
   --    e sem travar nada.
   select c.academia_id into v_academia from public.convites_equipe c where c.id = p_convite_id;
@@ -606,6 +631,8 @@ declare
   v_academia uuid;
   v_conv     public.convites_equipe;
 begin
+  perform public.convite_exige_read_committed();
+
   if v_email is null then
     raise exception 'Confirme o seu e-mail antes de responder ao convite.'
       using hint = 'email_nao_confirmado';
@@ -888,6 +915,7 @@ begin
   if not found then
     return coalesce(new, old);  -- academia sendo apagada (cascata)
   end if;
+  perform public.convite_exige_read_committed();
 
   -- Os convites pendentes que essa pessoa não pode mais conceder morrem de
   -- vez: recuperar o papel depois não os ressuscita.
