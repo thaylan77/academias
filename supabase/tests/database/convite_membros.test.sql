@@ -4,7 +4,7 @@
 -- Academias A e B (ativas) e S (suspensa).
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(99);
+select plan(102);
 
 -- ---------------------------------------------------------------------
 -- Auxiliares
@@ -677,6 +677,20 @@ select public.__como_servico();
 select is(public.__cc('e7c00000-0000-4000-8000-0000000000f1', 'e7c00000-0000-4000-8000-00000000000d', 'apagada@conv.test', 'professor') ->> 'enviar',
   'false', 'apagar uma academia não devolve a cota do endereço às outras');
 reset role;
+
+-- Expurgo: o registro global de um endereço convidado uma vez só sai depois
+-- das janelas da C10 (com margem de 2 dias), mesmo sem novo convite; a cota
+-- vigente da academia apagada fica.
+select is((select count(*)::int from cron.job where jobname = 'expurgar-convites-envios-diario'), 1,
+  'expurgo de convites_envios agendado no pg_cron');
+insert into public.convites_envios (email, reservado_em, enviado_em) values
+  ('velho@conv.test', now() - interval '3 days', now() - interval '3 days'),
+  ('velho@conv.test', now() - interval '2 days 1 hour', null);
+select public.expurgar_convites_envios(1);
+select is((select count(*) from public.convites_envios where email = 'velho@conv.test'), 0::bigint,
+  'expurgo apaga o registro antigo de um endereço sem novo convite (em lotes)');
+select is((select count(*) from public.convites_envios where email = 'apagada@conv.test'), 5::bigint,
+  'expurgo mantém a cota vigente, inclusive da academia apagada');
 
 select * from finish();
 rollback;

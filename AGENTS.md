@@ -164,6 +164,7 @@ Plano, status e slug da academia só mudam via `service_role` (billing do SaaS).
 | `anonimizar_aluno(aluno_id)`           | dono, admin  | LGPD: substitui o delete de aluno                          |
 | `criar_convite_interna(user_id, academia_id, email, papel)` | Edge Function `convidar-membro` (service_role) | convite da equipe por e-mail (dono convida até dono; admin, até admin), um pendente por e-mail e academia, 7 dias; devolve o estado da conta só para a função; limite de reenvio e diário |
 | `confirmar_envio_convite_interna(envio_id)` / `liberar_envio_convite_interna(envio_id)` | Edge Function `convidar-membro` (service_role) | confirma a reserva de envio quando o provedor aceita (o intervalo conta dali) ou a tira da cota quando ele recusa de vez |
+| `expurgar_convites_envios(lote?)` | job pg_cron (06:30 UTC) | apaga de `convites_envios` os registros fora das janelas da C10 (mais de 2 dias), em lotes |
 | `cancelar_convite(convite_id)` | dono, admin | cancela convite pendente (admin não cancela o de dono) |
 | `meus_convites()` / `aceitar_convite(convite_id)` / `recusar_convite(convite_id)` | logado | convites pendentes do e-mail confirmado do login; o aceite grava em `membros_academia` (novo, reativação ou troca do papel `aluno`) |
 | `equipe_da_academia(academia_id)` | dono, admin | membros da equipe com e-mail, sem o papel `aluno` |

@@ -954,3 +954,53 @@ revoke execute on function public.auth_exclusao_logica() from public, anon, auth
 create trigger auth_users_exclusao_logica
   before update of deleted_at on auth.users
   for each row execute function public.auth_exclusao_logica();
+
+-- =====================================================================
+-- 8. EXPURGO DE convites_envios
+-- =====================================================================
+-- O registro global só serve aos limites da C10: um envio confirmado conta
+-- 24 horas, e uma reserva sem resultado conta 24 horas e 4 minutos. Passado
+-- isso (com margem: 2 dias), o registro não tem mais função e sai, para o
+-- endereço não ficar guardado sem motivo, inclusive depois de a academia ser
+-- apagada. Roda todo dia pelo pg_cron, em lotes, e devolve quantos apagou.
+create or replace function public.expurgar_convites_envios(p_lote integer default 5000)
+returns integer
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_total integer := 0;
+  v_lote  integer;
+begin
+  loop
+    delete from public.convites_envios v
+     where v.id in (
+       select x.id from public.convites_envios x
+        where x.reservado_em < clock_timestamp() - interval '2 days'
+          and (x.enviado_em is null or x.enviado_em < clock_timestamp() - interval '2 days')
+        limit p_lote);
+    get diagnostics v_lote = row_count;
+    v_total := v_total + v_lote;
+    exit when v_lote < p_lote;
+  end loop;
+  return v_total;
+end
+$$;
+
+revoke execute on function public.expurgar_convites_envios(integer) from public, anon, authenticated;
+grant execute on function public.expurgar_convites_envios(integer) to service_role;
+
+-- Mesmo padrão de 20261028133441_agendar_gerar_cobrancas.sql: sem pg_cron
+-- (Postgres temporário de desenvolvimento), segue sem o job, com aviso.
+do $$
+begin
+  if exists (select 1 from pg_available_extensions where name = 'pg_cron') then
+    create extension if not exists pg_cron with schema pg_catalog;
+    perform cron.schedule('expurgar-convites-envios-diario', '30 6 * * *',
+                          'select public.expurgar_convites_envios()');
+  else
+    raise notice 'pg_cron indisponível neste banco: o job expurgar-convites-envios-diario não foi agendado';
+  end if;
+end
+$$;
