@@ -17,6 +17,8 @@
 --   L. o convite vence enquanto o aceite espera a trava: o aceite é recusado;
 --   M. o mesmo, esperando só a linha do membro (aluno): o aceite reconfere a
 --      validade e é recusado, sem mudar o papel.
+--   N. liberar um envio recusado pelo provedor (outra transação) devolve a
+--      cota e não muda nada do que a academia lê, nem o updated_at.
 -- A espera é provada pelo pid: s2 está bloqueada e s1 está entre os que a
 -- bloqueiam. As fixtures são gravadas e confirmadas por uma conexão própria,
 -- apagadas antes (se uma execução anterior parou no meio) e depois, pela
@@ -24,7 +26,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 create extension if not exists dblink with schema extensions;
-select plan(51);
+select plan(53);
 
 create function pg_temp.conexao(p_nome text) returns text language sql as $$
   select format('host=%s port=%s dbname=%s user=postgres password=postgres application_name=%s',
@@ -175,6 +177,12 @@ select extensions.dblink_exec('prep', $f$
      'e7d00000-0000-4000-8000-0000000000b2', now() + interval '7 days'),
     ('e7d00000-0000-4000-8000-0000000002ca', 'e7d00000-0000-4000-8000-00000000000b', 'u8@concorre.test', 'recepcao',
      'e7d00000-0000-4000-8000-0000000000b2', now() + interval '7 days');
+  insert into public.convites_equipe (id, academia_id, email, papel, convidado_por, expira_em,
+                                      ultimo_envio_em, envios_recentes, envio_real_em, envios_reais) values
+    ('e7d00000-0000-4000-8000-0000000002cb', 'e7d00000-0000-4000-8000-00000000000b', 'liberar@concorre.test', 'professor',
+     'e7d00000-0000-4000-8000-0000000000b2', now() + interval '7 days',
+     '2026-11-23 10:00:00+00', array['2026-11-23 10:00:00+00'::timestamptz],
+     '2026-11-23 10:00:00+00', array['2026-11-23 10:00:00+00'::timestamptz]);
 $f$);
 
 -- ---------------------------------------------------------------------
@@ -395,6 +403,22 @@ select matches(pg_temp.resultado_s2(), 'HINT: +convite_invalido', 'M: o convite 
 select is((select papel from public.membros_academia
            where academia_id = 'e7d00000-0000-4000-8000-00000000000b' and user_id = 'e7d00000-0000-4000-8000-0000000000d8'),
   'aluno', 'M: u8 continua só aluno');
+
+-- ---------------------------------------------------------------------
+-- N. s1, como a Edge Function, libera o envio de c11 (já confirmado antes).
+-- ---------------------------------------------------------------------
+create temp table antes_n as
+select to_jsonb(c) - 'envio_real_em' - 'envios_reais' as visivel
+from public.convites_equipe c where c.id = 'e7d00000-0000-4000-8000-0000000002cb';
+select pg_temp.como('s1', 'service_role');
+select extensions.dblink_exec('s1', $q$do $d$ begin perform public.liberar_envio_convite_interna(
+    'e7d00000-0000-4000-8000-0000000002cb', '2026-11-23 10:00:00+00'); end $d$$q$);
+select is((select cardinality(envios_reais) || '/' || coalesce(envio_real_em::text, '-')
+           from public.convites_equipe where id = 'e7d00000-0000-4000-8000-0000000002cb'),
+  '0/-', 'N: a liberação devolve a cota');
+select is((select to_jsonb(c) - 'envio_real_em' - 'envios_reais'
+           from public.convites_equipe c where c.id = 'e7d00000-0000-4000-8000-0000000002cb'),
+  (select visivel from antes_n), 'N: nada do que a academia lê mudou, nem o updated_at');
 
 -- ---------------------------------------------------------------------
 -- Limpeza.

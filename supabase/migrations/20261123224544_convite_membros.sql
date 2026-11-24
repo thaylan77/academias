@@ -66,9 +66,29 @@ create index convites_equipe_email_envio_idx
 create index convites_equipe_academia_envio_idx
   on public.convites_equipe (academia_id, ultimo_envio_em);
 
+-- updated_at, sem contar mudanças só nas colunas privadas de envio: a
+-- liberação de um envio que falhou não pode aparecer no que a academia lê.
+create or replace function public.convites_equipe_toca_updated_at()
+returns trigger
+language plpgsql
+set search_path = ''
+as $$
+begin
+  if (to_jsonb(new) - 'envio_real_em' - 'envios_reais' - 'updated_at')
+     is distinct from (to_jsonb(old) - 'envio_real_em' - 'envios_reais' - 'updated_at') then
+    new.updated_at := now();
+  else
+    new.updated_at := old.updated_at;
+  end if;
+  return new;
+end
+$$;
+
+revoke execute on function public.convites_equipe_toca_updated_at() from public, anon, authenticated;
+
 create trigger convites_equipe_updated_at
   before update on public.convites_equipe
-  for each row execute function public.set_updated_at();
+  for each row execute function public.convites_equipe_toca_updated_at();
 create trigger convites_equipe_academia_imutavel
   before update of academia_id on public.convites_equipe
   for each row execute function public.bloqueia_troca_academia();
