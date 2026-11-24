@@ -173,7 +173,26 @@ $$;
 
 revoke execute on function public.convite_email_do_login() from public, anon, authenticated;
 revoke execute on function public.convite_papel_ativo(uuid, uuid) from public, anon, authenticated;
+-- academia_ativa com o relógio de agora (clock_timestamp) no fuso da
+-- academia, para checagens feitas depois de esperar travas.
+create or replace function public.academia_ativa_agora(p_academia_id uuid)
+returns boolean
+language sql
+volatile
+security definer
+set search_path = ''
+as $$
+  select exists (
+    select 1
+    from public.academias a
+    where a.id = p_academia_id
+      and (a.status = 'ativa'
+           or (a.status = 'trial' and a.trial_ate >= (clock_timestamp() at time zone a.fuso)::date))
+  )
+$$;
+
 revoke execute on function public.convite_de_quem_pode(public.convites_equipe) from public, anon, authenticated;
+revoke execute on function public.academia_ativa_agora(uuid) from public, anon, authenticated;
 
 -- =====================================================================
 -- 3. CRIAR (Edge Function convidar-membro, com o user_id do JWT)
@@ -661,11 +680,7 @@ begin
   end if;
   v_papel_quem := public.convite_papel_ativo(v_conv.convidado_por, v_conv.academia_id);
 
-  -- 6. Academia suspensa não aceita (C6).
-  if not public.academia_ativa(v_conv.academia_id) then
-    raise exception 'A assinatura da academia está suspensa: o convite não pode ser aceito agora.'
-      using hint = 'academia_suspensa';
-  end if;
+  -- 6. A assinatura (C6) é conferida no fim, depois de todas as esperas.
 
   -- 7 a 9. O vínculo pode aparecer no meio do caminho (o portal grava o papel
   -- aluno sem a trava da academia): se o insert esbarrar nele, relê, trava e
@@ -715,6 +730,16 @@ begin
   if v_conv.expira_em <= clock_timestamp() then
     raise exception 'Convite não encontrado, vencido ou já respondido.'
       using hint = 'convite_invalido';
+  end if;
+
+  -- 6. Academia suspensa não aceita (C6). Conferida aqui, depois de todas as
+  --    esperas, com o relógio de agora no fuso da academia (academia_ativa
+  --    usa o now() do início da transação): um trial que vence durante a
+  --    espera não aceita. Uma mudança de status espera a trava da academia,
+  --    que este aceite segura. O erro desfaz a gravação do vínculo.
+  if not public.academia_ativa_agora(v_conv.academia_id) then
+    raise exception 'A assinatura da academia está suspensa: o convite não pode ser aceito agora.'
+      using hint = 'academia_suspensa';
   end if;
 
   update public.convites_equipe c

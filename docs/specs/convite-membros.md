@@ -179,7 +179,9 @@ quem não é o convidado:
    com o acesso de quem o fez: a revogação (desativar, rebaixar, apagar ou
    trocar o titular do vínculo) já cancela os convites pendentes que a
    pessoa não pode mais conceder, e recuperar o papel não os traz de volta.
-6. `academia_ativa` falha: `academia_suspensa`.
+6. `academia_ativa` falha: `academia_suspensa`. Na implementação, esta
+   checagem roda no fim, depois de todas as esperas, com o relógio de agora
+   no fuso da academia (um trial que vence durante a espera não aceita).
 7. Quem aceita já é membro ativo com papel diferente de `aluno`:
    `ja_membro`. Isso cobre quem foi reativado pela tela Equipe depois do
    convite.
