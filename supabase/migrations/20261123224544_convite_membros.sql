@@ -1037,3 +1037,17 @@ begin
   end if;
 end
 $$;
+
+-- =====================================================================
+-- 9. ENTRADA NA EQUIPE SÓ PELO CONVITE (decisão do dono do projeto)
+-- =====================================================================
+-- Antes, dono e admin podiam inserir direto em membros_academia qualquer
+-- user_id, inclusive de uma conta de outra academia, sem consentimento; com
+-- equipe_da_academia, isso exporia o e-mail dessa conta. Agora a entrada é
+-- só pelo aceite do convite (e por criar_academia, para o dono), e o update
+-- pela API mexe só em papel e ativo (trocar o titular do vínculo fica para
+-- o service_role). Trocar papel, desativar e remover continuam pelo RLS.
+revoke insert on public.membros_academia from anon, authenticated;
+revoke update on public.membros_academia from anon, authenticated;
+grant update (papel, ativo) on public.membros_academia to authenticated;
+drop policy if exists membros_insert on public.membros_academia;

@@ -4,7 +4,7 @@
 -- Academias A e B (ativas) e S (suspensa).
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(105);
+select plan(107);
 
 -- ---------------------------------------------------------------------
 -- Auxiliares
@@ -195,6 +195,10 @@ select ok(not has_table_privilege('authenticated', 'public.convites_equipe', 'IN
   'authenticated não escreve direto em convites_equipe');
 select ok(not has_function_privilege('authenticated', 'public.criar_convite_interna(uuid,uuid,text,text)', 'EXECUTE'),
   'authenticated não cria convite (só a Edge Function, com service_role)');
+select ok(not has_table_privilege('authenticated', 'public.membros_academia', 'INSERT')
+          and not has_column_privilege('authenticated', 'public.membros_academia', 'user_id', 'UPDATE')
+          and has_column_privilege('authenticated', 'public.membros_academia', 'papel', 'UPDATE'),
+  'entrada na equipe só pelo convite: sem insert direto nem troca de titular pela API');
 select ok(not has_table_privilege('authenticated', 'public.convites_envios', 'SELECT')
           and not has_table_privilege('anon', 'public.convites_envios', 'SELECT'),
   'ninguém lê os envios reais pela API (convites_envios)');
@@ -468,6 +472,9 @@ select is((select string_agg(email || ':' || papel || case when ativo then '' el
   'equipe_da_academia: membros e inativos, sem o papel aluno');
 select is(public.__hint_de($$select * from public.equipe_da_academia('e7c00000-0000-4000-8000-00000000000b')$$),
   'sem_permissao', 'admin de A não lista a equipe de B');
+select throws_ok($$insert into public.membros_academia (academia_id, user_id, papel)
+                   values ('e7c00000-0000-4000-8000-00000000000a', 'e7c00000-0000-4000-8000-0000000000b2', 'professor')$$,
+  '42501', null, 'admin de A não vincula direto uma conta de B (e não chega ao e-mail dela)');
 
 select public.__como('e7c00000-0000-4000-8000-0000000000a3');
 select is((select count(*) from public.convites_equipe), 0::bigint, 'professor não lê convites');

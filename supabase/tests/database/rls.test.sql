@@ -118,7 +118,7 @@ insert into casos_insert values
 ('presencas', $$insert into public.presencas (academia_id, aluno_id, turma_id, data) values (pg_temp.id('A'), pg_temp.id('aluno-A1'), pg_temp.id('turma-A'), public.hoje_academia(pg_temp.id('A')) - 2)$$, array['dono','admin','professor','recepcao']),
 ('graduacoes', $$insert into public.graduacoes (academia_id, aluno_id, faixa_id) values (pg_temp.id('A'), pg_temp.id('aluno-A1'), pg_temp.id('faixa-A'))$$, array['dono','admin','professor']),
 ('cobrancas', $$insert into public.cobrancas (academia_id, aluno_id, valor, vencimento) values (pg_temp.id('A'), pg_temp.id('aluno-A1'), 100, public.hoje_academia(pg_temp.id('A')))$$, array['dono','admin','recepcao']),
-('membros_academia', $$insert into public.membros_academia (academia_id, user_id, papel) values (pg_temp.id('A'), pg_temp.id('usuario-9'), 'professor')$$, array['dono','admin']);
+('membros_academia', $$insert into public.membros_academia (academia_id, user_id, papel) values (pg_temp.id('A'), pg_temp.id('usuario-9'), 'professor')$$, array[]::text[]);
 grant select on casos_insert to authenticated;
 
 -- RLS deve estar habilitado em todas as tabelas de negócio.

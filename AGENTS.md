@@ -132,6 +132,10 @@ no Auth (`deleted_at`) é proibida: o gatilho `auth_users_exclusao_logica`
 recusa para todos (`exclusao_logica_bloqueada`); conta se apaga de verdade,
 e o delete em cascata leva os vínculos.
 
+Entrada na equipe só pelo convite (`aceitar_convite`) ou por `criar_academia`:
+`authenticated` não insere em `membros_academia` e só atualiza `papel` e
+`ativo` (trocar o titular do vínculo é só para o `service_role`).
+
 **Única exceção** à regra "suspensa lê, mas não altera": `anonimizar_aluno`
 usa `tem_papel` (dono, admin) sem checar a assinatura, porque pedido de
 titular (LGPD) não depende de pagamento. Coberta por

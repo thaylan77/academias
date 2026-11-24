@@ -311,10 +311,11 @@ select is((select count(*) from public.membros_academia
   0::bigint, 'E: u3 não entrou na equipe');
 
 -- ---------------------------------------------------------------------
--- F. b2 passa o vínculo de admin de b4 para u5 em s1 (sem confirmar); u4
---    aceita em s2 o convite que b4 fez.
+-- F. O service_role (a API não troca mais o titular) passa o vínculo de
+--    admin de b4 para u5 em s1 (sem confirmar); u4 aceita em s2 o convite
+--    que b4 fez.
 -- ---------------------------------------------------------------------
-select pg_temp.como('s1', 'e7d00000-0000-4000-8000-0000000000b2');
+select pg_temp.como('s1', 'service_role');
 select pg_temp.como('s2', 'e7d00000-0000-4000-8000-0000000000d4');
 select ok(pg_temp.ninguem_esperando(), 'F: antes do envio, s2 não espera ninguém');
 select extensions.dblink_exec('s1', 'begin');
