@@ -260,7 +260,9 @@ aberta pelo link do convite: a `concluir-senha` grava
 `session_id` do JWT), e o aceite exige que a troca seja posterior ao login
 pelo link e tenha sido feita na mesma sessão, que precisa existir no Auth. O aceite também apaga as outras sessões da
 conta, e o vínculo só vale para tokens emitidos depois dele
-(`membros_academia.vale_a_partir`): o front renova a sessão depois do aceite.
+((`membros_academia.vale_a_partir`, o primeiro segundo inteiro depois do aceite,
+comparado com o `iat` inteiro do JWT): o front renova a sessão a partir desse
+segundo e, se o token novo ainda vier com `iat` menor, renova de novo.
 Isso protege contas criadas enquanto a confirmação de e-mail estava
 desligada (a senha antiga pode estar com outra pessoa). A
 `criar_convite_interna` recebe o `iat` do token que a Edge Function conferiu.

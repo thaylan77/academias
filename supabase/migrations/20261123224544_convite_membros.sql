@@ -898,14 +898,16 @@ begin
       end if;
       -- 9a. Reativação, ou troca do papel aluno pelo da equipe.
       update public.membros_academia m
-         set papel = v_conv.papel, ativo = true, vale_a_partir = clock_timestamp()
+         set papel = v_conv.papel, ativo = true,
+             vale_a_partir = date_trunc('second', clock_timestamp()) + interval '1 second'
        where m.academia_id = v_conv.academia_id and m.user_id = auth.uid();
       exit;
     end if;
 
     -- 9b. Membro novo. Se o vínculo apareceu agora, volta ao começo.
     insert into public.membros_academia (academia_id, user_id, papel, vale_a_partir)
-    values (v_conv.academia_id, auth.uid(), v_conv.papel, clock_timestamp())
+    values (v_conv.academia_id, auth.uid(), v_conv.papel,
+            date_trunc('second', clock_timestamp()) + interval '1 second')
     on conflict (academia_id, user_id) do nothing;
     exit when found;
   end loop;
@@ -929,8 +931,9 @@ begin
   end if;
 
   -- As outras sessões da conta saem (a de quem aceitou fica). O vínculo só
-  -- vale para tokens emitidos daqui em diante (vale_a_partir): o front
-  -- renova a sessão depois do aceite.
+  -- vale para tokens emitidos daqui em diante: vale_a_partir é o primeiro
+  -- segundo inteiro depois do aceite (o iat do JWT é inteiro), e o front
+  -- renova a sessão a partir dele.
   delete from auth.sessions s
    where s.user_id = auth.uid()
      and s.id is distinct from nullif(nullif(current_setting('request.jwt.claims', true), '')::jsonb ->> 'session_id', '')::uuid;

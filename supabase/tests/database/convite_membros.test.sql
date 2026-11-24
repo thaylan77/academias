@@ -4,7 +4,7 @@
 -- Academias A e B (ativas) e S (suspensa).
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(120);
+select plan(122);
 
 -- ---------------------------------------------------------------------
 -- Auxiliares
@@ -231,6 +231,12 @@ language sql security definer set search_path = '' as $$
                    from public.membros_academia where academia_id = p_acad::uuid and user_id = p_user::uuid), '-')
 $$;
 grant execute on function public.__conv(text, text), public.__membro(text, text) to authenticated, service_role;
+create function public.__vale(p_acad uuid, p_user uuid) returns bigint
+language sql security definer set search_path = '' as $$
+  select extract(epoch from m.vale_a_partir)::bigint from public.membros_academia m
+   where m.academia_id = p_acad and m.user_id = p_user
+$$;
+grant execute on function public.__vale(uuid, uuid) to authenticated;
 create function public.__sessoes(p_user uuid) returns text
 language sql security definer set search_path = '' as $$
   select string_agg(s.id::text, ',' order by s.id) from auth.sessions s where s.user_id = p_user
@@ -608,6 +614,16 @@ select is(public.__sessoes('e7c00000-0000-4000-8000-0000000000d1'),
 select public.__como_token('e7c00000-0000-4000-8000-0000000000d1', 0, 'e7c00000-0000-4000-8000-0000000000d1');
 select is(public.__hint_de($$select * from public.equipe_da_academia('e7c00000-0000-4000-8000-00000000000a')$$),
   'sem_permissao', 'token emitido antes do aceite não usa o vínculo novo');
+select public.__como_token('e7c00000-0000-4000-8000-0000000000d1',
+  public.__vale('e7c00000-0000-4000-8000-00000000000a', 'e7c00000-0000-4000-8000-0000000000d1') - 1,
+  'e7c00000-0000-4000-8000-0000000000d1');
+select is(public.__hint_de($ * from public.equipe_da_academia('e7c00000-0000-4000-8000-00000000000a')$$),
+  'sem_permissao', 'token emitido no mesmo segundo do aceite não usa o vínculo');
+select public.__como_token('e7c00000-0000-4000-8000-0000000000d1',
+  public.__vale('e7c00000-0000-4000-8000-00000000000a', 'e7c00000-0000-4000-8000-0000000000d1'),
+  'e7c00000-0000-4000-8000-0000000000d1');
+select ok((select count(*) from public.equipe_da_academia('e7c00000-0000-4000-8000-00000000000a')) > 0,
+  'o primeiro token elegível (iat = vale_a_partir) usa o vínculo');
 select public.__como_token('e7c00000-0000-4000-8000-0000000000d1', floor(extract(epoch from clock_timestamp()))::bigint + 10,
                             'e7c00000-0000-4000-8000-0000000005a2');
 select is(public.__hint_de($$select * from public.equipe_da_academia('e7c00000-0000-4000-8000-00000000000a')$$),
