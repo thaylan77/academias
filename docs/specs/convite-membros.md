@@ -247,8 +247,8 @@ A entrada é `{ academia_id, email, papel }`, com o JWT de quem convida.
    libera. Cada reserva bloqueia o endereço por 6 minutos, então o envio
    aceito fica sempre a mais de 60 segundos do próximo, não importa quando a
    confirmação chegue. Se a função cair antes de saber o resultado, a reserva
-   bloqueia por 6 minutos e conta na janela de 24 horas (lado seguro contra
-   spam).
+   bloqueia por 6 minutos e conta no teto de 5 por 24 horas mais o prazo de
+   despacho (lado seguro contra spam).
 
 Reenviar é chamar a mesma função com o mesmo e-mail (C9 e C10). No
 reenvio, a conta criada pelo primeiro convite aparece como `nao_confirmada`

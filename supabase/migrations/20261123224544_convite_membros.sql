@@ -345,11 +345,16 @@ begin
              or exists (select 1 from unnest(c.envios_reservados) as r
                         where r > v_agora - interval '6 minutes'))
     )
+    -- Envio confirmado conta 24 horas do horário real. Reserva sem resultado
+    -- conta 24 horas mais o prazo de despacho (4 minutos): o e-mail pode ter
+    -- saído até 4 minutos depois dela.
     or (select count(*)
         from public.convites_equipe c
         cross join lateral unnest(c.envios_reais) as e(enviado_em)
         where c.email = v_email
-          and e.enviado_em > v_agora - interval '24 hours') >= 5
+          and e.enviado_em > v_agora - case when e.enviado_em = any (c.envios_reservados)
+                                            then interval '24 hours 4 minutes'
+                                            else interval '24 hours' end) >= 5
   );
 
   -- 7. Limite da academia (C10): convites criados ou com envio nas últimas
@@ -382,12 +387,12 @@ begin
              order by e) || v_agora,
            envios_reservados = case when v_enviar then array(
              select r from unnest(c.envios_reservados) as r
-             where r > v_agora - interval '24 hours'
+             where r > v_agora - interval '24 hours 4 minutes'
              order by r) || v_agora
              else c.envios_reservados end,
            envios_reais = case when v_enviar then array(
              select e from unnest(c.envios_reais) as e
-             where e > v_agora - interval '24 hours'
+             where e > v_agora - interval '24 hours 4 minutes'
              order by e) || v_agora
              else c.envios_reais end
      where c.id = v_pendente.id;

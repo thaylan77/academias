@@ -4,7 +4,7 @@
 -- Academias A e B (ativas) e S (suspensa).
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(96);
+select plan(97);
 
 -- ---------------------------------------------------------------------
 -- Auxiliares
@@ -364,6 +364,22 @@ set local role service_role;
 select public.__como_servico();
 select is(public.__cc('e7c00000-0000-4000-8000-0000000000f1', 'e7c00000-0000-4000-8000-00000000000d', 'seis@conv.test', 'professor') ->> 'enviar',
   'false', 'reserva de 5 min 30 s ainda bloqueia o endereço (o bloqueio é de 6 minutos)');
+
+-- Reserva sem resultado conta 24 horas mais o prazo de despacho: com quatro
+-- envios confirmados e uma reserva de 24 h 2 min, o endereço já tem cinco.
+select public.__cc('e7c00000-0000-4000-8000-0000000000a1', 'e7c00000-0000-4000-8000-00000000000a', 'janela@conv.test', 'professor');
+reset role;
+update public.convites_equipe
+   set envios_reservados = array[now() - interval '24 hours 2 minutes'],
+       envios_reais = array[now() - interval '24 hours 2 minutes', now() - interval '4 hours', now() - interval '3 hours',
+                            now() - interval '2 hours', now() - interval '1 hour'],
+       envio_real_em = now() - interval '1 hour',
+       ultimo_envio_em = now() - interval '1 hour', envios_recentes = array[now() - interval '1 hour']
+ where email = 'janela@conv.test';
+set local role service_role;
+select public.__como_servico();
+select is(public.__cc('e7c00000-0000-4000-8000-0000000000f1', 'e7c00000-0000-4000-8000-00000000000d', 'janela@conv.test', 'professor') ->> 'enviar',
+  'false', 'reserva sem resultado de 24 h 2 min ainda conta no teto de 5');
 
 -- Resultado tardio de uma reserva antiga, depois de um reenvio do mesmo
 -- convite: cada reserva é confirmada ou liberada pela própria identidade.
