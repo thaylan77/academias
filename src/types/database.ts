@@ -649,6 +649,9 @@ isOneToOne: false
 "liberar_emissao_interna":
 { Args: { "p_cobranca_id": string,"p_recusa": string,"p_tentativa": string }; Returns: undefined
                            },
+"liberar_envio_convite_interna":
+{ Args: { "p_convite_id": string,"p_enviado_em": string }; Returns: undefined
+                           },
 "matricula_online":
 { Args: { "p_dados": Json,"p_slug": string }; Returns: string
                            },
