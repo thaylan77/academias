@@ -273,7 +273,7 @@ update public.convites_equipe
    set ultimo_envio_em = now() - interval '7 minutes',
        envios_recentes = array[now() - interval '23 hours 50 minutes', now() - interval '10 minutes',
                                now() - interval '9 minutes', now() - interval '8 minutes', now() - interval '7 minutes']
- where email = 'ciclo@conv.test';
+ where email = 'ciclo@conv.test' and academia_id = 'e7c00000-0000-4000-8000-00000000000a';
 set local role service_role;
 select public.__como_servico();
 select is(public.__hint_de($$select public.__cc('e7c00000-0000-4000-8000-0000000000a1', 'e7c00000-0000-4000-8000-00000000000a', 'ciclo@conv.test', 'professor')$$),
@@ -290,7 +290,7 @@ update public.convites_equipe
    set ultimo_envio_em = now() - interval '3 minutes',
        envios_recentes = array[now() - interval '25 hours', now() - interval '25 hours', now() - interval '25 hours',
                                now() - interval '25 hours', now() - interval '3 minutes']
- where email = 'ciclo@conv.test';
+ where email = 'ciclo@conv.test' and academia_id = 'e7c00000-0000-4000-8000-00000000000a';
 set local role service_role;
 select public.__como_servico();
 select is(public.__cc('e7c00000-0000-4000-8000-0000000000a1', 'e7c00000-0000-4000-8000-00000000000a', 'ciclo@conv.test', 'professor') ->> 'conta',
