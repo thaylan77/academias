@@ -230,7 +230,7 @@ select ok(not has_table_privilege('authenticated', 'public.convites_equipe', 'IN
           and not has_table_privilege('authenticated', 'public.convites_equipe', 'UPDATE')
           and not has_table_privilege('authenticated', 'public.convites_equipe', 'DELETE'),
   'authenticated não escreve direto em convites_equipe');
-select ok(not has_function_privilege('authenticated', 'public.criar_convite_interna(uuid,uuid,text,text)', 'EXECUTE'),
+select ok(not has_function_privilege('authenticated', 'public.criar_convite_interna(uuid,uuid,text,text,bigint)', 'EXECUTE'),
   'authenticated não cria convite (só a Edge Function, com service_role)');
 select ok(not has_table_privilege('authenticated', 'public.membros_academia', 'INSERT')
           and not has_column_privilege('authenticated', 'public.membros_academia', 'user_id', 'UPDATE')
