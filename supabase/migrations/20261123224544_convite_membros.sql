@@ -512,6 +512,13 @@ begin
   where m.academia_id = v_conv.academia_id and m.user_id = auth.uid()
   for update;
 
+  -- A linha do membro pode ter ficado travada por outra transação: o convite
+  -- pode ter vencido nessa espera.
+  if v_conv.expira_em <= clock_timestamp() then
+    raise exception 'Convite não encontrado, vencido ou já respondido.'
+      using hint = 'convite_invalido';
+  end if;
+
   if v_membro.user_id is not null then
     -- 7. Já está na academia como equipe (inclusive reativado depois do
     --    convite) ou como totem.

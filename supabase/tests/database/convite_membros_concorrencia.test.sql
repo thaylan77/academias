@@ -14,7 +14,9 @@
 --      espera a trava do e-mail e esbarra nos 60 segundos.
 --   K. um convite espera a trava da academia: o horário registrado do envio
 --      é o de depois da espera, não o do início da transação;
---   L. o convite vence enquanto o aceite espera a trava: o aceite é recusado.
+--   L. o convite vence enquanto o aceite espera a trava: o aceite é recusado;
+--   M. o mesmo, esperando só a linha do membro (aluno): o aceite reconfere a
+--      validade e é recusado, sem mudar o papel.
 -- A espera é provada pelo pid: s2 está bloqueada e s1 está entre os que a
 -- bloqueiam. As fixtures são gravadas e confirmadas por uma conexão própria,
 -- apagadas antes (se uma execução anterior parou no meio) e depois, pela
@@ -22,7 +24,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 create extension if not exists dblink with schema extensions;
-select plan(47);
+select plan(51);
 
 create function pg_temp.conexao(p_nome text) returns text language sql as $$
   select format('host=%s port=%s dbname=%s user=postgres password=postgres application_name=%s',
@@ -107,6 +109,7 @@ begin
       'e7d00000-0000-4000-8000-0000000000d5', 'e7d00000-0000-4000-8000-0000000000d6',
       'e7d00000-0000-4000-8000-0000000000b5', 'e7d00000-0000-4000-8000-0000000000d7',
       'e7d00000-0000-4000-8000-0000000000b6', 'e7d00000-0000-4000-8000-0000000000b7',
+      'e7d00000-0000-4000-8000-0000000000d8',
       'e7d00000-0000-4000-8000-0000000000d1', 'e7d00000-0000-4000-8000-0000000000d2');
   $f$);
 end
@@ -138,7 +141,8 @@ select extensions.dblink_exec('prep', $f$
     ('e7d00000-0000-4000-8000-0000000000b5', 'admin5@concorre.test', now()),
     ('e7d00000-0000-4000-8000-0000000000d7', 'u7@concorre.test',    now()),
     ('e7d00000-0000-4000-8000-0000000000b6', 'dono6@concorre.test',  now()),
-    ('e7d00000-0000-4000-8000-0000000000b7', 'admin7@concorre.test', now());
+    ('e7d00000-0000-4000-8000-0000000000b7', 'admin7@concorre.test', now()),
+    ('e7d00000-0000-4000-8000-0000000000d8', 'u8@concorre.test',    now());
   insert into public.academias (id, nome, slug, status) values
     ('e7d00000-0000-4000-8000-00000000000a', 'Concorre K', 'convite-concorre-k', 'ativa'),
     ('e7d00000-0000-4000-8000-00000000000b', 'Concorre L', 'convite-concorre-l', 'ativa'),
@@ -152,7 +156,8 @@ select extensions.dblink_exec('prep', $f$
     ('e7d00000-0000-4000-8000-00000000000b', 'e7d00000-0000-4000-8000-0000000000b4', 'admin'),
     ('e7d00000-0000-4000-8000-00000000000b', 'e7d00000-0000-4000-8000-0000000000b5', 'admin'),
     ('e7d00000-0000-4000-8000-00000000000c', 'e7d00000-0000-4000-8000-0000000000b6', 'dono'),
-    ('e7d00000-0000-4000-8000-00000000000c', 'e7d00000-0000-4000-8000-0000000000b7', 'admin');
+    ('e7d00000-0000-4000-8000-00000000000c', 'e7d00000-0000-4000-8000-0000000000b7', 'admin'),
+    ('e7d00000-0000-4000-8000-00000000000b', 'e7d00000-0000-4000-8000-0000000000d8', 'aluno');
   insert into public.convites_equipe (id, academia_id, email, papel, convidado_por, expira_em) values
     ('e7d00000-0000-4000-8000-0000000002c1', 'e7d00000-0000-4000-8000-00000000000a', 'u1@concorre.test', 'professor',
      'e7d00000-0000-4000-8000-0000000000a1', now() + interval '7 days'),
@@ -167,6 +172,8 @@ select extensions.dblink_exec('prep', $f$
     ('e7d00000-0000-4000-8000-0000000002c8', 'e7d00000-0000-4000-8000-00000000000b', 'u7@concorre.test', 'professor',
      'e7d00000-0000-4000-8000-0000000000b5', now() + interval '7 days'),
     ('e7d00000-0000-4000-8000-0000000002c9', 'e7d00000-0000-4000-8000-00000000000b', 'u2@concorre.test', 'recepcao',
+     'e7d00000-0000-4000-8000-0000000000b2', now() + interval '7 days'),
+    ('e7d00000-0000-4000-8000-0000000002ca', 'e7d00000-0000-4000-8000-00000000000b', 'u8@concorre.test', 'recepcao',
      'e7d00000-0000-4000-8000-0000000000b2', now() + interval '7 days');
 $f$);
 
@@ -365,6 +372,27 @@ select matches(pg_temp.resultado_s2(), 'HINT: +convite_invalido', 'L: o convite 
 select is((select count(*) from public.membros_academia
            where academia_id = 'e7d00000-0000-4000-8000-00000000000b' and user_id = 'e7d00000-0000-4000-8000-0000000000d2'),
   0::bigint, 'L: u2 não entrou na equipe de L');
+
+-- ---------------------------------------------------------------------
+-- M. O convite c10 (de b2 para u8, que é aluno em L) passa a vencer em 2 s;
+--    s1 trava só a linha de membro de u8; u8 aceita em s2 e espera; o
+--    convite vence; s1 confirma.
+-- ---------------------------------------------------------------------
+select extensions.dblink_exec('prep', $$update public.convites_equipe set expira_em = clock_timestamp() + interval '2 seconds'
+  where id = 'e7d00000-0000-4000-8000-0000000002ca'$$);
+select pg_temp.como('s2', 'e7d00000-0000-4000-8000-0000000000d8');
+select extensions.dblink_exec('s1', 'begin');
+select extensions.dblink_exec('s1', $$update public.membros_academia set ativo = ativo
+  where academia_id = 'e7d00000-0000-4000-8000-00000000000b' and user_id = 'e7d00000-0000-4000-8000-0000000000d8'$$);
+select is(extensions.dblink_send_query('s2', $$select public.aceitar_convite('e7d00000-0000-4000-8000-0000000002ca')$$),
+  1, 'M: s2 envia o aceite antes do vencimento');
+select ok(pg_temp.s2_espera_s1(), 'M: o aceite espera só a linha do membro');
+select pg_sleep(2.5);
+select extensions.dblink_exec('s1', 'commit');
+select matches(pg_temp.resultado_s2(), 'HINT: +convite_invalido', 'M: o convite venceu durante a espera: o aceite é recusado');
+select is((select papel from public.membros_academia
+           where academia_id = 'e7d00000-0000-4000-8000-00000000000b' and user_id = 'e7d00000-0000-4000-8000-0000000000d8'),
+  'aluno', 'M: u8 continua só aluno');
 
 -- ---------------------------------------------------------------------
 -- Limpeza.
