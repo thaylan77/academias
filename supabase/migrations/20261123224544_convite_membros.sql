@@ -709,6 +709,14 @@ begin
     exit when found;
   end loop;
 
+  -- O insert pode ter esperado a chave de um vínculo que depois foi desfeito:
+  -- confere a validade de novo antes de marcar o aceite (o erro desfaz a
+  -- gravação do vínculo).
+  if v_conv.expira_em <= clock_timestamp() then
+    raise exception 'Convite não encontrado, vencido ou já respondido.'
+      using hint = 'convite_invalido';
+  end if;
+
   update public.convites_equipe c
      set status = 'aceito', aceito_por = auth.uid(), aceito_em = now()
    where c.id = v_conv.id;

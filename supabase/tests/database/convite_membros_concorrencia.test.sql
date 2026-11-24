@@ -20,7 +20,9 @@
 --   N. liberar um envio recusado pelo provedor (outra transação) devolve a
 --      cota e não muda nada do que a academia lê, nem o updated_at.
 --   O. o portal grava o vínculo de aluno enquanto o aceite está no meio: o
---      aceite espera, relê o vínculo e troca o papel, sem erro de chave.
+--      aceite espera, relê o vínculo e troca o papel, sem erro de chave;
+--   P. o mesmo, mas o convite vence na espera e o portal desfaz o vínculo:
+--      o aceite é recusado, sem vínculo e com o convite pendente.
 -- A espera é provada pelo pid: s2 está bloqueada e s1 está entre os que a
 -- bloqueiam. As fixtures são gravadas e confirmadas por uma conexão própria,
 -- apagadas antes (se uma execução anterior parou no meio) e depois, pela
@@ -28,7 +30,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 create extension if not exists dblink with schema extensions;
-select plan(58);
+select plan(63);
 
 create function pg_temp.conexao(p_nome text) returns text language sql as $$
   select format('host=%s port=%s dbname=%s user=postgres password=postgres application_name=%s',
@@ -114,6 +116,7 @@ begin
       'e7d00000-0000-4000-8000-0000000000b5', 'e7d00000-0000-4000-8000-0000000000d7',
       'e7d00000-0000-4000-8000-0000000000b6', 'e7d00000-0000-4000-8000-0000000000b7',
       'e7d00000-0000-4000-8000-0000000000d8', 'e7d00000-0000-4000-8000-0000000000d9',
+      'e7d00000-0000-4000-8000-0000000000da',
       'e7d00000-0000-4000-8000-0000000000d1', 'e7d00000-0000-4000-8000-0000000000d2');
   $f$);
 end
@@ -147,7 +150,8 @@ select extensions.dblink_exec('prep', $f$
     ('e7d00000-0000-4000-8000-0000000000b6', 'dono6@concorre.test',  now()),
     ('e7d00000-0000-4000-8000-0000000000b7', 'admin7@concorre.test', now()),
     ('e7d00000-0000-4000-8000-0000000000d8', 'u8@concorre.test',    now()),
-    ('e7d00000-0000-4000-8000-0000000000d9', 'u9@concorre.test',    now());
+    ('e7d00000-0000-4000-8000-0000000000d9', 'u9@concorre.test',    now()),
+    ('e7d00000-0000-4000-8000-0000000000da', 'u10@concorre.test',   now());
   insert into public.academias (id, nome, slug, status) values
     ('e7d00000-0000-4000-8000-00000000000a', 'Concorre K', 'convite-concorre-k', 'ativa'),
     ('e7d00000-0000-4000-8000-00000000000b', 'Concorre L', 'convite-concorre-l', 'ativa'),
@@ -188,6 +192,8 @@ select extensions.dblink_exec('prep', $f$
      array['2026-11-23 10:00:00+00'::timestamptz], array['2026-11-23 10:00:00+00'::timestamptz]);
   insert into public.convites_equipe (id, academia_id, email, papel, convidado_por, expira_em) values
     ('e7d00000-0000-4000-8000-0000000002cc', 'e7d00000-0000-4000-8000-00000000000b', 'u9@concorre.test', 'recepcao',
+     'e7d00000-0000-4000-8000-0000000000b2', now() + interval '7 days'),
+    ('e7d00000-0000-4000-8000-0000000002cd', 'e7d00000-0000-4000-8000-00000000000b', 'u10@concorre.test', 'recepcao',
      'e7d00000-0000-4000-8000-0000000000b2', now() + interval '7 days');
 $f$);
 
@@ -449,6 +455,29 @@ select is(pg_temp.resultado_s2(), 'ok', 'O: o aceite passa, sem erro de chave du
 select is((select papel from public.membros_academia
            where academia_id = 'e7d00000-0000-4000-8000-00000000000b' and user_id = 'e7d00000-0000-4000-8000-0000000000d9'),
   'recepcao', 'O: o vínculo de aluno virou recepção');
+
+-- ---------------------------------------------------------------------
+-- P. O convite c13 (de b2 para u10) passa a vencer em 2 s; s1 grava (sem
+--    confirmar) o vínculo de aluno de u10; u10 aceita em s2 e espera na
+--    chave; o convite vence; s1 desfaz.
+-- ---------------------------------------------------------------------
+select extensions.dblink_exec('prep', $$update public.convites_equipe set expira_em = clock_timestamp() + interval '2 seconds'
+  where id = 'e7d00000-0000-4000-8000-0000000002cd'$$);
+select pg_temp.como('s2', 'e7d00000-0000-4000-8000-0000000000da');
+select extensions.dblink_exec('s1', 'begin');
+select extensions.dblink_exec('s1', $$insert into public.membros_academia (academia_id, user_id, papel)
+  values ('e7d00000-0000-4000-8000-00000000000b', 'e7d00000-0000-4000-8000-0000000000da', 'aluno')$$);
+select is(extensions.dblink_send_query('s2', $$select public.aceitar_convite('e7d00000-0000-4000-8000-0000000002cd')$$),
+  1, 'P: s2 envia o aceite antes do vencimento');
+select ok(pg_temp.s2_espera_s1(), 'P: o aceite espera a chave do vínculo em gravação');
+select pg_sleep(2.5);
+select extensions.dblink_exec('s1', 'rollback');
+select matches(pg_temp.resultado_s2(), 'HINT: +convite_invalido', 'P: o convite venceu na espera: o aceite é recusado');
+select is((select count(*) from public.membros_academia
+           where academia_id = 'e7d00000-0000-4000-8000-00000000000b' and user_id = 'e7d00000-0000-4000-8000-0000000000da'),
+  0::bigint, 'P: nenhum vínculo ficou gravado');
+select is((select status from public.convites_equipe where id = 'e7d00000-0000-4000-8000-0000000002cd'),
+  'pendente', 'P: o convite continua pendente (vencido)');
 
 -- ---------------------------------------------------------------------
 -- Limpeza.
