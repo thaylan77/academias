@@ -517,6 +517,9 @@ isOneToOne: false
             "academia_ativa":
 { Args: { "p_academia_id": string }; Returns: boolean
                            },
+"academia_ativa_agora":
+{ Args: { "p_academia_id": string }; Returns: boolean
+                           },
 "academia_publica":
 { Args: { "p_slug": string }; Returns: Json
                            },
