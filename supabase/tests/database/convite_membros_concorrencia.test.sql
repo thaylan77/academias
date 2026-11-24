@@ -29,6 +29,9 @@
 --      confirmada.
 --   T. o Auth (sessão supabase_auth_admin, sem JWT) apagando contas: o
 --      último dono não sai; o admin que convidou sai, e o convite dele morre.
+--   U. um dono promove um professor a dono pela API, a promoção espera a
+--      linha do professor e, nesse meio, o autor é revogado: a promoção é
+--      recusada.
 -- A espera é provada pelo pid: s2 está bloqueada e s1 está entre os que a
 -- bloqueiam. As fixtures são gravadas e confirmadas por uma conexão própria,
 -- apagadas antes (se uma execução anterior parou no meio) e depois, pela
@@ -36,7 +39,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 create extension if not exists dblink with schema extensions;
-select plan(76);
+select plan(80);
 
 create function pg_temp.conexao(p_nome text) returns text language sql as $$
   select format('host=%s port=%s dbname=%s user=postgres password=postgres application_name=%s',
@@ -113,7 +116,7 @@ create function pg_temp.limpa() returns void language plpgsql as $$
 begin
   perform extensions.dblink_exec('prep', $f$
     delete from public.convites_envios where email like '%@concorre.test';
-    delete from public.academias where id in ('e7d00000-0000-4000-8000-00000000000a', 'e7d00000-0000-4000-8000-00000000000b', 'e7d00000-0000-4000-8000-00000000000c', 'e7d00000-0000-4000-8000-00000000000d');
+    delete from public.academias where id in ('e7d00000-0000-4000-8000-00000000000a', 'e7d00000-0000-4000-8000-00000000000b', 'e7d00000-0000-4000-8000-00000000000c', 'e7d00000-0000-4000-8000-00000000000d', 'e7d00000-0000-4000-8000-00000000000e');
     delete from auth.users where id in (
       'e7d00000-0000-4000-8000-0000000000a1', 'e7d00000-0000-4000-8000-0000000000a2',
       'e7d00000-0000-4000-8000-0000000000b1', 'e7d00000-0000-4000-8000-0000000000b2',
@@ -125,6 +128,8 @@ begin
       'e7d00000-0000-4000-8000-0000000000d8', 'e7d00000-0000-4000-8000-0000000000d9',
       'e7d00000-0000-4000-8000-0000000000da', 'e7d00000-0000-4000-8000-0000000000b8',
       'e7d00000-0000-4000-8000-0000000000b9', 'e7d00000-0000-4000-8000-0000000000db',
+      'e7d00000-0000-4000-8000-0000000000bc', 'e7d00000-0000-4000-8000-0000000000bd',
+      'e7d00000-0000-4000-8000-0000000000dd',
       'e7d00000-0000-4000-8000-0000000000d1', 'e7d00000-0000-4000-8000-0000000000d2');
   $f$);
 end
@@ -162,12 +167,16 @@ select extensions.dblink_exec('prep', $f$
     ('e7d00000-0000-4000-8000-0000000000da', 'u10@concorre.test',   now()),
     ('e7d00000-0000-4000-8000-0000000000b8', 'dono8@concorre.test',  now()),
     ('e7d00000-0000-4000-8000-0000000000b9', 'admin9@concorre.test', now()),
-    ('e7d00000-0000-4000-8000-0000000000db', 'u11@concorre.test',   now());
+    ('e7d00000-0000-4000-8000-0000000000db', 'u11@concorre.test',   now()),
+    ('e7d00000-0000-4000-8000-0000000000bc', 'dono12@concorre.test', now()),
+    ('e7d00000-0000-4000-8000-0000000000bd', 'dono13@concorre.test', now()),
+    ('e7d00000-0000-4000-8000-0000000000dd', 'u12@concorre.test',   now());
   insert into public.academias (id, nome, slug, status) values
     ('e7d00000-0000-4000-8000-00000000000a', 'Concorre K', 'convite-concorre-k', 'ativa'),
     ('e7d00000-0000-4000-8000-00000000000b', 'Concorre L', 'convite-concorre-l', 'ativa'),
     ('e7d00000-0000-4000-8000-00000000000c', 'Concorre M', 'convite-concorre-m', 'ativa'),
-    ('e7d00000-0000-4000-8000-00000000000d', 'Concorre N', 'convite-concorre-n', 'ativa');
+    ('e7d00000-0000-4000-8000-00000000000d', 'Concorre N', 'convite-concorre-n', 'ativa'),
+    ('e7d00000-0000-4000-8000-00000000000e', 'Concorre O', 'convite-concorre-o', 'ativa');
   insert into public.membros_academia (academia_id, user_id, papel) values
     ('e7d00000-0000-4000-8000-00000000000a', 'e7d00000-0000-4000-8000-0000000000a1', 'dono'),
     ('e7d00000-0000-4000-8000-00000000000a', 'e7d00000-0000-4000-8000-0000000000a2', 'dono'),
@@ -180,7 +189,10 @@ select extensions.dblink_exec('prep', $f$
     ('e7d00000-0000-4000-8000-00000000000c', 'e7d00000-0000-4000-8000-0000000000b7', 'admin'),
     ('e7d00000-0000-4000-8000-00000000000b', 'e7d00000-0000-4000-8000-0000000000d8', 'aluno'),
     ('e7d00000-0000-4000-8000-00000000000d', 'e7d00000-0000-4000-8000-0000000000b8', 'dono'),
-    ('e7d00000-0000-4000-8000-00000000000d', 'e7d00000-0000-4000-8000-0000000000b9', 'admin');
+    ('e7d00000-0000-4000-8000-00000000000d', 'e7d00000-0000-4000-8000-0000000000b9', 'admin'),
+    ('e7d00000-0000-4000-8000-00000000000e', 'e7d00000-0000-4000-8000-0000000000bc', 'dono'),
+    ('e7d00000-0000-4000-8000-00000000000e', 'e7d00000-0000-4000-8000-0000000000bd', 'dono'),
+    ('e7d00000-0000-4000-8000-00000000000e', 'e7d00000-0000-4000-8000-0000000000dd', 'professor');
   insert into public.convites_equipe (id, academia_id, email, papel, convidado_por, expira_em) values
     ('e7d00000-0000-4000-8000-0000000002c1', 'e7d00000-0000-4000-8000-00000000000a', 'u1@concorre.test', 'professor',
      'e7d00000-0000-4000-8000-0000000000a1', now() + interval '7 days'),
@@ -568,6 +580,28 @@ select pg_temp.como('s2', 'e7d00000-0000-4000-8000-0000000000db');
 select extensions.dblink_send_query('s2', $$select public.aceitar_convite('e7d00000-0000-4000-8000-0000000002ce')$$);
 select matches(pg_temp.resultado_s2(), 'HINT: +convite_invalido', 'T: o convite do admin apagado não pode mais ser aceito');
 select extensions.dblink_disconnect('auth');
+
+-- ---------------------------------------------------------------------
+-- U. s1 (administrativa) segura a linha do professor u12; o dono b12 o
+--    promove a dono em s2 e espera; prep revoga b12; s1 confirma.
+-- ---------------------------------------------------------------------
+select extensions.dblink_exec('s1', 'reset role');
+select extensions.dblink_exec('s1', $q$set request.jwt.claim.sub = ''; set request.jwt.claim.role = ''; set request.jwt.claims = ''$q$);
+select pg_temp.como('s2', 'e7d00000-0000-4000-8000-0000000000bc');
+select extensions.dblink_exec('s1', 'begin');
+select extensions.dblink_exec('s1', $$update public.membros_academia set ativo = ativo
+  where academia_id = 'e7d00000-0000-4000-8000-00000000000e' and user_id = 'e7d00000-0000-4000-8000-0000000000dd'$$);
+select is(extensions.dblink_send_query('s2', $$update public.membros_academia set papel = 'dono'
+  where academia_id = 'e7d00000-0000-4000-8000-00000000000e' and user_id = 'e7d00000-0000-4000-8000-0000000000dd'$$),
+  1, 'U: s2 envia a promoção');
+select ok(pg_temp.s2_espera_s1(), 'U: a promoção espera a linha do professor');
+select extensions.dblink_exec('prep', $$update public.membros_academia set ativo = false
+  where academia_id = 'e7d00000-0000-4000-8000-00000000000e' and user_id = 'e7d00000-0000-4000-8000-0000000000bc'$$);
+select extensions.dblink_exec('s1', 'commit');
+select matches(pg_temp.resultado_s2(), 'HINT: +sem_permissao', 'U: o autor foi revogado no meio: a promoção é recusada');
+select is((select papel from public.membros_academia
+           where academia_id = 'e7d00000-0000-4000-8000-00000000000e' and user_id = 'e7d00000-0000-4000-8000-0000000000dd'),
+  'professor', 'U: o professor não virou dono');
 
 -- ---------------------------------------------------------------------
 -- Limpeza.

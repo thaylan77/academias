@@ -136,7 +136,8 @@ Entrada na equipe só pelo convite (`aceitar_convite`) ou por `criar_academia`:
 `authenticated` não insere em `membros_academia` e só atualiza `papel` e
 `ativo` (trocar o titular do vínculo é só para o `service_role`). Nenhum
 update pela API leva um vínculo de aluno ou totem para a equipe (gatilho
-`membros_academia_sem_atalho`).
+`membros_academia_sem_atalho`). Toda alteração direta de um vínculo pela API
+trava a academia e reconfere o papel e a assinatura de quem altera.
 
 **Única exceção** à regra "suspensa lê, mas não altera": `anonimizar_aluno`
 usa `tem_papel` (dono, admin) sem checar a assinatura, porque pedido de

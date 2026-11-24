@@ -1052,29 +1052,74 @@ revoke update on public.membros_academia from anon, authenticated;
 grant update (papel, ativo) on public.membros_academia to authenticated;
 drop policy if exists membros_insert on public.membros_academia;
 
+-- Alteração direta de um vínculo pela API (update de papel ou ativo, ou
+-- delete): trava a academia e relê, com o relógio de agora, se quem altera
+-- ainda pode (dono ou admin ativo, assinatura em dia; dono se o vínculo é ou
+-- vira dono). O RLS decidiu com o snapshot do comando; uma revogação
+-- concorrente do autor, que trava a mesma academia, fica serializada.
+create or replace function public.membros_reconfere_autor(p_academia_id uuid, p_papel_antes text, p_papel_depois text)
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_papel text;
+begin
+  perform public.convite_exige_read_committed();
+  -- Antes de travar: quem não é dono nem admin da academia sai aqui (não
+  -- trava academia alheia).
+  if public.convite_papel_ativo(auth.uid(), p_academia_id) is null then
+    raise exception 'Você não tem mais permissão para alterar esta equipe.'
+      using hint = 'sem_permissao';
+  end if;
+  perform 1 from public.academias a where a.id = p_academia_id for no key update;
+  v_papel := public.convite_papel_ativo(auth.uid(), p_academia_id);
+  if v_papel is null
+     or ((p_papel_antes = 'dono' or p_papel_depois = 'dono') and v_papel <> 'dono') then
+    raise exception 'Você não tem mais permissão para alterar esta equipe.'
+      using hint = 'sem_permissao';
+  end if;
+  if not public.academia_ativa_agora(p_academia_id) then
+    raise exception 'A assinatura da academia está suspensa: não é possível alterar a equipe.'
+      using hint = 'academia_suspensa';
+  end if;
+end
+$$;
+
+revoke execute on function public.membros_reconfere_autor(uuid, text, text) from public, anon;
+-- O gatilho security invoker chama com o papel de quem altera.
+grant execute on function public.membros_reconfere_autor(uuid, text, text) to authenticated;
+
 -- Pela API, nenhum update leva um vínculo de aluno ou totem para a equipe (ou
--- o contrário): isso só acontece pelo aceite do convite. O gatilho é security
--- invoker de propósito: current_user é quem chama. Numa atualização direta
--- pela API é authenticated; dentro de aceitar_convite (security definer) é o
--- dono da função, e a troca passa.
+-- o contrário): isso só acontece pelo aceite do convite. E toda alteração
+-- direta reconfere o autor (acima). O gatilho é security invoker de
+-- propósito: current_user é quem chama. Numa alteração direta pela API é
+-- authenticated; dentro de uma função security definer (aceitar_convite, por
+-- exemplo) é o dono da função, e não passa por aqui.
 create or replace function public.membros_sem_atalho_para_equipe()
 returns trigger
 language plpgsql
 set search_path = ''
 as $$
 begin
-  if current_user in ('authenticated', 'anon')
+  if current_user not in ('authenticated', 'anon') then
+    return coalesce(new, old);
+  end if;
+  if tg_op = 'UPDATE'
      and new.papel is distinct from old.papel
      and (old.papel in ('aluno', 'totem') or new.papel in ('aluno', 'totem')) then
     raise exception 'Para entrar na equipe, a pessoa precisa aceitar um convite.'
       using hint = 'sem_permissao';
   end if;
-  return new;
+  perform public.membros_reconfere_autor(old.academia_id, old.papel,
+                                         case when tg_op = 'UPDATE' then new.papel else old.papel end);
+  return coalesce(new, old);
 end
 $$;
 
 revoke execute on function public.membros_sem_atalho_para_equipe() from public, anon, authenticated;
 
 create trigger membros_academia_sem_atalho
-  before update of papel on public.membros_academia
+  before update or delete on public.membros_academia
   for each row execute function public.membros_sem_atalho_para_equipe();
