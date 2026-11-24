@@ -28,7 +28,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 create extension if not exists dblink with schema extensions;
-select plan(57);
+select plan(58);
 
 create function pg_temp.conexao(p_nome text) returns text language sql as $$
   select format('host=%s port=%s dbname=%s user=postgres password=postgres application_name=%s',
@@ -439,6 +439,11 @@ select extensions.dblink_exec('s1', $$insert into public.membros_academia (acade
 select is(extensions.dblink_send_query('s2', $$select public.aceitar_convite('e7d00000-0000-4000-8000-0000000002cc')$$),
   1, 'O: s2 envia o aceite');
 select ok(pg_temp.s2_espera_s1(), 'O: o aceite espera o vínculo em gravação');
+select ok(exists (select 1 from pg_locks l
+                  where l.pid = (select s2 from pids)
+                    and l.relation = 'public.membros_academia'::regclass
+                    and l.mode = 'RowExclusiveLock' and l.granted),
+  'O: a espera é na chave do vínculo (o aceite já chegou ao insert), não na academia');
 select extensions.dblink_exec('s1', 'commit');
 select is(pg_temp.resultado_s2(), 'ok', 'O: o aceite passa, sem erro de chave duplicada');
 select is((select papel from public.membros_academia

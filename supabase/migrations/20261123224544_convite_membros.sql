@@ -7,9 +7,11 @@
 --    recusar_convite e equipe_da_academia.
 -- 3. Gatilho do último dono em membros_academia.
 --
--- Ordem das travas nas funções: primeiro a linha da academia, depois a do
--- convite e a do membro. Assim criar, aceitar e o gatilho do último dono se
--- serializam por academia. Papel e assinatura são relidos depois da trava.
+-- Ordem das travas nas funções: primeiro a linha da academia (for no key
+-- update: exclui as outras funções de convite e as revogações, mas não
+-- bloqueia a checagem de FK de quem grava um vínculo com a academia), depois
+-- a do convite e a do membro. Assim criar, aceitar e o gatilho do último
+-- dono se serializam por academia. Papel e assinatura são relidos depois da trava.
 -- Nenhuma função trava a academia de outro tenant: antes da trava, uma
 -- consulta sem trava confere se quem chama tem motivo para mexer nela.
 --
@@ -221,7 +223,7 @@ begin
   end if;
 
   -- 3. Trava a academia e relê papel e assinatura.
-  perform 1 from public.academias a where a.id = p_academia_id for update;
+  perform 1 from public.academias a where a.id = p_academia_id for no key update;
   v_papel_eu := public.convite_papel_ativo(p_user_id, p_academia_id);
   if v_papel_eu is null then
     raise exception 'Só o dono ou um admin da academia convida para a equipe.'
@@ -431,7 +433,7 @@ begin
   end if;
 
   -- Mesma ordem de travas de criar_convite_interna.
-  perform 1 from public.academias a where a.id = v_academia for update;
+  perform 1 from public.academias a where a.id = v_academia for no key update;
   perform pg_advisory_xact_lock(hashtextextended('convite_email:' || v_email, 0));
   v_agora := clock_timestamp();
 
@@ -464,7 +466,7 @@ begin
   end if;
 
   -- Mesma ordem de travas de criar_convite_interna.
-  perform 1 from public.academias a where a.id = v_academia for update;
+  perform 1 from public.academias a where a.id = v_academia for no key update;
   perform pg_advisory_xact_lock(hashtextextended('convite_email:' || v_email, 0));
 
   update public.convites_equipe c
@@ -501,7 +503,7 @@ begin
   end if;
 
   -- Trava e relê.
-  perform 1 from public.academias a where a.id = v_academia for update;
+  perform 1 from public.academias a where a.id = v_academia for no key update;
   select c.* into v_conv from public.convites_equipe c where c.id = p_convite_id for update;
   v_papel_eu := public.convite_papel_ativo(auth.uid(), v_academia);
   if v_conv.id is null or v_papel_eu is null then
@@ -604,7 +606,7 @@ begin
   where c.id = p_convite_id and c.email = v_email and c.status = 'pendente';
 
   if v_academia is not null then
-    perform 1 from public.academias a where a.id = v_academia for update;
+    perform 1 from public.academias a where a.id = v_academia for no key update;
     select c.* into v_conv from public.convites_equipe c where c.id = p_convite_id for update;
     -- Trava a própria conta (uma troca de e-mail no Auth espera o aceite) e
     -- relê e-mail e senha: podem ter mudado enquanto esperava as travas.
@@ -849,7 +851,7 @@ begin
 
   -- Trava a academia: a revogação espera o aceite em andamento, e o aceite
   -- que vier depois já vê quem convidou sem o acesso.
-  perform 1 from public.academias a where a.id = old.academia_id for update;
+  perform 1 from public.academias a where a.id = old.academia_id for no key update;
   if not found then
     return coalesce(new, old);  -- academia sendo apagada (cascata)
   end if;
