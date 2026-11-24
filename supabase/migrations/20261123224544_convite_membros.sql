@@ -830,7 +830,7 @@ begin
   from public.membros_academia m
   join auth.users u on u.id = m.user_id
   where m.academia_id = p_academia_id
-    and m.papel in ('dono', 'admin', 'professor', 'recepcao')
+    and m.papel in ('dono', 'admin', 'professor', 'recepcao', 'totem')
   order by m.ativo desc, m.papel, u.email;
 end
 $$;
@@ -1051,3 +1051,30 @@ revoke insert on public.membros_academia from anon, authenticated;
 revoke update on public.membros_academia from anon, authenticated;
 grant update (papel, ativo) on public.membros_academia to authenticated;
 drop policy if exists membros_insert on public.membros_academia;
+
+-- Pela API, nenhum update leva um vínculo de aluno ou totem para a equipe (ou
+-- o contrário): isso só acontece pelo aceite do convite. O gatilho é security
+-- invoker de propósito: current_user é quem chama. Numa atualização direta
+-- pela API é authenticated; dentro de aceitar_convite (security definer) é o
+-- dono da função, e a troca passa.
+create or replace function public.membros_sem_atalho_para_equipe()
+returns trigger
+language plpgsql
+set search_path = ''
+as $$
+begin
+  if current_user in ('authenticated', 'anon')
+     and new.papel is distinct from old.papel
+     and (old.papel in ('aluno', 'totem') or new.papel in ('aluno', 'totem')) then
+    raise exception 'Para entrar na equipe, a pessoa precisa aceitar um convite.'
+      using hint = 'sem_permissao';
+  end if;
+  return new;
+end
+$$;
+
+revoke execute on function public.membros_sem_atalho_para_equipe() from public, anon, authenticated;
+
+create trigger membros_academia_sem_atalho
+  before update of papel on public.membros_academia
+  for each row execute function public.membros_sem_atalho_para_equipe();

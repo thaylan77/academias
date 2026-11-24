@@ -134,7 +134,9 @@ e o delete em cascata leva os vínculos.
 
 Entrada na equipe só pelo convite (`aceitar_convite`) ou por `criar_academia`:
 `authenticated` não insere em `membros_academia` e só atualiza `papel` e
-`ativo` (trocar o titular do vínculo é só para o `service_role`).
+`ativo` (trocar o titular do vínculo é só para o `service_role`). Nenhum
+update pela API leva um vínculo de aluno ou totem para a equipe (gatilho
+`membros_academia_sem_atalho`).
 
 **Única exceção** à regra "suspensa lê, mas não altera": `anonimizar_aluno`
 usa `tem_papel` (dono, admin) sem checar a assinatura, porque pedido de
@@ -171,7 +173,7 @@ Plano, status e slug da academia só mudam via `service_role` (billing do SaaS).
 | `expurgar_convites_envios(lote?)` | job pg_cron (06:30 UTC) | apaga de `convites_envios` os registros fora das janelas da C10 (mais de 3 dias), em lotes |
 | `cancelar_convite(convite_id)` | dono, admin | cancela convite pendente (admin não cancela o de dono) |
 | `meus_convites()` / `aceitar_convite(convite_id)` / `recusar_convite(convite_id)` | logado | convites pendentes do e-mail confirmado do login; o aceite grava em `membros_academia` (novo, reativação ou troca do papel `aluno`) |
-| `equipe_da_academia(academia_id)` | dono, admin | membros da equipe com e-mail, sem o papel `aluno` |
+| `equipe_da_academia(academia_id)` | dono, admin | membros da equipe e o totem, com e-mail, sem o papel `aluno` |
 | `registrar_graduacao(academia_id, dados)` | dono, admin, professor | graduação com data no dia da academia (nunca no futuro) e grau dentro da faixa |
 | `vw_graduacao_atual`                   | equipe/aluno | faixa e grau atuais por modalidade                         |
 | `vw_progresso_graduacao`               | equipe/aluno | aulas e meses desde a última graduação, campo `apto`       |

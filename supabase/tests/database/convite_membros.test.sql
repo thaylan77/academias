@@ -4,7 +4,7 @@
 -- Academias A e B (ativas) e S (suspensa).
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(107);
+select plan(110);
 
 -- ---------------------------------------------------------------------
 -- Auxiliares
@@ -126,6 +126,7 @@ insert into auth.users (id, email, email_confirmed_at, raw_app_meta_data) values
   ('e7c00000-0000-4000-8000-0000000000da', 'quemapagou@conv.test', now(), '{}'),
   ('e7c00000-0000-4000-8000-0000000000f1', 'dono-x@conv.test',     now(), '{}'),
   ('e7c00000-0000-4000-8000-0000000000f2', 'dono-y@conv.test',     now(), '{}'),
+  ('e7c00000-0000-4000-8000-0000000000dc', 'aluno2@conv.test',     now(), '{}'),
   ('e7c00000-0000-4000-8000-0000000000e1', 'totem-a@conv.test',    now(), '{}');
 
 insert into public.academias (id, nome, slug, status) values
@@ -145,6 +146,7 @@ insert into public.membros_academia (academia_id, user_id, papel, ativo) values
   ('e7c00000-0000-4000-8000-00000000000a', 'e7c00000-0000-4000-8000-0000000000a8', 'professor', false),
   ('e7c00000-0000-4000-8000-00000000000a', 'e7c00000-0000-4000-8000-0000000000d4', 'aluno',     true),
   ('e7c00000-0000-4000-8000-00000000000a', 'e7c00000-0000-4000-8000-0000000000e1', 'totem',     true),
+  ('e7c00000-0000-4000-8000-00000000000a', 'e7c00000-0000-4000-8000-0000000000dc', 'aluno',     true),
   ('e7c00000-0000-4000-8000-00000000000b', 'e7c00000-0000-4000-8000-0000000000b1', 'dono',      true),
   ('e7c00000-0000-4000-8000-00000000000b', 'e7c00000-0000-4000-8000-0000000000b2', 'admin',     true),
   ('e7c00000-0000-4000-8000-00000000000c', 'e7c00000-0000-4000-8000-0000000000c1', 'dono',      true),
@@ -444,6 +446,7 @@ select is(public.__hint_de($$select public.__cc('e7c00000-0000-4000-8000-0000000
 -- Convites usados mais adiante.
 select public.__cc('e7c00000-0000-4000-8000-0000000000a1', 'e7c00000-0000-4000-8000-00000000000a', 'senha@conv.test',    'professor');
 select public.__cc('e7c00000-0000-4000-8000-0000000000a1', 'e7c00000-0000-4000-8000-00000000000a', 'aluno@conv.test',    'recepcao');
+select public.__cc('e7c00000-0000-4000-8000-0000000000a1', 'e7c00000-0000-4000-8000-00000000000a', 'aluno2@conv.test',   'professor');
 select public.__cc('e7c00000-0000-4000-8000-0000000000a2', 'e7c00000-0000-4000-8000-00000000000a', 'inativo-a@conv.test','professor');
 select public.__cc('e7c00000-0000-4000-8000-0000000000a2', 'e7c00000-0000-4000-8000-00000000000a', 'inativo2-a@conv.test','recepcao');
 select public.__cc('e7c00000-0000-4000-8000-0000000000a1', 'e7c00000-0000-4000-8000-00000000000a', 'vencido@conv.test',  'professor');
@@ -468,10 +471,18 @@ select throws_ok($$update public.convites_equipe set papel = 'admin'$$, '42501',
   'update direto em convites_equipe: permissão negada');
 select is((select string_agg(email || ':' || papel || case when ativo then '' else '-' end, ',' order by email collate "C")
            from public.equipe_da_academia('e7c00000-0000-4000-8000-00000000000a')),
-  'admin-a@conv.test:admin,admin2-a@conv.test:admin,dono-a@conv.test:dono,exdono-a@conv.test:dono-,inativo-a@conv.test:professor-,inativo2-a@conv.test:professor-,prof-a@conv.test:professor,recep-a@conv.test:recepcao',
-  'equipe_da_academia: membros e inativos, sem o papel aluno');
+  'admin-a@conv.test:admin,admin2-a@conv.test:admin,dono-a@conv.test:dono,exdono-a@conv.test:dono-,inativo-a@conv.test:professor-,inativo2-a@conv.test:professor-,prof-a@conv.test:professor,recep-a@conv.test:recepcao,totem-a@conv.test:totem',
+  'equipe_da_academia: membros, inativos e o totem, sem o papel aluno');
 select is(public.__hint_de($$select * from public.equipe_da_academia('e7c00000-0000-4000-8000-00000000000b')$$),
   'sem_permissao', 'admin de A não lista a equipe de B');
+select is(public.__hint_de($$update public.membros_academia set papel = 'professor'
+                             where academia_id = 'e7c00000-0000-4000-8000-00000000000a' and user_id = 'e7c00000-0000-4000-8000-0000000000dc'$$),
+  'sem_permissao', 'admin não promove um aluno direto para a equipe');
+select public.__como('e7c00000-0000-4000-8000-0000000000a1');
+select is(public.__hint_de($$update public.membros_academia set papel = 'admin'
+                             where academia_id = 'e7c00000-0000-4000-8000-00000000000a' and user_id = 'e7c00000-0000-4000-8000-0000000000e1'$$),
+  'sem_permissao', 'dono não leva o totem direto para a equipe');
+select public.__como('e7c00000-0000-4000-8000-0000000000a2');
 select throws_ok($$insert into public.membros_academia (academia_id, user_id, papel)
                    values ('e7c00000-0000-4000-8000-00000000000a', 'e7c00000-0000-4000-8000-0000000000b2', 'professor')$$,
   '42501', null, 'admin de A não vincula direto uma conta de B (e não chega ao e-mail dela)');
@@ -528,6 +539,10 @@ select public.aceitar_convite((public.__conv('e7c00000-0000-4000-8000-0000000000
 select is(public.__membro('e7c00000-0000-4000-8000-00000000000a', 'e7c00000-0000-4000-8000-0000000000d4'), 'recepcao',
   'C7: quem era só aluno passa para o papel da equipe');
 select ok(public.sou_o_aluno('e7c00000-0000-4000-8000-0000000001a1'), 'C7: e continua sendo o login do próprio cadastro de aluno');
+select public.__como('e7c00000-0000-4000-8000-0000000000dc');
+select public.aceitar_convite((public.__conv('e7c00000-0000-4000-8000-00000000000a', 'aluno2@conv.test')).id);
+select is(public.__membro('e7c00000-0000-4000-8000-00000000000a', 'e7c00000-0000-4000-8000-0000000000dc'), 'professor',
+  'o aluno que a gestão não podia promover direto entra pelo aceite do convite');
 
 select public.__como('e7c00000-0000-4000-8000-0000000000a5');
 select public.aceitar_convite((public.__conv('e7c00000-0000-4000-8000-00000000000a', 'inativo-a@conv.test')).id);
