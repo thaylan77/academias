@@ -113,6 +113,49 @@ alter table public.convites_envios enable row level security;
 revoke all on public.convites_envios from anon, authenticated;
 
 -- =====================================================================
+-- 1b. VÍNCULO SÓ PARA TOKENS NOVOS
+-- =====================================================================
+-- Uma conta criada enquanto a confirmação de e-mail estava desligada pode ter
+-- a senha nas mãos de outra pessoa. O aceite do convite exige senha nova na
+-- sessão aberta pelo link, apaga as outras sessões e grava vale_a_partir no
+-- vínculo: tokens emitidos antes disso (iat menor) não usam o vínculo, mesmo
+-- que ainda não tenham expirado. Vínculo sem vale_a_partir (os anteriores e os
+-- de criar_academia) vale para qualquer token.
+alter table public.membros_academia add column vale_a_partir timestamptz;
+
+-- iat do JWT da requisição (0 se não houver).
+create or replace function public.jwt_iat()
+returns bigint
+language sql
+stable
+set search_path = ''
+as $$
+  select coalesce((nullif(current_setting('request.jwt.claims', true), '')::jsonb ->> 'iat')::bigint, 0)
+$$;
+
+revoke execute on function public.jwt_iat() from public, anon;
+grant execute on function public.jwt_iat() to authenticated, service_role;
+
+create or replace function public.tem_papel(p_academia_id uuid, p_papeis text[] default null)
+returns boolean
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select exists (
+    select 1
+    from public.membros_academia m
+    where m.academia_id = p_academia_id
+      and m.user_id = auth.uid()
+      and m.ativo
+      and (m.vale_a_partir is null or public.jwt_iat() >= extract(epoch from m.vale_a_partir))
+      and case when p_papeis is null then m.papel <> 'totem'
+               else m.papel = any (p_papeis) end
+  );
+$$;
+
+-- =====================================================================
 -- 2. AUXILIARES (nenhuma é chamável pela API)
 -- =====================================================================
 
@@ -169,6 +212,39 @@ $$;
 
 revoke execute on function public.convite_email_do_login() from public, anon, authenticated;
 revoke execute on function public.convite_papel_ativo(uuid, uuid) from public, anon, authenticated;
+
+-- O mesmo, para quem altera com um token: o vínculo só vale se o token foi
+-- emitido depois de vale_a_partir (p_iat null conta como token antigo).
+create or replace function public.convite_papel_ativo_iat(p_user_id uuid, p_academia_id uuid, p_iat bigint)
+returns text
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select m.papel
+  from public.membros_academia m
+  join auth.users u on u.id = m.user_id
+  where m.academia_id = p_academia_id
+    and m.user_id = p_user_id
+    and m.ativo
+    and m.papel in ('dono', 'admin')
+    and u.deleted_at is null
+    and (m.vale_a_partir is null or coalesce(p_iat, 0) >= extract(epoch from m.vale_a_partir))
+$$;
+
+create or replace function public.convite_papel_ativo_sessao(p_academia_id uuid)
+returns text
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select public.convite_papel_ativo_iat(auth.uid(), p_academia_id, public.jwt_iat())
+$$;
+
+revoke execute on function public.convite_papel_ativo_iat(uuid, uuid, bigint) from public, anon, authenticated;
+revoke execute on function public.convite_papel_ativo_sessao(uuid) from public, anon, authenticated;
 -- academia_ativa com o relógio de agora (clock_timestamp) no fuso da
 -- academia, para checagens feitas depois de esperar travas.
 create or replace function public.academia_ativa_agora(p_academia_id uuid)
@@ -227,7 +303,8 @@ create or replace function public.criar_convite_interna(
   p_user_id     uuid,
   p_academia_id uuid,
   p_email       text,
-  p_papel       text
+  p_papel       text,
+  p_iat         bigint default null  -- iat do JWT que a Edge Function conferiu
 )
 returns jsonb
 language plpgsql
@@ -256,14 +333,14 @@ begin
   end if;
 
   -- 2. Antes de travar: quem não é dono nem admin da academia sai aqui.
-  if public.convite_papel_ativo(p_user_id, p_academia_id) is null then
+  if public.convite_papel_ativo_iat(p_user_id, p_academia_id, p_iat) is null then
     raise exception 'Só o dono ou um admin da academia convida para a equipe.'
       using hint = 'sem_permissao';
   end if;
 
   -- 3. Trava a academia e relê papel e assinatura.
   perform 1 from public.academias a where a.id = p_academia_id for no key update;
-  v_papel_eu := public.convite_papel_ativo(p_user_id, p_academia_id);
+  v_papel_eu := public.convite_papel_ativo_iat(p_user_id, p_academia_id, p_iat);
   if v_papel_eu is null then
     raise exception 'Só o dono ou um admin da academia convida para a equipe.'
       using hint = 'sem_permissao';
@@ -446,8 +523,8 @@ begin
 end
 $$;
 
-revoke execute on function public.criar_convite_interna(uuid, uuid, text, text) from public, anon, authenticated;
-grant execute on function public.criar_convite_interna(uuid, uuid, text, text) to service_role;
+revoke execute on function public.criar_convite_interna(uuid, uuid, text, text, bigint) from public, anon, authenticated;
+grant execute on function public.criar_convite_interna(uuid, uuid, text, text, bigint) to service_role;
 
 -- Contrato com a Edge Function para cada envio liberado (enviar = true), com
 -- o envio_id devolvido por criar_convite_interna (a reserva):
@@ -539,14 +616,14 @@ begin
   -- 1. Inexistente ou de academia que quem chama não gere: o mesmo código,
   --    e sem travar nada.
   select c.academia_id into v_academia from public.convites_equipe c where c.id = p_convite_id;
-  if v_academia is null or public.convite_papel_ativo(auth.uid(), v_academia) is null then
+  if v_academia is null or public.convite_papel_ativo_sessao(v_academia) is null then
     raise exception 'Convite não encontrado.' using hint = 'convite_invalido';
   end if;
 
   -- Trava e relê.
   perform 1 from public.academias a where a.id = v_academia for no key update;
   select c.* into v_conv from public.convites_equipe c where c.id = p_convite_id for update;
-  v_papel_eu := public.convite_papel_ativo(auth.uid(), v_academia);
+  v_papel_eu := public.convite_papel_ativo_sessao(v_academia);
   if v_conv.id is null or v_papel_eu is null then
     raise exception 'Convite não encontrado.' using hint = 'convite_invalido';
   end if;
@@ -625,6 +702,7 @@ set search_path = ''
 as $$
 declare
   v_email    text := public.convite_email_do_login();
+  v_link_em  bigint;
   v_academia uuid;
   v_conv     public.convites_equipe;
 begin
@@ -639,14 +717,26 @@ begin
   -- mágico, OTP, convite, recuperação ou confirmação de cadastro): só o
   -- e-mail confirmado não prova a posse se o Auth estiver configurado sem
   -- confirmação. O método vem do amr do JWT.
-  if p_exige_senha and not exists (
-    select 1
+  if p_exige_senha then
+    select max((a ->> 'timestamp')::bigint) into v_link_em
     from jsonb_array_elements(coalesce(nullif(current_setting('request.jwt.claims', true), '')::jsonb -> 'amr',
                                        '[]'::jsonb)) as a
-    where a ->> 'method' in ('otp', 'magiclink', 'invite', 'recovery', 'email/signup', 'email_change')
-  ) then
-    raise exception 'Abra o link enviado ao seu e-mail para aceitar o convite.'
-      using hint = 'convite_exige_link';
+    where a ->> 'method' in ('otp', 'magiclink', 'invite', 'recovery', 'email/signup', 'email_change');
+    if v_link_em is null then
+      raise exception 'Abra o link enviado ao seu e-mail para aceitar o convite.'
+        using hint = 'convite_exige_link';
+    end if;
+    -- Senha nova, definida nesta sessão aberta pelo link (a Edge Function
+    -- concluir-senha grava senha_redefinida_em): uma senha antiga pode estar
+    -- com outra pessoa.
+    if not exists (
+      select 1 from auth.users u
+      where u.id = auth.uid()
+        and (u.raw_app_meta_data ->> 'senha_redefinida_em')::bigint >= v_link_em
+    ) then
+      raise exception 'Defina uma senha nova antes de aceitar o convite.'
+        using hint = 'senha_pendente';
+    end if;
   end if;
 
   if p_exige_senha and exists (
@@ -750,14 +840,14 @@ begin
       end if;
       -- 9a. Reativação, ou troca do papel aluno pelo da equipe.
       update public.membros_academia m
-         set papel = v_conv.papel, ativo = true
+         set papel = v_conv.papel, ativo = true, vale_a_partir = clock_timestamp()
        where m.academia_id = v_conv.academia_id and m.user_id = auth.uid();
       exit;
     end if;
 
     -- 9b. Membro novo. Se o vínculo apareceu agora, volta ao começo.
-    insert into public.membros_academia (academia_id, user_id, papel)
-    values (v_conv.academia_id, auth.uid(), v_conv.papel)
+    insert into public.membros_academia (academia_id, user_id, papel, vale_a_partir)
+    values (v_conv.academia_id, auth.uid(), v_conv.papel, clock_timestamp())
     on conflict (academia_id, user_id) do nothing;
     exit when found;
   end loop;
@@ -779,6 +869,13 @@ begin
     raise exception 'A assinatura da academia está suspensa: o convite não pode ser aceito agora.'
       using hint = 'academia_suspensa';
   end if;
+
+  -- As outras sessões da conta saem (a de quem aceitou fica). O vínculo só
+  -- vale para tokens emitidos daqui em diante (vale_a_partir): o front
+  -- renova a sessão depois do aceite.
+  delete from auth.sessions s
+   where s.user_id = auth.uid()
+     and s.id is distinct from nullif(nullif(current_setting('request.jwt.claims', true), '')::jsonb ->> 'session_id', '')::uuid;
 
   update public.convites_equipe c
      set status = 'aceito', aceito_por = auth.uid(), aceito_em = now()
@@ -1083,12 +1180,12 @@ begin
   perform public.convite_exige_read_committed();
   -- Antes de travar: quem não é dono nem admin da academia sai aqui (não
   -- trava academia alheia).
-  if public.convite_papel_ativo(auth.uid(), p_academia_id) is null then
+  if public.convite_papel_ativo_sessao(p_academia_id) is null then
     raise exception 'Você não tem mais permissão para alterar esta equipe.'
       using errcode = '42501', hint = 'sem_permissao';
   end if;
   perform 1 from public.academias a where a.id = p_academia_id for no key update;
-  v_papel := public.convite_papel_ativo(auth.uid(), p_academia_id);
+  v_papel := public.convite_papel_ativo_sessao(p_academia_id);
   if v_papel is null
      or ((p_papel_antes = 'dono' or p_papel_depois = 'dono') and v_papel <> 'dono') then
     raise exception 'Você não tem mais permissão para alterar esta equipe.'

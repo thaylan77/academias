@@ -254,6 +254,16 @@ reenvio, a conta criada pelo primeiro convite aparece como `nao_confirmada`
 (ou `confirmada`, se a pessoa já clicou) e continua marcada para definir
 senha. A pessoa não fica sem senha.
 
+Para aceitar, toda conta (nova ou antiga) define uma senha nova na sessão
+aberta pelo link do convite: a `concluir-senha` grava
+`app_metadata.senha_redefinida_em` (epoch), e o aceite exige que ele seja
+posterior ao login pelo link. O aceite também apaga as outras sessões da
+conta, e o vínculo só vale para tokens emitidos depois dele
+(`membros_academia.vale_a_partir`): o front renova a sessão depois do aceite.
+Isso protege contas criadas enquanto a confirmação de e-mail estava
+desligada (a senha antiga pode estar com outra pessoa). A
+`criar_convite_interna` recebe o `iat` do token que a Edge Function conferiu.
+
 `app_metadata` só é gravado com `service_role`, então o usuário não
 consegue apagar a marca sozinho. Quem tira a marca é uma segunda Edge
 Function, `concluir-senha`: o painel a chama depois que

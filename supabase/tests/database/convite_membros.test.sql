@@ -4,7 +4,7 @@
 -- Academias A e B (ativas) e S (suspensa).
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(111);
+select plan(115);
 
 -- ---------------------------------------------------------------------
 -- Auxiliares
@@ -17,6 +17,21 @@ begin
   perform set_config('request.jwt.claim.sub', p_user, true);
   perform set_config('request.jwt.claim.role', 'authenticated', true);
   perform set_config('request.jwt.claims', json_build_object('sub', p_user, 'role', 'authenticated',
+    'iat', floor(extract(epoch from clock_timestamp()))::bigint + 1,
+    'amr', json_build_array(json_build_object('method', 'otp', 'timestamp', 0)))::text, true);
+end
+$$;
+
+-- Sessão aberta por link, com iat e session_id escolhidos.
+create function public.__como_token(p_user text, p_iat bigint, p_sessao text)
+returns void
+language plpgsql
+as $$
+begin
+  perform set_config('request.jwt.claim.sub', p_user, true);
+  perform set_config('request.jwt.claim.role', 'authenticated', true);
+  perform set_config('request.jwt.claims', json_build_object('sub', p_user, 'role', 'authenticated', 'iat', p_iat,
+    'session_id', p_sessao,
     'amr', json_build_array(json_build_object('method', 'otp', 'timestamp', 0)))::text, true);
 end
 $$;
@@ -109,7 +124,7 @@ as $$
   select public.criar_convite_interna(p_user::uuid, p_acad::uuid, p_email, p_papel)
 $$;
 
-grant execute on function public.__como(text), public.__como_senha(text), public.__como_servico(), public.__sem_jwt(),
+grant execute on function public.__como(text), public.__como_senha(text), public.__como_token(text, bigint, text), public.__como_servico(), public.__sem_jwt(),
   public.__hint_de(text), public.__passa_e_desfaz(text) to authenticated, service_role;
 grant execute on function public.__cc(text, text, text, text) to service_role;
 
@@ -141,7 +156,13 @@ insert into auth.users (id, email, email_confirmed_at, raw_app_meta_data) values
   ('e7c00000-0000-4000-8000-0000000000f1', 'dono-x@conv.test',     now(), '{}'),
   ('e7c00000-0000-4000-8000-0000000000f2', 'dono-y@conv.test',     now(), '{}'),
   ('e7c00000-0000-4000-8000-0000000000dc', 'aluno2@conv.test',     now(), '{}'),
+  ('e7c00000-0000-4000-8000-0000000000dd', 'semsenha@conv.test',   now(), '{}'),
   ('e7c00000-0000-4000-8000-0000000000e1', 'totem-a@conv.test',    now(), '{}');
+
+-- Senha nova já definida pela Edge Function concluir-senha (o aceite exige),
+-- menos para semsenha.
+update auth.users set raw_app_meta_data = raw_app_meta_data || '{"senha_redefinida_em": 1}'
+ where email like '%@conv.test' and email <> 'semsenha@conv.test';
 
 insert into public.academias (id, nome, slug, status) values
   ('e7c00000-0000-4000-8000-00000000000a', 'Convite A', 'convite-a', 'ativa'),
@@ -461,6 +482,7 @@ select is(public.__hint_de($$select public.__cc('e7c00000-0000-4000-8000-0000000
 select public.__cc('e7c00000-0000-4000-8000-0000000000a1', 'e7c00000-0000-4000-8000-00000000000a', 'senha@conv.test',    'professor');
 select public.__cc('e7c00000-0000-4000-8000-0000000000a1', 'e7c00000-0000-4000-8000-00000000000a', 'aluno@conv.test',    'recepcao');
 select public.__cc('e7c00000-0000-4000-8000-0000000000a1', 'e7c00000-0000-4000-8000-00000000000a', 'aluno2@conv.test',   'professor');
+select public.__cc('e7c00000-0000-4000-8000-0000000000a1', 'e7c00000-0000-4000-8000-00000000000a', 'semsenha@conv.test', 'professor');
 select public.__cc('e7c00000-0000-4000-8000-0000000000a2', 'e7c00000-0000-4000-8000-00000000000a', 'inativo-a@conv.test','professor');
 select public.__cc('e7c00000-0000-4000-8000-0000000000a2', 'e7c00000-0000-4000-8000-00000000000a', 'inativo2-a@conv.test','recepcao');
 select public.__cc('e7c00000-0000-4000-8000-0000000000a1', 'e7c00000-0000-4000-8000-00000000000a', 'vencido@conv.test',  'professor');
@@ -540,12 +562,28 @@ select is(public.__hint_de(format('select public.aceitar_convite(%L)', (public._
 select is(public.__hint_de($$select public.aceitar_convite('e7c00000-0000-4000-8000-00000000ffff')$$),
   'convite_invalido', 'convite inexistente: mesmo código');
 
+select public.__como('e7c00000-0000-4000-8000-0000000000dd');
+select is(public.__hint_de(format('select public.aceitar_convite(%L)', (public.__conv('e7c00000-0000-4000-8000-00000000000a', 'semsenha@conv.test')).id)),
+  'senha_pendente', 'sem senha nova definida depois do link, o aceite é recusado');
+reset role;
+insert into auth.sessions (id, user_id) values
+  ('e7c00000-0000-4000-8000-0000000005a1', 'e7c00000-0000-4000-8000-0000000000d1'),
+  ('e7c00000-0000-4000-8000-0000000005a2', 'e7c00000-0000-4000-8000-0000000000d1');
+set local role authenticated;
 select public.__como_senha('e7c00000-0000-4000-8000-0000000000d1');
 select is(public.__hint_de(format('select public.aceitar_convite(%L)', (public.__conv('e7c00000-0000-4000-8000-00000000000a', 'conf@conv.test')).id)),
   'convite_exige_link', 'sessão aberta só com senha não aceita: precisa do link enviado ao e-mail');
-select public.__como('e7c00000-0000-4000-8000-0000000000d1');
+select public.__como_token('e7c00000-0000-4000-8000-0000000000d1', floor(extract(epoch from clock_timestamp()))::bigint,
+                            'e7c00000-0000-4000-8000-0000000005a1');
 select is(public.aceitar_convite((public.__conv('e7c00000-0000-4000-8000-00000000000a', 'conf@conv.test')).id),
   'e7c00000-0000-4000-8000-00000000000a'::uuid, 'aceite devolve a academia');
+select is((select string_agg(id::text, ',') from auth.sessions where user_id = 'e7c00000-0000-4000-8000-0000000000d1'),
+  'e7c00000-0000-4000-8000-0000000005a1', 'o aceite apaga as outras sessões da conta e mantém a atual');
+select is(public.__hint_de($$select * from public.equipe_da_academia('e7c00000-0000-4000-8000-00000000000a')$$),
+  'sem_permissao', 'token emitido antes do aceite não usa o vínculo novo');
+select public.__como('e7c00000-0000-4000-8000-0000000000d1');
+select ok((select count(*) from public.equipe_da_academia('e7c00000-0000-4000-8000-00000000000a')) > 0,
+  'token novo, depois do aceite, usa o vínculo');
 select is(public.__membro('e7c00000-0000-4000-8000-00000000000a', 'e7c00000-0000-4000-8000-0000000000d1'), 'dono', 'o convidado virou dono');
 select is((public.__conv('e7c00000-0000-4000-8000-00000000000a', 'conf@conv.test')).status, 'aceito', 'convite marcado como aceito');
 select is(public.__hint_de(format('select public.aceitar_convite(%L)', (public.__conv('e7c00000-0000-4000-8000-00000000000a', 'conf@conv.test')).id)),

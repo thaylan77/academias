@@ -118,6 +118,8 @@ mostrar menos: o menu do painel esconde Matrículas do professor.
 Helpers SQL:
 - `tem_papel(academia_id, papeis[])`: leitura. Sem lista de papéis vale para
   qualquer membro, **menos o `totem`**, que só entra quando a lista o cita.
+  Vínculo com `vale_a_partir` (gravado no aceite do convite) só vale para
+  tokens emitidos depois dele (`iat` do JWT).
 - `pode_gerir(academia_id, papeis[])`: escrita; exige também assinatura do
   SaaS em dia. Academia suspensa ou com trial vencido lê, mas não altera.
 - `academia_ativa(academia_id)`: assinatura ativa ou trial válido.
