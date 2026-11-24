@@ -408,7 +408,7 @@ select is((select papel from public.membros_academia
 -- N. s1, como a Edge Function, libera o envio de c11 (já confirmado antes).
 -- ---------------------------------------------------------------------
 create temp table antes_n as
-select to_jsonb(c) - 'envio_real_em' - 'envios_reais' as visivel
+select to_jsonb(c) - 'envio_real_em' - 'envios_reais' - 'envio_reservado_em' as visivel
 from public.convites_equipe c where c.id = 'e7d00000-0000-4000-8000-0000000002cb';
 select pg_temp.como('s1', 'service_role');
 select extensions.dblink_exec('s1', $q$do $d$ begin perform public.liberar_envio_convite_interna(
@@ -416,7 +416,7 @@ select extensions.dblink_exec('s1', $q$do $d$ begin perform public.liberar_envio
 select is((select cardinality(envios_reais) || '/' || coalesce(envio_real_em::text, '-')
            from public.convites_equipe where id = 'e7d00000-0000-4000-8000-0000000002cb'),
   '0/-', 'N: a liberação devolve a cota');
-select is((select to_jsonb(c) - 'envio_real_em' - 'envios_reais'
+select is((select to_jsonb(c) - 'envio_real_em' - 'envios_reais' - 'envio_reservado_em'
            from public.convites_equipe c where c.id = 'e7d00000-0000-4000-8000-0000000002cb'),
   (select visivel from antes_n), 'N: nada do que a academia lê mudou, nem o updated_at');
 
