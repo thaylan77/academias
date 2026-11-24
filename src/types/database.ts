@@ -648,6 +648,9 @@ isOneToOne: false
               "ativo": boolean,"created_at": string,"email": string,"papel": string,"user_id": string
             }[]
                            },
+"expurgar_convites_envios":
+{ Args: { "p_lote"?: number }; Returns: number
+                           },
 "fazer_checkin":
 { Args: { "p_aluno_id"?: string,"p_token": string,"p_turma_id": string }; Returns: string
                            },
