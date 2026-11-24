@@ -736,6 +736,19 @@ begin
     return coalesce(new, old);  -- academia sendo apagada (cascata)
   end if;
 
+  -- Os convites pendentes que essa pessoa não pode mais conceder morrem de
+  -- vez: recuperar o papel depois não os ressuscita.
+  update public.convites_equipe c
+     set status = 'cancelado', encerrado_em = clock_timestamp()
+   where c.academia_id = old.academia_id
+     and c.convidado_por = old.user_id
+     and c.status = 'pendente'
+     and (tg_op = 'DELETE'
+          or not new.ativo
+          or new.user_id <> old.user_id
+          or new.papel not in ('dono', 'admin')
+          or (c.papel = 'dono' and new.papel <> 'dono'));
+
   if old.papel <> 'dono'
      or (tg_op = 'UPDATE' and new.papel = 'dono' and new.ativo and new.user_id = old.user_id) then
     return coalesce(new, old);

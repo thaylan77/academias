@@ -176,7 +176,9 @@ quem não é o convidado:
    `convite_invalido`. É um código só, para não revelar qual dos casos é.
 5. `convidado_por` nulo, ou que já não é dono ou admin ativo da academia,
    ou que é admin num convite `dono`: `convite_invalido`. O convite morre
-   com o acesso de quem o fez.
+   com o acesso de quem o fez: a revogação (desativar, rebaixar, apagar ou
+   trocar o titular do vínculo) já cancela os convites pendentes que a
+   pessoa não pode mais conceder, e recuperar o papel não os traz de volta.
 6. `academia_ativa` falha: `academia_suspensa`.
 7. Quem aceita já é membro ativo com papel diferente de `aluno`:
    `ja_membro`. Isso cobre quem foi reativado pela tela Equipe depois do

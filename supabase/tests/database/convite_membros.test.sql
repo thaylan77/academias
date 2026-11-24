@@ -4,7 +4,7 @@
 -- Academias A e B (ativas) e S (suspensa).
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(83);
+select plan(86);
 
 -- ---------------------------------------------------------------------
 -- Auxiliares
@@ -436,6 +436,14 @@ update public.membros_academia set ativo = true
 select public.__como('e7c00000-0000-4000-8000-0000000000d8');
 select is(public.__hint_de(format('select public.aceitar_convite(%L)', (public.__conv('e7c00000-0000-4000-8000-00000000000a', 'saiu@conv.test')).id)),
   'convite_invalido', 'quem convidou perdeu o acesso: o convite morre');
+select is((public.__conv('e7c00000-0000-4000-8000-00000000000a', 'saiu@conv.test')).status, 'cancelado',
+  'a revogação de quem convidou cancela o convite pendente');
+select public.__como('e7c00000-0000-4000-8000-0000000000a1');
+update public.membros_academia set ativo = true
+ where academia_id = 'e7c00000-0000-4000-8000-00000000000a' and user_id = 'e7c00000-0000-4000-8000-0000000000a7';
+select public.__como('e7c00000-0000-4000-8000-0000000000d8');
+select is(public.__hint_de(format('select public.aceitar_convite(%L)', (public.__conv('e7c00000-0000-4000-8000-00000000000a', 'saiu@conv.test')).id)),
+  'convite_invalido', 'quem convidou voltou a ser admin: o convite antigo continua morto');
 select public.__como('e7c00000-0000-4000-8000-0000000000a8');
 select is(public.__hint_de(format('select public.aceitar_convite(%L)', (public.__conv('e7c00000-0000-4000-8000-00000000000a', 'inativo2-a@conv.test')).id)),
   'ja_membro', 'C7: reativado pela tela depois do convite: ja_membro no aceite');
@@ -505,7 +513,19 @@ select is(public.__hint_de($$delete from public.membros_academia
 select is(public.__hint_de($$select public.__apaga_membro_definer('e7c00000-0000-4000-8000-00000000000b', 'e7c00000-0000-4000-8000-0000000000b1')$$),
   'ultimo_dono', 'função security definer chamada pela API também não fura a trava');
 
--- A tem dois donos ativos (dono-a e conf): um pode sair; o outro, não.
+-- conf (dono) convida um dono; rebaixado a admin pelo outro dono, o convite
+-- de dono dele morre.
+reset role;
+insert into public.convites_equipe (academia_id, email, papel, convidado_por, expira_em) values
+  ('e7c00000-0000-4000-8000-00000000000a', 'demov@conv.test', 'dono', 'e7c00000-0000-4000-8000-0000000000d1', now() + interval '7 days');
+set local role authenticated;
+select public.__como('e7c00000-0000-4000-8000-0000000000a1');
+update public.membros_academia set papel = 'admin'
+ where academia_id = 'e7c00000-0000-4000-8000-00000000000a' and user_id = 'e7c00000-0000-4000-8000-0000000000d1';
+select is((public.__conv('e7c00000-0000-4000-8000-00000000000a', 'demov@conv.test')).status, 'cancelado',
+  'dono rebaixado a admin: o convite de dono que ele fez é cancelado');
+
+-- A tem dono-a e conf (agora admin): conf pode sair; dono-a, não.
 select public.__como('e7c00000-0000-4000-8000-0000000000d1');
 delete from public.membros_academia
  where academia_id = 'e7c00000-0000-4000-8000-00000000000a' and user_id = 'e7c00000-0000-4000-8000-0000000000d1';
