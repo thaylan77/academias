@@ -617,7 +617,7 @@ select is(public.__hint_de($$select * from public.equipe_da_academia('e7c00000-0
 select public.__como_token('e7c00000-0000-4000-8000-0000000000d1',
   public.__vale('e7c00000-0000-4000-8000-00000000000a', 'e7c00000-0000-4000-8000-0000000000d1') - 1,
   'e7c00000-0000-4000-8000-0000000000d1');
-select is(public.__hint_de($ * from public.equipe_da_academia('e7c00000-0000-4000-8000-00000000000a')$$),
+select is(public.__hint_de($$select * from public.equipe_da_academia('e7c00000-0000-4000-8000-00000000000a')$$),
   'sem_permissao', 'token emitido no mesmo segundo do aceite não usa o vínculo');
 select public.__como_token('e7c00000-0000-4000-8000-0000000000d1',
   public.__vale('e7c00000-0000-4000-8000-00000000000a', 'e7c00000-0000-4000-8000-0000000000d1'),
