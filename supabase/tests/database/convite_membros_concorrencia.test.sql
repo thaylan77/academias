@@ -39,7 +39,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 create extension if not exists dblink with schema extensions;
-select plan(80);
+select plan(81);
 
 create function pg_temp.conexao(p_nome text) returns text language sql as $$
   select format('host=%s port=%s dbname=%s user=postgres password=postgres application_name=%s',
@@ -579,6 +579,9 @@ select is((select count(*) from public.membros_academia where user_id = 'e7d0000
 select pg_temp.como('s2', 'e7d00000-0000-4000-8000-0000000000db');
 select extensions.dblink_send_query('s2', $$select public.aceitar_convite('e7d00000-0000-4000-8000-0000000002ce')$$);
 select matches(pg_temp.resultado_s2(), 'HINT: +convite_invalido', 'T: o convite do admin apagado não pode mais ser aceito');
+select ok((select status = 'cancelado' and encerrado_em is not null from public.convites_equipe
+           where id = 'e7d00000-0000-4000-8000-0000000002ce'),
+  'T: o convite do admin apagado ficou cancelado, não pendente');
 select extensions.dblink_disconnect('auth');
 
 -- ---------------------------------------------------------------------

@@ -1123,3 +1123,27 @@ revoke execute on function public.membros_sem_atalho_para_equipe() from public, 
 create trigger membros_academia_sem_atalho
   before update or delete on public.membros_academia
   for each row execute function public.membros_sem_atalho_para_equipe();
+
+-- Conta de quem convidou apagada (on delete set null em convidado_por): o
+-- convite pendente é cancelado na mesma hora, qualquer que seja a ordem das
+-- ações das FKs (a cascata em membros_academia também cancelaria, mas pode
+-- rodar depois do set null e não achar mais o convite).
+create or replace function public.convites_equipe_sem_quem_convidou()
+returns trigger
+language plpgsql
+set search_path = ''
+as $$
+begin
+  if old.convidado_por is not null and new.convidado_por is null and new.status = 'pendente' then
+    new.status := 'cancelado';
+    new.encerrado_em := clock_timestamp();
+  end if;
+  return new;
+end
+$$;
+
+revoke execute on function public.convites_equipe_sem_quem_convidou() from public, anon, authenticated;
+
+create trigger convites_equipe_sem_quem_convidou
+  before update of convidado_por on public.convites_equipe
+  for each row execute function public.convites_equipe_sem_quem_convidou();
