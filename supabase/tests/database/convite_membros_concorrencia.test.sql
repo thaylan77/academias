@@ -25,6 +25,8 @@
 --      o aceite é recusado, sem vínculo e com o convite pendente.
 --   Q e R. em repeatable read ou serializable, a saída de um dono é
 --      recusada (isolamento_nao_suportado): as travas supõem read committed.
+--   S. o expurgo espera uma confirmação em andamento e não apaga a linha
+--      confirmada.
 -- A espera é provada pelo pid: s2 está bloqueada e s1 está entre os que a
 -- bloqueiam. As fixtures são gravadas e confirmadas por uma conexão própria,
 -- apagadas antes (se uma execução anterior parou no meio) e depois, pela
@@ -32,7 +34,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 create extension if not exists dblink with schema extensions;
-select plan(67);
+select plan(71);
 
 create function pg_temp.conexao(p_nome text) returns text language sql as $$
   select format('host=%s port=%s dbname=%s user=postgres password=postgres application_name=%s',
@@ -194,7 +196,8 @@ select extensions.dblink_exec('prep', $f$
      '2026-11-23 10:00:00+00', array['2026-11-23 10:00:00+00'::timestamptz]);
   insert into public.convites_envios (id, email, convite_id, reservado_em) values
     ('e7d00000-0000-4000-8000-0000000003cb', 'liberar@concorre.test', 'e7d00000-0000-4000-8000-0000000002cb',
-     '2026-11-23 10:00:00+00');
+     '2026-11-23 10:00:00+00'),
+    ('e7d00000-0000-4000-8000-0000000003cc', 'expurgo@concorre.test', null, now() - interval '4 days');
   insert into public.convites_equipe (id, academia_id, email, papel, convidado_por, expira_em) values
     ('e7d00000-0000-4000-8000-0000000002cc', 'e7d00000-0000-4000-8000-00000000000b', 'u9@concorre.test', 'recepcao',
      'e7d00000-0000-4000-8000-0000000000b2', now() + interval '7 days'),
@@ -507,6 +510,22 @@ select extensions.dblink_exec('s2', 'rollback');
 select is((select count(*) from public.membros_academia
            where academia_id = 'e7d00000-0000-4000-8000-00000000000b' and papel = 'dono' and ativo),
   1::bigint, 'R: o dono continua');
+
+-- ---------------------------------------------------------------------
+-- S. s1 confirma (sem commit) uma reserva de 4 dias; s2 roda o expurgo.
+-- ---------------------------------------------------------------------
+select pg_temp.como('s1', 'service_role');
+select pg_temp.como('s2', 'service_role');
+select extensions.dblink_exec('s1', 'begin');
+select extensions.dblink_exec('s1', $q$do $d$ begin perform public.confirmar_envio_convite_interna(
+    'e7d00000-0000-4000-8000-0000000003cc'); end $d$$q$);
+select is(extensions.dblink_send_query('s2', $$select public.expurgar_convites_envios()$$),
+  1, 'S: s2 envia o expurgo');
+select ok(pg_temp.s2_espera_s1(), 'S: o expurgo espera a confirmação em andamento');
+select extensions.dblink_exec('s1', 'commit');
+select is(pg_temp.resultado_s2(), 'ok', 'S: o expurgo termina sem erro');
+select ok((select enviado_em is not null from public.convites_envios where id = 'e7d00000-0000-4000-8000-0000000003cc'),
+  'S: a linha confirmada durante o expurgo continua');
 
 -- ---------------------------------------------------------------------
 -- Limpeza.

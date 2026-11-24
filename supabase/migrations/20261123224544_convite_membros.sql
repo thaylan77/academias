@@ -87,10 +87,11 @@ grant select on public.convites_equipe to authenticated;
 -- a cota que ainda vale para as outras). RLS ligado e nenhum privilégio para
 -- anon e authenticated: ninguém lê pela API (revelaria se outra academia
 -- convidou o endereço). Só as funções *_interna mexem aqui.
---   reservado_em: quando criar_convite_interna liberou o envio. A reserva
---     sem resultado bloqueia o endereço por 6 minutos (a Edge Function só
---     despacha até 4 minutos depois dela) e conta no teto de 5 por 24 horas
---     mais esses 4 minutos.
+--   reservado_em: quando criar_convite_interna liberou o envio. Enquanto a
+--     Edge Function não confirma nem libera, o resultado é incerto (o
+--     provedor pode aceitar a qualquer momento): a reserva bloqueia o
+--     intervalo de 60 segundos por 24 horas e conta no teto de 5 por 48
+--     horas. É o lado conservador: a função deve resolver logo cada reserva.
 --   enviado_em: quando o provedor aceitou (confirmar_envio_convite_interna).
 --     Conta 24 horas daí, e o intervalo de 60 segundos também.
 --   liberado_em: quando o provedor recusou de vez
@@ -361,18 +362,17 @@ begin
       where v.email = v_email
         and v.liberado_em is null
         and (v.enviado_em > v_agora - interval '60 seconds'
-             or (v.enviado_em is null and v.reservado_em > v_agora - interval '6 minutes'))
+             or (v.enviado_em is null and v.reservado_em > v_agora - interval '24 hours'))
     )
     -- Envio confirmado conta 24 horas do horário real. Reserva sem resultado
-    -- conta 24 horas mais o prazo de despacho (4 minutos): o e-mail pode ter
-    -- saído até 4 minutos depois dela.
+    -- conta 48 horas: o e-mail pode ter saído a qualquer momento depois dela.
     or (select count(*)
         from public.convites_envios v
         where v.email = v_email
           and v.liberado_em is null
           and (v.enviado_em > v_agora - interval '24 hours'
                or (v.enviado_em is null
-                   and v.reservado_em > v_agora - interval '24 hours 4 minutes'))) >= 5
+                   and v.reservado_em > v_agora - interval '48 hours'))) >= 5
   );
 
   -- 7. Limite da academia (C10): convites criados ou com envio nas últimas
@@ -459,13 +459,11 @@ grant execute on function public.criar_convite_interna(uuid, uuid, text, text) t
 --     academias. A tentativa continua registrada no convite (é o que a
 --     academia vê).
 -- As duas valem para qualquer reserva ainda sem resultado (cada uma tem o
--- próprio id, mesmo depois de um reenvio) e são idempotentes. A Edge
--- Function só despacha até 4 minutos depois da reserva; passado isso,
--- libera. Como cada reserva bloqueia o endereço por 6 minutos, o envio
--- aceito fica a mais de 60 s do próximo, não importa quando a confirmação
--- chegue. Reserva abandonada (a função caiu antes de saber) bloqueia por 6
--- minutos e conta no teto de 5 por 24 horas mais o prazo de despacho: lado
--- seguro contra spam. Só mexem em convites_envios: nada do que a academia lê
+-- próprio id, mesmo depois de um reenvio) e são idempotentes. Enquanto não
+-- há resultado, o provedor pode aceitar a qualquer momento: a reserva
+-- bloqueia o intervalo de 60 segundos por 24 horas e conta no teto por 48.
+-- Reserva abandonada (a função caiu antes de saber) segura o endereço por
+-- esse tempo: lado seguro contra spam. Só mexem em convites_envios: nada do que a academia lê
 -- muda.
 create or replace function public.confirmar_envio_convite_interna(p_envio_id uuid)
 returns void
@@ -986,8 +984,8 @@ create trigger auth_users_exclusao_logica
 -- 8. EXPURGO DE convites_envios
 -- =====================================================================
 -- O registro global só serve aos limites da C10: um envio confirmado conta
--- 24 horas, e uma reserva sem resultado conta 24 horas e 4 minutos. Passado
--- isso (com margem: 2 dias), o registro não tem mais função e sai, para o
+-- 24 horas, e uma reserva sem resultado conta 48 horas. Passado isso (com
+-- margem: 3 dias), o registro não tem mais função e sai, para o
 -- endereço não ficar guardado sem motivo, inclusive depois de a academia ser
 -- apagada. Roda todo dia pelo pg_cron, em lotes, e devolve quantos apagou.
 create or replace function public.expurgar_convites_envios(p_lote integer default 5000)
@@ -1001,12 +999,16 @@ declare
   v_lote  integer;
 begin
   loop
+    -- Os critérios valem também na linha apagada: uma confirmação concorrente
+    -- é reavaliada depois do commit dela, e a linha confirmada fica.
     delete from public.convites_envios v
      where v.id in (
        select x.id from public.convites_envios x
-        where x.reservado_em < clock_timestamp() - interval '2 days'
-          and (x.enviado_em is null or x.enviado_em < clock_timestamp() - interval '2 days')
-        limit p_lote);
+        where x.reservado_em < clock_timestamp() - interval '3 days'
+          and (x.enviado_em is null or x.enviado_em < clock_timestamp() - interval '3 days')
+        limit p_lote)
+       and v.reservado_em < clock_timestamp() - interval '3 days'
+       and (v.enviado_em is null or v.enviado_em < clock_timestamp() - interval '3 days');
     get diagnostics v_lote = row_count;
     v_total := v_total + v_lote;
     exit when v_lote < p_lote;

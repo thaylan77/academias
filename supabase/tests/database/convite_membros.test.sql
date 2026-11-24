@@ -348,8 +348,8 @@ select is(public.__hint_de(format('select public.confirmar_envio_convite_interna
             (select id from public.convites_envios where email = 'atraso@conv.test'))),
   'sem erro', 'confirmar de novo não faz nada');
 
--- Uma reserva bloqueia o endereço por 6 minutos (a Edge Function só despacha
--- até 4 minutos depois dela).
+-- Uma reserva sem resultado bloqueia o endereço (o provedor pode aceitar a
+-- qualquer momento).
 select public.__cc('e7c00000-0000-4000-8000-0000000000a1', 'e7c00000-0000-4000-8000-00000000000a', 'seis@conv.test', 'professor');
 reset role;
 update public.convites_equipe
@@ -359,9 +359,9 @@ update public.convites_envios set reservado_em = now() - interval '5 minutes 30 
 set local role service_role;
 select public.__como_servico();
 select is(public.__cc('e7c00000-0000-4000-8000-0000000000f1', 'e7c00000-0000-4000-8000-00000000000d', 'seis@conv.test', 'professor') ->> 'enviar',
-  'false', 'reserva de 5 min 30 s ainda bloqueia o endereço (o bloqueio é de 6 minutos)');
+  'false', 'reserva sem resultado de 5 min 30 s ainda bloqueia o endereço (resultado incerto bloqueia por 24 horas)');
 
--- Reserva sem resultado conta 24 horas mais o prazo de despacho: com quatro
+-- Reserva sem resultado conta no teto por 48 horas: com quatro
 -- envios confirmados e uma reserva de 24 h 2 min, o endereço já tem cinco.
 select public.__cc('e7c00000-0000-4000-8000-0000000000a1', 'e7c00000-0000-4000-8000-00000000000a', 'janela@conv.test', 'professor');
 reset role;
@@ -383,14 +383,14 @@ select is(public.__cc('e7c00000-0000-4000-8000-0000000000f1', 'e7c00000-0000-400
 -- convite: cada reserva é confirmada ou liberada pela própria identidade.
 select public.__cc('e7c00000-0000-4000-8000-0000000000a1', 'e7c00000-0000-4000-8000-00000000000a', 'tardio@conv.test', 'professor');
 reset role;
-update public.convites_equipe set ultimo_envio_em = now() - interval '7 minutes', envios_recentes = array[now() - interval '7 minutes']
+update public.convites_equipe set ultimo_envio_em = now() - interval '25 hours', envios_recentes = array[now() - interval '25 hours']
  where email = 'tardio@conv.test';
-update public.convites_envios set reservado_em = now() - interval '7 minutes' where email = 'tardio@conv.test';
+update public.convites_envios set reservado_em = now() - interval '25 hours' where email = 'tardio@conv.test';
 set local role service_role;
 select public.__como_servico();
 select public.__cc('e7c00000-0000-4000-8000-0000000000a1', 'e7c00000-0000-4000-8000-00000000000a', 'tardio@conv.test', 'professor');
 select public.liberar_envio_convite_interna((select id from public.convites_envios
-                                             where email = 'tardio@conv.test' and reservado_em = now() - interval '7 minutes'));
+                                             where email = 'tardio@conv.test' and reservado_em = now() - interval '25 hours'));
 select is((select count(*) filter (where liberado_em is not null) || '/' || count(*) filter (where liberado_em is null and enviado_em is null)
            from public.convites_envios where email = 'tardio@conv.test'),
   '1/1', 'recusa tardia da reserva antiga, depois do reenvio: só ela sai da cota');
@@ -696,8 +696,8 @@ reset role;
 select is((select count(*)::int from cron.job where jobname = 'expurgar-convites-envios-diario'), 1,
   'expurgo de convites_envios agendado no pg_cron');
 insert into public.convites_envios (email, reservado_em, enviado_em) values
-  ('velho@conv.test', now() - interval '3 days', now() - interval '3 days'),
-  ('velho@conv.test', now() - interval '2 days 1 hour', null);
+  ('velho@conv.test', now() - interval '4 days', now() - interval '4 days'),
+  ('velho@conv.test', now() - interval '3 days 1 hour', null);
 select public.expurgar_convites_envios(1);
 select is((select count(*) from public.convites_envios where email = 'velho@conv.test'), 0::bigint,
   'expurgo apaga o registro antigo de um endereço sem novo convite (em lotes)');
