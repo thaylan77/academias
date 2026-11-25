@@ -566,6 +566,12 @@ reset role;
 update auth.users set email = 'dono-b@conv.test' where id = 'e7c00000-0000-4000-8000-0000000000b1';
 set local role authenticated;
 select public.__como('e7c00000-0000-4000-8000-0000000000a2');
+reset role;
+set local role service_role;
+select public.__como_servico();
+select is(public.__passa_e_desfaz($$select public.__cc('e7c00000-0000-4000-8000-0000000000a2', 'e7c00000-0000-4000-8000-00000000000a', 'dono-b@conv.test', 'professor')$$)
+          || '/' || public.__passa_e_desfaz($$select public.__cc('e7c00000-0000-4000-8000-0000000000a2', 'e7c00000-0000-4000-8000-00000000000a', 'ninguem-ainda@conv.test', 'professor')$$),
+  'passou/passou', 'convidar o e-mail de um vínculo anterior ao convite responde como para um e-mail sem vínculo');
 -- O dono do vínculo antigo recebe um convite, vê o convite na lista e, ao
 -- aceitar, confirma o vínculo.
 reset role;
@@ -584,12 +590,6 @@ select is((select papel || '/' || verificado::text from public.membros_academia
   'recepcao/true', 'o aceite troca o papel do vínculo antigo e o confirma');
 set local role authenticated;
 select public.__como('e7c00000-0000-4000-8000-0000000000a2');
-reset role;
-set local role service_role;
-select public.__como_servico();
-select is(public.__passa_e_desfaz($$select public.__cc('e7c00000-0000-4000-8000-0000000000a2', 'e7c00000-0000-4000-8000-00000000000a', 'dono-b@conv.test', 'professor')$$)
-          || '/' || public.__passa_e_desfaz($$select public.__cc('e7c00000-0000-4000-8000-0000000000a2', 'e7c00000-0000-4000-8000-00000000000a', 'ninguem-ainda@conv.test', 'professor')$$),
-  'passou/passou', 'convidar o e-mail de um vínculo anterior ao convite responde como para um e-mail sem vínculo');
 reset role;
 select public.__sem_jwt();
 delete from public.membros_academia
