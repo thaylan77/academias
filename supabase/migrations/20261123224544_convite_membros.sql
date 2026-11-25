@@ -1310,6 +1310,13 @@ begin
     raise exception 'A academia precisa de pelo menos um dono ativo. Convide outro dono antes de sair.'
       using hint = 'ultimo_dono';
   end if;
+  -- Pela API, a assinatura de novo com o relógio de agora: a espera pela
+  -- conta do outro dono pode ter passado do fim do trial. (O Auth apagando a
+  -- conta roda sem papel de requisição e não passa aqui.)
+  if v_papel_req = 'authenticated' and not public.academia_ativa_agora(old.academia_id) then
+    raise exception 'A assinatura da academia está suspensa: não é possível alterar a equipe.'
+      using hint = 'academia_suspensa';
+  end if;
 
   return coalesce(new, old);
 end
