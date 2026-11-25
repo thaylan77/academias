@@ -4,7 +4,7 @@
 -- Academias A e B (ativas) e S (suspensa).
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(133);
+select plan(135);
 
 -- ---------------------------------------------------------------------
 -- Auxiliares
@@ -678,6 +678,15 @@ select is((select encrypted_password = extensions.crypt('senha-nova-do-convite',
              and not (raw_app_meta_data ? 'definir_senha')
            from auth.users where id = 'e7c00000-0000-4000-8000-0000000000d1'),
   true, 'definir_senha_comprovada_interna grava a senha (bcrypt) e a prova dela juntas');
+set local role service_role;
+select public.__como_servico();
+select is(public.__hint_de($$select public.definir_senha_comprovada_interna('e7c00000-0000-4000-8000-0000000000d1', 'e7c00000-0000-4000-8000-0000000000d1', 'senha-nova-do-convite')$$),
+  'senha_repetida', 'a senha atual não serve como senha nova');
+reset role;
+select is((select encrypted_password = extensions.crypt('senha-nova-do-convite', encrypted_password)
+             and raw_app_meta_data ->> 'senha_comprovada' = md5(encrypted_password)
+           from auth.users where id = 'e7c00000-0000-4000-8000-0000000000d1'),
+  true, 'a recusa da senha repetida não muda a credencial nem a prova');
 set local role service_role;
 select public.__como_servico();
 select is(public.__hint_de($$select public.definir_senha_comprovada_interna('e7c00000-0000-4000-8000-0000000000d1', 'e7c00000-0000-4000-8000-0000000000d2', 'outra-senha-longa')$$),

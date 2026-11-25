@@ -207,17 +207,26 @@ security definer
 set search_path = ''
 as $$
 declare
-  v_hash text;
+  v_hash  text;
+  v_atual text;
 begin
   if p_senha is null or length(p_senha) < 8 then
     raise exception 'A senha precisa ter pelo menos 8 caracteres.'
       using hint = 'dados_invalidos';
   end if;
-  perform 1 from auth.users u where u.id = p_user_id for update;
+  select u.encrypted_password into v_atual from auth.users u where u.id = p_user_id for update;
   perform 1 from auth.sessions s where s.id = p_sessao and s.user_id = p_user_id for share;
   if not found then
     raise exception 'Abra o link enviado ao seu e-mail para definir a senha.'
       using hint = 'convite_exige_link';
+  end if;
+
+  -- A senha nova não pode ser a atual: quem já a conhecia (a conta pode ter
+  -- sido criada com a confirmação de e-mail desligada) entraria de novo.
+  -- O Auth grava bcrypt ($2a$/$2b$/$2y$); outro formato não se compara.
+  if v_atual ~ '^\$2[aby]?\$' and extensions.crypt(p_senha, v_atual) = v_atual then
+    raise exception 'Escolha uma senha diferente da atual.'
+      using hint = 'senha_repetida';
   end if;
 
   v_hash := extensions.crypt(p_senha, extensions.gen_salt('bf'));
