@@ -132,13 +132,13 @@ isOneToOne: false
                   ]
                 },"convites_envios": {
                   Row: {
-                    "convite_id": string | null,"email": string,"enviado_em": string | null,"id": string,"liberado_em": string | null,"reservado_em": string
+                    "convite_id": string | null,"email": string,"enviado_em": string | null,"id": string,"liberado_em": string | null,"reservado_em": string,"tentativa_em": string | null
                   }
                   Insert: {
-                    "convite_id"?: string | null,"email": string,"enviado_em"?: string | null,"id"?: string,"liberado_em"?: string | null,"reservado_em": string
+                    "convite_id"?: string | null,"email": string,"enviado_em"?: string | null,"id"?: string,"liberado_em"?: string | null,"reservado_em": string,"tentativa_em"?: string | null
                   }
                   Update: {
-                    "convite_id"?: string | null,"email"?: string,"enviado_em"?: string | null,"id"?: string,"liberado_em"?: string | null,"reservado_em"?: string
+                    "convite_id"?: string | null,"email"?: string,"enviado_em"?: string | null,"id"?: string,"liberado_em"?: string | null,"reservado_em"?: string,"tentativa_em"?: string | null
                   }
                   Relationships: [
                     {
@@ -560,6 +560,9 @@ isOneToOne: false
 "aprovar_matricula":
 { Args: { "p_dia_vencimento"?: number,"p_matricula_id": string }; Returns: undefined
                            },
+"assumir_envio_convite_interna":
+{ Args: { "p_envio_id": string }; Returns: boolean
+                           },
 "baixar_cobranca_interna":
 { Args: { "p_cobranca_id": string,"p_forma"?: string,"p_pago_em"?: string,"p_user_id": string,"p_valor_pago"?: number }; Returns: undefined
                            },
@@ -695,6 +698,9 @@ isOneToOne: false
                            },
 "liberar_envio_convite_interna":
 { Args: { "p_envio_id": string }; Returns: undefined
+                           },
+"liberar_reservas_abandonadas_interna":
+{ Args: { "p_idade"?: string }; Returns: number
                            },
 "marcar_definir_senha_interna":
 { Args: { "p_user_id": string }; Returns: boolean
