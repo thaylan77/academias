@@ -577,7 +577,7 @@ set local role authenticated;
 select public.__como('e7c00000-0000-4000-8000-0000000000b1');
 select is((select count(*) from public.meus_convites() where academia_id = 'e7c00000-0000-4000-8000-00000000000a'), 1::bigint,
   'quem tem um vínculo anterior ao convite vê o convite para confirmá-lo');
-select public.aceitar_convite((select id from public.meus_convites() where academia_id = 'e7c00000-0000-4000-8000-00000000000a'));
+select public.aceitar_convite((select convite_id from public.meus_convites() where academia_id = 'e7c00000-0000-4000-8000-00000000000a'));
 reset role;
 select is((select papel || '/' || verificado::text from public.membros_academia
             where academia_id = 'e7c00000-0000-4000-8000-00000000000a' and user_id = 'e7c00000-0000-4000-8000-0000000000b1'),
