@@ -172,7 +172,7 @@ update auth.users set raw_app_meta_data = raw_app_meta_data
  where email = 'outrasessao@conv.test';
 -- Uma sessão por usuário (id = o próprio id do usuário, como o session_id que
 -- __como põe no JWT); semsessao teve a sessão revogada.
-insert into auth.sessions (id, user_id) select id, id from auth.users where email like '%@conv.test';
+insert into auth.sessions (id, user_id, created_at) select id, id, now() from auth.users where email like '%@conv.test';
 delete from auth.sessions where user_id = 'e7c00000-0000-4000-8000-0000000000df';
 
 insert into public.academias (id, nome, slug, status) values

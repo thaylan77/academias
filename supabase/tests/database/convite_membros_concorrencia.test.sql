@@ -196,7 +196,7 @@ select extensions.dblink_exec('prep', $f$
   update auth.users set raw_app_meta_data = coalesce(raw_app_meta_data, '{}'::jsonb)
          || jsonb_build_object('senha_redefinida_em', 1, 'senha_redefinida_sessao', id::text)
    where email like '%@concorre.test';
-  insert into auth.sessions (id, user_id) select id, id from auth.users where email like '%@concorre.test';
+  insert into auth.sessions (id, user_id, created_at) select id, id, now() from auth.users where email like '%@concorre.test';
   insert into auth.sessions (id, user_id) values ('e7d00000-0000-4000-8000-0000000006e0', 'e7d00000-0000-4000-8000-0000000000e0');
   insert into auth.sessions (id, user_id) values ('e7d00000-0000-4000-8000-0000000006e1', 'e7d00000-0000-4000-8000-0000000000e1');
   insert into public.academias (id, nome, slug, status) values
