@@ -4,7 +4,7 @@
 -- Academias A e B (ativas) e S (suspensa).
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(141);
+select plan(142);
 
 -- ---------------------------------------------------------------------
 -- Auxiliares
@@ -538,6 +538,23 @@ select is((select string_agg(email || ':' || papel || case when ativo then '' el
            from public.equipe_da_academia('e7c00000-0000-4000-8000-00000000000a')),
   'admin-a@conv.test:admin,admin2-a@conv.test:admin,dono-a@conv.test:dono,exdono-a@conv.test:dono-,inativo-a@conv.test:professor-,inativo2-a@conv.test:professor-,prof-a@conv.test:professor,recep-a@conv.test:recepcao,totem-a@conv.test:totem',
   'equipe_da_academia: membros, inativos e o totem, sem o papel aluno');
+-- Vínculo gravado pela regra antiga (sem o aceite da conta) de uma conta de
+-- outra academia: aparece, mas sem o e-mail.
+reset role;
+insert into public.membros_academia (academia_id, user_id, papel, verificado) values
+  ('e7c00000-0000-4000-8000-00000000000a', 'e7c00000-0000-4000-8000-0000000000b1', 'professor', false);
+set local role authenticated;
+select public.__como('e7c00000-0000-4000-8000-0000000000a2');
+select is((select coalesce(email, '(sem e-mail)') || ':' || papel
+             from public.equipe_da_academia('e7c00000-0000-4000-8000-00000000000a')
+            where user_id = 'e7c00000-0000-4000-8000-0000000000b1'),
+  '(sem e-mail):professor', 'vínculo anterior ao convite, sem o aceite da conta, não revela o e-mail');
+reset role;
+select public.__sem_jwt();
+delete from public.membros_academia
+ where academia_id = 'e7c00000-0000-4000-8000-00000000000a' and user_id = 'e7c00000-0000-4000-8000-0000000000b1';
+set local role authenticated;
+select public.__como('e7c00000-0000-4000-8000-0000000000a2');
 select is(public.__hint_de($$select * from public.equipe_da_academia('e7c00000-0000-4000-8000-00000000000b')$$),
   'sem_permissao', 'admin de A não lista a equipe de B');
 select is(public.__hint_de($$update public.membros_academia set papel = 'professor'

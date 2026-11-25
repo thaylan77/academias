@@ -195,7 +195,7 @@ Plano, status e slug da academia só mudam via `service_role` (billing do SaaS).
 | `expurgar_convites_envios(lote?)` | job pg_cron (06:30 UTC) | apaga de `convites_envios` os registros fora das janelas da C10 (mais de 3 dias), em lotes |
 | `cancelar_convite(convite_id)` | dono, admin | cancela convite pendente (admin não cancela o de dono) |
 | `meus_convites()` / `aceitar_convite(convite_id)` / `recusar_convite(convite_id)` | logado | convites pendentes do e-mail confirmado do login; o aceite grava em `membros_academia` (novo, reativação ou troca do papel `aluno`) |
-| `equipe_da_academia(academia_id)` | dono, admin | membros da equipe e o totem, com e-mail, sem o papel `aluno` |
+| `equipe_da_academia(academia_id)` | dono, admin | membros da equipe e o totem, sem o papel `aluno`; e-mail só de vínculo verificado (`membros_academia.verificado`: convite aceito, criação da academia ou `service_role`; os anteriores ao convite ficam sem e-mail até um aceite) |
 | `registrar_graduacao(academia_id, dados)` | dono, admin, professor | graduação com data no dia da academia (nunca no futuro) e grau dentro da faixa |
 | `vw_graduacao_atual`                   | equipe/aluno | faixa e grau atuais por modalidade                         |
 | `vw_progresso_graduacao`               | equipe/aluno | aulas e meses desde a última graduação, campo `apto`       |

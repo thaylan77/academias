@@ -121,7 +121,7 @@ nas `*_interna`.
 | Função | Quem chama | Faz |
 |--------|-----------|-----|
 | `criar_convite_interna(p_user_id, p_academia_id, p_email, p_papel)` | Edge Function (`service_role`) | Ver abaixo. Devolve `{convite_id, email, conta}`, com `conta` igual a `nenhuma`, `nao_confirmada` ou `confirmada`, mais o `user_id` da conta. |
-| `equipe_da_academia(p_academia_id)` | dono, admin | Membros com papel diferente de `aluno`: `user_id`, e-mail (de `auth.users`), papel, ativo, `created_at`. |
+| `equipe_da_academia(p_academia_id)` | dono, admin | Membros com papel diferente de `aluno`: `user_id`, e-mail (de `auth.users`), papel, ativo, `created_at`. O e-mail vem só de vínculo verificado (`membros_academia.verificado`); vínculos gravados antes do convite, sem o aceite da conta, vêm com e-mail nulo até um aceite. |
 | `cancelar_convite(p_convite_id)` | dono, admin | Ver abaixo. |
 | `meus_convites()` | logado | Convites pendentes e não vencidos para o e-mail confirmado do login, com o nome da academia, o papel e a validade. Com e-mail não confirmado, devolve a lista vazia. |
 | `aceitar_convite(p_convite_id)` | logado | Ver abaixo. |

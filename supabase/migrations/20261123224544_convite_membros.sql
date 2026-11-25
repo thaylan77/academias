@@ -126,6 +126,12 @@ alter table public.membros_academia add column vale_a_partir timestamptz;
 -- Sessão em que o convite foi aceito: ela e as sessões criadas depois de
 -- vale_a_partir usam o vínculo; uma sessão criada durante o aceite, não.
 alter table public.membros_academia add column sessao_do_aceite uuid;
+-- Vínculo com origem verificável: aceite de convite, criação da academia ou
+-- service_role (todo insert depois desta migration). Os anteriores podiam ter
+-- sido gravados por um dono ou admin sem o aceite da conta: ficam false, e a
+-- listagem da equipe não mostra o e-mail deles até um aceite.
+alter table public.membros_academia add column verificado boolean not null default false;
+alter table public.membros_academia alter column verificado set default true;
 
 -- iat do JWT da requisição (0 se não houver).
 create or replace function public.jwt_iat()
@@ -1084,7 +1090,8 @@ begin
   -- o aceite esperava continua sem o vínculo.
   update public.membros_academia m
      set vale_a_partir = date_trunc('second', clock_timestamp()) + interval '1 second',
-         sessao_do_aceite = public.jwt_sessao()
+         sessao_do_aceite = public.jwt_sessao(),
+         verificado = true
    where m.academia_id = v_conv.academia_id and m.user_id = auth.uid();
 
   update public.convites_equipe c
@@ -1147,12 +1154,16 @@ begin
   end if;
 
   return query
-  select m.user_id, u.email::text, m.papel, m.ativo, m.created_at
+  -- E-mail só de vínculo verificado (ou o do próprio login): um vínculo
+  -- gravado sem o aceite da conta não revela o e-mail dela.
+  select m.user_id,
+         case when m.verificado or m.user_id = auth.uid() then u.email::text end,
+         m.papel, m.ativo, m.created_at
   from public.membros_academia m
   join auth.users u on u.id = m.user_id
   where m.academia_id = p_academia_id
     and m.papel in ('dono', 'admin', 'professor', 'recepcao', 'totem')
-  order by m.ativo desc, m.papel, u.email;
+  order by m.ativo desc, m.papel, m.verificado desc, u.email;
 end
 $$;
 
