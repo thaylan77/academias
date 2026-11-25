@@ -42,6 +42,9 @@
 --      e desfaz tudo (sem vínculo, sessões intactas, convite pendente).
 --   Z. a sessão de um admin que entrou por convite é revogada enquanto ele
 --      cria um convite: a criação é recusada, sem convite nem reserva.
+--   AA. o outro dono, que entrou por convite, troca a senha fora do fluxo
+--      enquanto um dono sai: a saída espera a troca, relê a prova e é
+--      recusada (ultimo_dono).
 -- A espera é provada pelo pid: s2 está bloqueada e s1 está entre os que a
 -- bloqueiam. As fixtures são gravadas e confirmadas por uma conexão própria,
 -- apagadas antes (se uma execução anterior parou no meio) e depois, pela
@@ -49,7 +52,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 create extension if not exists dblink with schema extensions;
-select plan(101);
+select plan(104);
 
 create function pg_temp.conexao(p_nome text) returns text language sql as $$
   select format('host=%s port=%s dbname=%s user=postgres password=postgres application_name=%s',
@@ -744,6 +747,23 @@ select matches(pg_temp.resultado_s2(), 'HINT: +sem_permissao', 'Z: com a sessão
 select is((select count(*) from public.convites_equipe where email = 'zeta@concorre.test')
           + (select count(*) from public.convites_envios where email = 'zeta@concorre.test'),
   0::bigint, 'Z: sem convite nem reserva');
+
+-- ---------------------------------------------------------------------
+-- AA. bd (dono de O) entrou por convite; s1 troca a senha dele sem
+--     confirmar; bc sai em s2; s1 confirma.
+-- ---------------------------------------------------------------------
+select extensions.dblink_exec('prep', $$update public.membros_academia set vale_a_partir = now() - interval '1 hour'
+  where academia_id = 'e7d00000-0000-4000-8000-00000000000e' and user_id = 'e7d00000-0000-4000-8000-0000000000bd'$$);
+select pg_temp.como('s2', 'e7d00000-0000-4000-8000-0000000000bc');
+select extensions.dblink_exec('s1', 'begin');
+select extensions.dblink_exec('s1', $$update auth.users set encrypted_password = 'trocada-fora-do-fluxo'
+  where id = 'e7d00000-0000-4000-8000-0000000000bd'$$);
+select is(extensions.dblink_send_query('s2', $$delete from public.membros_academia
+  where academia_id = 'e7d00000-0000-4000-8000-00000000000e' and user_id = 'e7d00000-0000-4000-8000-0000000000bc'$$),
+  1, 'AA: s2 envia a saída de bc');
+select ok(pg_temp.s2_espera_s1(), 'AA: a saída espera a troca de senha do outro dono');
+select extensions.dblink_exec('s1', 'commit');
+select matches(pg_temp.resultado_s2(), 'HINT: +ultimo_dono', 'AA: com a prova do outro dono invalidada, a saída é recusada');
 
 -- ---------------------------------------------------------------------
 -- Limpeza.

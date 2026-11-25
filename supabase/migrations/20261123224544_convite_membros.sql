@@ -1108,25 +1108,32 @@ grant execute on function public.equipe_da_academia(uuid) to authenticated;
 -- exclusão lógica é proibida; o filtro é só defesa).
 create or replace function public.academia_tem_outro_dono(p_academia_id uuid, p_user_id uuid)
 returns boolean
-language sql
-stable
+language plpgsql
+volatile
 security definer
 set search_path = ''
 as $$
-  select exists (
-    select 1
+begin
+  -- Trava (for share) a conta do outro dono que conta: uma troca de senha
+  -- concorrente dele espera esta saída, ou esta saída espera a troca e relê
+  -- o hash (read committed). Ordem: academia (já travada pelo gatilho),
+  -- depois auth.users, como nas funções de convite.
+  perform 1
     from public.membros_academia m
     join auth.users u on u.id = m.user_id
-    where m.academia_id = p_academia_id
-      and m.papel = 'dono'
-      and m.ativo
-      and m.user_id <> p_user_id
-      and u.deleted_at is null
-      -- Um vínculo aceito por convite só conta enquanto a senha atual for a
-      -- comprovada: um dono sem acesso não segura a academia.
-      and (m.vale_a_partir is null
-           or u.raw_app_meta_data ->> 'senha_comprovada' = md5(coalesce(u.encrypted_password, '')))
-  )
+   where m.academia_id = p_academia_id
+     and m.papel = 'dono'
+     and m.ativo
+     and m.user_id <> p_user_id
+     and u.deleted_at is null
+     -- Um vínculo aceito por convite só conta enquanto a senha atual for a
+     -- comprovada: um dono sem acesso não segura a academia.
+     and (m.vale_a_partir is null
+          or u.raw_app_meta_data ->> 'senha_comprovada' = md5(coalesce(u.encrypted_password, '')))
+   limit 1
+     for share of u;
+  return found;
+end
 $$;
 
 revoke execute on function public.academia_tem_outro_dono(uuid, uuid) from public, anon, authenticated;

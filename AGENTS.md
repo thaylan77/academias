@@ -136,7 +136,10 @@ Helpers SQL:
 
 Gatilho `membros_academia_ultimo_dono`: nenhuma alteração pela API deixa a
 academia sem dono ativo (`hint = ultimo_dono`), e a perda de poder de um dono
-ou admin trava a academia, como as funções de convite. Exclusão lógica de conta
+ou admin trava a academia, como as funções de convite. Conta só outro dono
+com acesso (vínculo por convite exige a prova de senha válida), com a conta
+dele travada durante a saída. Se esse dono trocar a senha fora do fluxo
+depois, ele mesmo recupera o acesso refazendo a prova pela `concluir-senha`. Exclusão lógica de conta
 no Auth (`deleted_at`) é proibida: o gatilho `auth_users_exclusao_logica`
 recusa para todos (`exclusao_logica_bloqueada`); conta se apaga de verdade,
 e o delete em cascata leva os vínculos.
