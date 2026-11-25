@@ -59,10 +59,6 @@ export function depsConvidar(c: Clientes, siteUrl: string): DepsConvidar {
       const { data, error } = await c.servico.auth.admin.inviteUserByEmail(email, { redirectTo });
       return { userId: data?.user?.id ?? null, erro: erroAuth(error) };
     },
-    async marcarDefinirSenha(userId) {
-      const { error } = await c.servico.auth.admin.updateUserById(userId, { app_metadata: { definir_senha: true } });
-      return erroAuth(error);
-    },
     async enviarLinkMagico(email, redirectTo) {
       const { error } = await c.publico.auth.signInWithOtp({
         email,

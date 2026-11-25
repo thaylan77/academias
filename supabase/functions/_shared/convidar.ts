@@ -32,8 +32,6 @@ export interface DepsConvidar {
   rpc: Rpc;
   /** auth.admin.inviteUserByEmail. */
   convidarPorEmail(email: string, redirectTo: string): Promise<{ userId: string | null; erro: ErroAuth | null }>;
-  /** auth.admin.updateUserById com app_metadata.definir_senha = true. */
-  marcarDefinirSenha(userId: string): Promise<ErroAuth | null>;
   /** signInWithOtp com shouldCreateUser = false. */
   enviarLinkMagico(email: string, redirectTo: string): Promise<ErroAuth | null>;
   log(msg: string): void;
@@ -141,8 +139,8 @@ async function tratar(req: Request, deps: DepsConvidar): Promise<Response> {
   }
 
   // Limite por endereço estourado pelo histórico de outra academia: sem
-  // e-mail, e a resposta é a mesma de um envio.
-  if (!c.enviar) return json(200, { convite_id: c.convite_id, email_enviado: true });
+  // e-mail.
+  if (!c.enviar) return json(200, { convite_id: c.convite_id });
 
   // 2. Envio, segundo a conta. A conta que deixou de estar não confirmada
   //    no meio do caminho recebe o link mágico como uma confirmada.
@@ -152,9 +150,13 @@ async function tratar(req: Request, deps: DepsConvidar): Promise<Response> {
       const r = await deps.convidarPorEmail(c.email, redirectTo);
       falha = r.erro;
       if (!falha && r.userId) {
-        const m = await deps.marcarDefinirSenha(r.userId);
-        if (m) {
-          deps.log(`convidar-membro: convite enviado, mas a marca definir_senha falhou (${emailMascarado(c.email)})`);
+        // A marca vem no banco, condicional: se a pessoa já gravou a senha
+        // nova (o link saiu antes desta linha), ela não volta.
+        const m = await deps.rpc("marcar_definir_senha_interna", { p_user_id: r.userId });
+        if (m.error) {
+          deps.log(
+            `convidar-membro: convite enviado, mas a marca definir_senha falhou (código ${codigoDoErro(m.error)})`,
+          );
         }
       }
     } else {
@@ -175,5 +177,8 @@ async function tratar(req: Request, deps: DepsConvidar): Promise<Response> {
   if (falha) {
     deps.log(`convidar-membro: e-mail não saiu para ${emailMascarado(c.email)} (status ${falha.status ?? "?"})`);
   }
-  return json(200, { convite_id: c.convite_id, email_enviado: !falha });
+  // A resposta é a mesma em todos os casos (envio, supressão, falha): o
+  // resultado do Auth revelaria a conta ou convites de outras academias. A
+  // falha fica no log, e a reserva já foi tratada acima.
+  return json(200, { convite_id: c.convite_id });
 }

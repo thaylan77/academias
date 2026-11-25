@@ -62,3 +62,26 @@ $$;
 
 revoke execute on function public.neutralizar_conta_nao_confirmada_interna(uuid) from public, anon, authenticated;
 grant execute on function public.neutralizar_conta_nao_confirmada_interna(uuid) to service_role;
+
+-- Conta criada agora pelo convite do Auth: marca definir_senha, com a conta
+-- travada e só se a pessoa ainda não tiver gravado a senha nova pela
+-- concluir-senha (senha_comprovada). O link sai antes desta marca; se a
+-- pessoa já concluiu a senha nesse meio-tempo, a marca não volta.
+create or replace function public.marcar_definir_senha_interna(p_user_id uuid)
+returns boolean
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  perform 1 from auth.users u where u.id = p_user_id for update;
+  update auth.users u
+     set raw_app_meta_data = coalesce(u.raw_app_meta_data, '{}'::jsonb) || jsonb_build_object('definir_senha', true)
+   where u.id = p_user_id
+     and not (coalesce(u.raw_app_meta_data, '{}'::jsonb) ? 'senha_comprovada');
+  return found;
+end
+$$;
+
+revoke execute on function public.marcar_definir_senha_interna(uuid) from public, anon, authenticated;
+grant execute on function public.marcar_definir_senha_interna(uuid) to service_role;

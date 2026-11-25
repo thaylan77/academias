@@ -70,9 +70,11 @@ Deno.test("passa ao banco o usuário, o iat e a sessão do token conferido", asy
 
 Deno.test("conta nenhuma: convite do Auth com o e-mail normalizado, marca definir_senha e confirma a reserva", async () => {
   const r = await chama({ rpc: { criar_convite_interna: criado("nenhuma") } });
-  assertEquals([r.status, r.corpo], [200, { convite_id: CONVITE, email_enviado: true }]);
+  assertEquals([r.status, r.corpo], [200, { convite_id: CONVITE }]);
   assertEquals(r.de("convidarPorEmail")[0].args, ["pessoa@exemplo.test", REDIRECT]);
-  assertEquals(r.de("marcarDefinirSenha")[0].args, ["44444444-4444-4444-8444-444444444444"]);
+  assertEquals(r.de("rpc:marcar_definir_senha_interna")[0].args[0], {
+    p_user_id: "44444444-4444-4444-8444-444444444444",
+  });
   assertEquals(r.de("rpc:confirmar_envio_convite_interna").map((c) => c.args[0]), [RESERVA]);
   assertEquals(r.de("enviarLinkMagico").length + r.de("rpc:neutralizar_conta_nao_confirmada_interna").length, 0);
 });
@@ -82,14 +84,16 @@ Deno.test("conta nenhuma, convite recusado pelo Auth (4xx): libera a reserva, se
     rpc: { criar_convite_interna: criado("nenhuma") },
     convidar: { userId: null, erro: { status: 422 } },
   });
-  assertEquals(r.corpo.email_enviado, false);
+  assertEquals(r.corpo, { convite_id: CONVITE }, "a resposta é sempre a mesma");
   assertEquals(r.de("rpc:liberar_envio_convite_interna").map((c) => c.args[0]), [RESERVA]);
-  assertEquals(r.de("marcarDefinirSenha").length + r.de("rpc:confirmar_envio_convite_interna").length, 0);
+  assertEquals(r.de("rpc:marcar_definir_senha_interna").length + r.de("rpc:confirmar_envio_convite_interna").length, 0);
 });
 
 Deno.test("conta nenhuma, marca definir_senha falha depois do envio: e-mail saiu, reserva confirmada, log", async () => {
-  const r = await chama({ rpc: { criar_convite_interna: criado("nenhuma") }, marcar: { status: 500 } });
-  assertEquals(r.corpo.email_enviado, true);
+  const r = await chama({
+    rpc: { criar_convite_interna: criado("nenhuma"), marcar_definir_senha_interna: { error: { code: "XX000" } } },
+  });
+  assertEquals(r.corpo, { convite_id: CONVITE }, "a resposta é sempre a mesma");
   assertEquals(r.de("rpc:confirmar_envio_convite_interna").length, 1);
   assert(r.logs.some((l) => l.includes("definir_senha falhou")));
 });
@@ -102,14 +106,14 @@ Deno.test("conta não confirmada: o banco neutraliza a conta antes do link mági
   assertEquals(r.de("enviarLinkMagico")[0].args, ["pessoa@exemplo.test", REDIRECT]);
   assert(r.nomes().indexOf("rpc:neutralizar_conta_nao_confirmada_interna") < r.nomes().indexOf("enviarLinkMagico"));
   assertEquals(r.de("rpc:confirmar_envio_convite_interna").map((c) => c.args[0]), [RESERVA]);
-  assertEquals(r.de("marcarDefinirSenha").length, 0, "a senha não passa pela Admin API");
+  assertEquals(r.de("rpc:marcar_definir_senha_interna").length, 0, "a senha não passa pela Admin API");
 });
 
 Deno.test("conta que se confirmou no meio do caminho (neutralizar devolve false): só o link mágico", async () => {
   const r = await chama({
     rpc: { criar_convite_interna: criado("nao_confirmada"), neutralizar_conta_nao_confirmada_interna: { data: false } },
   });
-  assertEquals(r.corpo.email_enviado, true);
+  assertEquals(r.corpo, { convite_id: CONVITE }, "a resposta é sempre a mesma");
   assertEquals(r.de("enviarLinkMagico").length, 1);
 });
 
@@ -120,7 +124,7 @@ Deno.test("conta não confirmada com enviar = false: neutraliza mesmo assim, sem
       neutralizar_conta_nao_confirmada_interna: { data: true },
     },
   });
-  assertEquals(r.corpo, { convite_id: CONVITE, email_enviado: true });
+  assertEquals(r.corpo, { convite_id: CONVITE });
   assertEquals(r.de("rpc:neutralizar_conta_nao_confirmada_interna").length, 1);
   assertEquals(r.de("enviarLinkMagico").length, 0);
 });
@@ -128,7 +132,7 @@ Deno.test("conta não confirmada com enviar = false: neutraliza mesmo assim, sem
 Deno.test("falha ao neutralizar a conta: não manda, libera a reserva e registra (também sem envio)", async () => {
   const falha = { neutralizar_conta_nao_confirmada_interna: { error: { code: "40P01", message: "deadlock" } } };
   const r = await chama({ rpc: { criar_convite_interna: criado("nao_confirmada"), ...falha } });
-  assertEquals(r.corpo.email_enviado, false);
+  assertEquals(r.corpo, { convite_id: CONVITE }, "a resposta é sempre a mesma");
   assertEquals(r.de("enviarLinkMagico").length, 0);
   assertEquals(r.de("rpc:liberar_envio_convite_interna").length, 1);
   assert(r.logs.some((l) => l.includes("40P01")));
@@ -136,16 +140,16 @@ Deno.test("falha ao neutralizar a conta: não manda, libera a reserva e registra
   const r2 = await chama({
     rpc: { criar_convite_interna: criado("nao_confirmada", { enviar: false, envio_id: null }), ...falha },
   });
-  assertEquals(r2.corpo.email_enviado, true);
+  assertEquals(r2.corpo, { convite_id: CONVITE });
   assert(r2.logs.some((l) => l.includes("não neutralizou")), "a falha sem envio também fica no log");
 });
 
 Deno.test("conta confirmada: só o link mágico", async () => {
   const r = await chama({ rpc: { criar_convite_interna: criado("confirmada") } });
-  assertEquals(r.corpo.email_enviado, true);
+  assertEquals(r.corpo, { convite_id: CONVITE }, "a resposta é sempre a mesma");
   assertEquals(r.de("enviarLinkMagico").length, 1);
   assertEquals(
-    r.de("marcarDefinirSenha").length + r.de("convidarPorEmail").length +
+    r.de("rpc:marcar_definir_senha_interna").length + r.de("convidarPorEmail").length +
       r.de("rpc:neutralizar_conta_nao_confirmada_interna").length,
     0,
   );
@@ -162,7 +166,7 @@ Deno.test("redirectTo vem só do SITE_URL, nunca do pedido", async () => {
 
 Deno.test("enviar = false: sem e-mail e resposta igual à de um envio", async () => {
   const r = await chama({ rpc: { criar_convite_interna: criado("confirmada", { enviar: false, envio_id: null }) } });
-  assertEquals(r.corpo, { convite_id: CONVITE, email_enviado: true });
+  assertEquals(r.corpo, { convite_id: CONVITE });
   assertEquals(r.de("enviarLinkMagico").length + r.de("convidarPorEmail").length, 0);
   assertEquals(
     r.de("rpc:confirmar_envio_convite_interna").length + r.de("rpc:liberar_envio_convite_interna").length,
@@ -173,7 +177,7 @@ Deno.test("enviar = false: sem e-mail e resposta igual à de um envio", async ()
 Deno.test("recusa definitiva (4xx, inclusive 429): libera a reserva e o convite fica pendente", async () => {
   for (const status of [400, 422, 429]) {
     const r = await chama({ rpc: { criar_convite_interna: criado("confirmada") }, link: { status } });
-    assertEquals([r.status, r.corpo.email_enviado], [200, false]);
+    assertEquals([r.status, r.corpo], [200, { convite_id: CONVITE }]);
     assertEquals(r.de("rpc:liberar_envio_convite_interna").map((c) => c.args[0]), [RESERVA], `status ${status}`);
     assertEquals(r.de("rpc:confirmar_envio_convite_interna").length, 0);
     assertEquals(r.nomes().filter((n) => n.includes("cancelar")).length, 0);
@@ -183,7 +187,7 @@ Deno.test("recusa definitiva (4xx, inclusive 429): libera a reserva e o convite 
 Deno.test("falha sem resultado (5xx, 408 ou rede): a reserva fica, sem confirmar nem liberar", async () => {
   for (const link of [{ status: 502 }, { status: 408 }, { message: "rede" }]) {
     const r = await chama({ rpc: { criar_convite_interna: criado("confirmada") }, link });
-    assertEquals(r.corpo.email_enviado, false);
+    assertEquals(r.corpo, { convite_id: CONVITE }, "a resposta é sempre a mesma");
     assertEquals(
       r.de("rpc:liberar_envio_convite_interna").length + r.de("rpc:confirmar_envio_convite_interna").length,
       0,
@@ -252,4 +256,15 @@ Deno.test("o log não leva o e-mail completo", async () => {
   const r = await chama({ rpc: { criar_convite_interna: criado("confirmada") }, link: { status: 422 } });
   assert(r.logs.length > 0);
   for (const l of r.logs) assert(!l.toLowerCase().includes("pessoa@exemplo.test"), l);
+});
+
+Deno.test("a resposta não distingue envio real recusado (429) de envio suprimido nem de envio que saiu", async () => {
+  const recusado = await chama({ rpc: { criar_convite_interna: criado("confirmada") }, link: { status: 429 } });
+  const suprimido = await chama({
+    rpc: { criar_convite_interna: criado("confirmada", { enviar: false, envio_id: null }) },
+  });
+  const saiu = await chama({ rpc: { criar_convite_interna: criado("nenhuma") } });
+  assertEquals(recusado.texto, suprimido.texto);
+  assertEquals(saiu.texto, suprimido.texto);
+  assertEquals([recusado.status, suprimido.status, saiu.status], [200, 200, 200]);
 });

@@ -2,7 +2,7 @@
 -- 4.4): só age em conta com o e-mail não confirmado, com a conta travada.
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(11);
+select plan(14);
 
 insert into auth.users (id, email, email_confirmed_at, encrypted_password, raw_app_meta_data, recovery_token) values
   ('e7e00000-0000-4000-8000-0000000000a1', 'intruso@neutraliza.test', null,
@@ -70,6 +70,22 @@ reset role;
 select is((select (encrypted_password = extensions.crypt('trocada-no-meio', encrypted_password))::text || '/' || recovery_token
              from auth.users where id = 'e7e00000-0000-4000-8000-0000000000a1'),
   'false/', 'senha trocada depois da neutralização: a próxima chamada neutraliza de novo');
+
+-- marcar_definir_senha_interna: marca a conta nova, mas não depois de a
+-- senha nova já ter sido gravada pela concluir-senha.
+insert into auth.users (id, email, email_confirmed_at, raw_app_meta_data) values
+  ('e7e00000-0000-4000-8000-0000000000a3', 'nova@neutraliza.test', null, '{}'),
+  ('e7e00000-0000-4000-8000-0000000000a4', 'jadefiniu@neutraliza.test', now(), '{"senha_comprovada": "h"}');
+set local role service_role;
+select is(public.marcar_definir_senha_interna('e7e00000-0000-4000-8000-0000000000a3')::text || '/'
+          || public.marcar_definir_senha_interna('e7e00000-0000-4000-8000-0000000000a4')::text, 'true/false',
+  'marca a conta nova; a que já gravou a senha nova não é marcada');
+reset role;
+select is((select string_agg(coalesce(raw_app_meta_data ->> 'definir_senha', '-'), ',' order by email)
+             from auth.users where id in ('e7e00000-0000-4000-8000-0000000000a3', 'e7e00000-0000-4000-8000-0000000000a4')),
+  '-,true', 'a marca só fica na conta que ainda não gravou a senha nova');
+select ok(not has_function_privilege('authenticated', 'public.marcar_definir_senha_interna(uuid)', 'EXECUTE'),
+  'marcar_definir_senha_interna só para service_role');
 
 select * from finish();
 rollback;

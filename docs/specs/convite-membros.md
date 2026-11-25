@@ -218,7 +218,9 @@ A entrada é `{ academia_id, email, papel }`, com o JWT de quem convida.
    erro, devolve o `hint` ao front e não faz mais nada.
 2. Com `service_role`, segundo a `conta` devolvida:
    - `nenhuma`: chama `auth.admin.inviteUserByEmail(email, { redirectTo })` e
-     marca `app_metadata.definir_senha = true`;
+     marca `app_metadata.definir_senha = true` por
+     `marcar_definir_senha_interna`, com a conta travada e só se a pessoa
+     ainda não gravou a senha nova (o link sai antes da marca);
    - `nao_confirmada`: chama `neutralizar_conta_nao_confirmada_interna`,
      que, com a conta travada e só se o e-mail continuar não confirmado,
      troca a senha por uma aleatória que ninguém recebe, derruba as sessões
@@ -240,8 +242,10 @@ A entrada é `{ academia_id, email, papel }`, com o JWT de quem convida.
    O `redirectTo` é `SITE_URL + "/painel/convites"`, com `SITE_URL` vindo de
    variável de ambiente da função, nunca do pedido. O e-mail usado é o
    **normalizado**, devolvido pela função interna.
-3. Se o e-mail não sair, o convite fica pendente e a tela mostra "Convite
-   criado, mas o e-mail não saiu. Tente reenviar em um minuto."
+3. Se o e-mail não sair, o convite fica pendente e a falha fica no log da
+   função. A resposta não diz se o e-mail saiu (revisão do Codex no PR 84):
+   a tela mostra "Convite criado. Se o e-mail não chegar em alguns minutos,
+   reenvie."
    Para cada envio liberado (`enviar = true`), o `envio_id` devolvido é
    uma reserva: com o provedor aceitando, a função chama
    `confirmar_envio_convite_interna(envio_id)`, e o intervalo de
@@ -291,10 +295,11 @@ A função não grava em tabela de negócio fora de `criar_convite_interna`. O
 
 **Contrato implementado** (`supabase/functions/`, PR 2):
 
-- Resposta de sucesso da `convidar-membro`: `{ convite_id, email_enviado }`.
-  `email_enviado` é `true` também quando `enviar = false` (o front não
-  distingue) e `false` quando o envio falhou; o convite fica pendente nos
-  dois casos.
+- Resposta de sucesso da `convidar-membro`: `{ convite_id }`, igual para o
+  envio que saiu, o suprimido (`enviar = false`) e o que falhou no Auth. O
+  resultado do Auth revelaria se a conta existe e se outra academia convidou
+  o mesmo endereço; ele fica só no log e no tratamento da reserva. Em todos
+  os casos o convite fica pendente e pode ser reenviado.
 - Erro: `{ erro: <hint> }`, só o código estável, nunca o texto do banco.
   Status 401 para `sem_sessao`, 403 para `sem_permissao`, 429 para
   `limite_convites` e `convite_reenvio_cedo`, 400 para os demais e 500 para
@@ -313,7 +318,7 @@ A função não grava em tabela de negócio fora de `criar_convite_interna`. O
 - O link mágico das contas existentes sai pelo endpoint público do Auth
   (`signInWithOtp`), sujeito ao limite por IP do projeto (`sign_in_sign_ups`
   e `max_frequency`): com muitos convites ao mesmo tempo, o envio pode ser
-  recusado com 429 e a tela mostra que o e-mail não saiu. Com SMTP próprio,
+  recusado com 429; o convite fica pendente e a falha, no log. Com SMTP próprio,
   dimensione esses limites no painel do Auth; mandar o link por um provedor
   transacional próprio fica para depois.
 - A `concluir-senha` recebe `{ senha }` e só aceita token de sessão aberta

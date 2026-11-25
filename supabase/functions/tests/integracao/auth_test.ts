@@ -163,7 +163,7 @@ Deno.test({
     // Conta nova: o Auth cria e convida; fica marcada para definir senha.
     const novo = email("novo");
     const r1 = await convidar(novo);
-    assertEquals(r1, { status: 200, corpo: { convite_id: r1.corpo.convite_id, email_enviado: true } });
+    assertEquals(r1, { status: 200, corpo: { convite_id: r1.corpo.convite_id } });
     assertEquals((await usuarioPorEmail(c, novo))?.app_metadata?.definir_senha, true);
     assert(await envioConfirmado(c, r1.corpo.convite_id), "a reserva do envio foi confirmada");
     assert((await emailsPara(novo)).some(levaAosConvites), "o convite chegou com o link para /painel/convites");
@@ -178,7 +178,7 @@ Deno.test({
     });
     if (squat.error) throw squat.error;
     const r2 = await convidar(ocupado);
-    assertEquals(r2.corpo.email_enviado, true, JSON.stringify(r2));
+    assertEquals(r2.status, 200, JSON.stringify(r2));
     assert(await envioConfirmado(c, r2.corpo.convite_id), "a reserva do envio foi confirmada");
     const u2 = await usuarioPorEmail(c, ocupado);
     assertEquals(u2?.app_metadata?.definir_senha, true);
@@ -197,7 +197,7 @@ Deno.test({
     });
     if (conf.error) throw conf.error;
     const r3 = await convidar(antigo);
-    assertEquals(r3.corpo.email_enviado, true, JSON.stringify(r3));
+    assertEquals(r3.status, 200, JSON.stringify(r3));
     assert(await envioConfirmado(c, r3.corpo.convite_id));
     assert((await emailsPara(antigo)).some(levaAosConvites), "o link mágico chegou com o redirect certo");
     const propria = await novoAnon().auth.signInWithPassword({ email: antigo, password: "senha-propria-1" });
@@ -224,7 +224,7 @@ Deno.test({
       body: JSON.stringify({ academia_id: academiaId, email: convidado, papel: "professor" }),
     });
     const corpo = await r.json();
-    assertEquals([r.status, corpo.email_enviado], [200, true], JSON.stringify(corpo));
+    assertEquals([r.status, typeof corpo.convite_id], [200, "string"], JSON.stringify(corpo));
 
     // A pessoa abre o link que chegou no e-mail (Mailpit): o Auth confere o
     // token e redireciona para /painel/convites com a sessão no fragmento.
@@ -298,14 +298,14 @@ Deno.test({
       return await r.json();
     }
     const r1 = await convidar(a.token, a.academiaId);
-    assertEquals(r1.email_enviado, true, JSON.stringify(r1));
+    assertEquals(typeof r1.convite_id, "string", JSON.stringify(r1));
     const primeiro = await emailsPara(ocupado);
     assertEquals(primeiro.length, 1);
 
     // Dentro do intervalo de 60 s do endereço: a segunda academia grava o
     // convite sem envio, e a resposta é a mesma de um envio.
     const r2 = await convidar(b.token, b.academiaId);
-    assertEquals(r2.email_enviado, true, JSON.stringify(r2));
+    assertEquals(typeof r2.convite_id, "string", JSON.stringify(r2));
     await new Promise((ok) => setTimeout(ok, 1000));
     assertEquals((await emailsPara(ocupado)).length, 1, "o segundo envio foi suprimido");
 

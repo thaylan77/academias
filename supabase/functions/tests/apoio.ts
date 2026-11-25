@@ -43,7 +43,6 @@ export interface Simulado {
   /** Respostas por RPC; uma lista é consumida em ordem (a última se repete). */
   rpc?: Record<string, RespostaRpc | RespostaRpc[]>;
   convidar?: { userId: string | null; erro: ErroAuth | null };
-  marcar?: ErroAuth | null;
   link?: ErroAuth | null;
 }
 
@@ -72,10 +71,6 @@ export function depsSimuladas(s: Simulado = {}) {
     convidarPorEmail(email, redirectTo) {
       registra("convidarPorEmail", email, redirectTo);
       return Promise.resolve(s.convidar ?? { userId: "44444444-4444-4444-8444-444444444444", erro: null });
-    },
-    marcarDefinirSenha(userId) {
-      registra("marcarDefinirSenha", userId);
-      return Promise.resolve(s.marcar ?? null);
     },
     enviarLinkMagico(email, redirectTo) {
       registra("enviarLinkMagico", email, redirectTo);
