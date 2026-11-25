@@ -38,6 +38,8 @@
 --      revogação vence, e o convite, o vínculo e as sessões ficam intactos.
 --   X. o aceite espera ao apagar uma outra sessão da conta por mais de um
 --      segundo: vale_a_partir é calculado depois da espera.
+--   Y. o mesmo, mas o convite vence durante essa espera: o aceite é recusado
+--      e desfaz tudo (sem vínculo, sessões intactas, convite pendente).
 -- A espera é provada pelo pid: s2 está bloqueada e s1 está entre os que a
 -- bloqueiam. As fixtures são gravadas e confirmadas por uma conexão própria,
 -- apagadas antes (se uma execução anterior parou no meio) e depois, pela
@@ -45,7 +47,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 create extension if not exists dblink with schema extensions;
-select plan(93);
+select plan(97);
 
 create function pg_temp.conexao(p_nome text) returns text language sql as $$
   select format('host=%s port=%s dbname=%s user=postgres password=postgres application_name=%s',
@@ -139,6 +141,7 @@ begin
       'e7d00000-0000-4000-8000-0000000000bc', 'e7d00000-0000-4000-8000-0000000000bd',
       'e7d00000-0000-4000-8000-0000000000dd', 'e7d00000-0000-4000-8000-0000000000de',
       'e7d00000-0000-4000-8000-0000000000df', 'e7d00000-0000-4000-8000-0000000000e0',
+      'e7d00000-0000-4000-8000-0000000000e1',
       'e7d00000-0000-4000-8000-0000000000d1', 'e7d00000-0000-4000-8000-0000000000d2');
   $f$);
 end
@@ -182,7 +185,8 @@ select extensions.dblink_exec('prep', $f$
     ('e7d00000-0000-4000-8000-0000000000dd', 'u12@concorre.test',   now()),
     ('e7d00000-0000-4000-8000-0000000000de', 'u13@concorre.test',   now()),
     ('e7d00000-0000-4000-8000-0000000000df', 'u14@concorre.test',   now()),
-    ('e7d00000-0000-4000-8000-0000000000e0', 'u15@concorre.test',   now());
+    ('e7d00000-0000-4000-8000-0000000000e0', 'u15@concorre.test',   now()),
+    ('e7d00000-0000-4000-8000-0000000000e1', 'u16@concorre.test',   now());
   -- Senha nova já definida (concluir-senha), como pede o aceite.
   -- Cada usuário com uma sessão (id = o próprio id do usuário, como o
   -- session_id que pg_temp.como põe no JWT) e a senha nova definida nela.
@@ -191,6 +195,7 @@ select extensions.dblink_exec('prep', $f$
    where email like '%@concorre.test';
   insert into auth.sessions (id, user_id) select id, id from auth.users where email like '%@concorre.test';
   insert into auth.sessions (id, user_id) values ('e7d00000-0000-4000-8000-0000000006e0', 'e7d00000-0000-4000-8000-0000000000e0');
+  insert into auth.sessions (id, user_id) values ('e7d00000-0000-4000-8000-0000000006e1', 'e7d00000-0000-4000-8000-0000000000e1');
   insert into public.academias (id, nome, slug, status) values
     ('e7d00000-0000-4000-8000-00000000000a', 'Concorre K', 'convite-concorre-k', 'ativa'),
     ('e7d00000-0000-4000-8000-00000000000b', 'Concorre L', 'convite-concorre-l', 'ativa'),
@@ -251,6 +256,8 @@ select extensions.dblink_exec('prep', $f$
     ('e7d00000-0000-4000-8000-0000000002d0', 'e7d00000-0000-4000-8000-00000000000e', 'u14@concorre.test', 'professor',
      'e7d00000-0000-4000-8000-0000000000bd', now() + interval '7 days'),
     ('e7d00000-0000-4000-8000-0000000002d1', 'e7d00000-0000-4000-8000-00000000000e', 'u15@concorre.test', 'professor',
+     'e7d00000-0000-4000-8000-0000000000bd', now() + interval '7 days'),
+    ('e7d00000-0000-4000-8000-0000000002d2', 'e7d00000-0000-4000-8000-00000000000e', 'u16@concorre.test', 'professor',
      'e7d00000-0000-4000-8000-0000000000bd', now() + interval '7 days');
 $f$);
 
@@ -688,6 +695,29 @@ select ok((select extract(epoch from m.vale_a_partir) > (select t from antes_x)
            from public.membros_academia m
            where m.academia_id = 'e7d00000-0000-4000-8000-00000000000e' and m.user_id = 'e7d00000-0000-4000-8000-0000000000e0'),
   'X: vale_a_partir foi calculado depois da espera (um token emitido durante ela não vale)');
+
+-- ---------------------------------------------------------------------
+-- Y. O convite de u16 passa a vencer em 2 s; s1 trava a outra sessão de u16;
+--    u16 aceita em s2 e espera ao apagá-la; o convite vence; s1 confirma.
+-- ---------------------------------------------------------------------
+select extensions.dblink_exec('prep', $$update public.convites_equipe set expira_em = clock_timestamp() + interval '2 seconds'
+  where id = 'e7d00000-0000-4000-8000-0000000002d2'$$);
+select pg_temp.como('s2', 'e7d00000-0000-4000-8000-0000000000e1');
+select extensions.dblink_exec('s1', 'begin');
+select extensions.dblink_exec('s1', $$update auth.sessions set updated_at = updated_at where id = 'e7d00000-0000-4000-8000-0000000006e1'$$);
+select is(extensions.dblink_send_query('s2', $$select public.aceitar_convite('e7d00000-0000-4000-8000-0000000002d2')$$),
+  1, 'Y: s2 envia o aceite antes do vencimento');
+select ok(pg_temp.s2_espera_s1(), 'Y: o aceite espera ao apagar a outra sessão');
+select pg_sleep(2.5);
+select extensions.dblink_exec('s1', 'commit');
+select matches(pg_temp.resultado_s2(), 'HINT: +convite_invalido', 'Y: o convite venceu na espera: o aceite é recusado');
+select is((select (select count(*) from public.membros_academia
+                   where academia_id = 'e7d00000-0000-4000-8000-00000000000e'
+                     and user_id = 'e7d00000-0000-4000-8000-0000000000e1')::text
+                  || '/' || c.status
+                  || '/' || (select count(*) from auth.sessions where user_id = 'e7d00000-0000-4000-8000-0000000000e1')::text
+           from public.convites_equipe c where c.id = 'e7d00000-0000-4000-8000-0000000002d2'),
+  '0/pendente/2', 'Y: sem vínculo, convite pendente e as duas sessões intactas');
 
 -- ---------------------------------------------------------------------
 -- Limpeza.

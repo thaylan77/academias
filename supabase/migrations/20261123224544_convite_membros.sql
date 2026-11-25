@@ -911,24 +911,6 @@ begin
     exit when found;
   end loop;
 
-  -- O insert pode ter esperado a chave de um vínculo que depois foi desfeito:
-  -- confere a validade de novo antes de marcar o aceite (o erro desfaz a
-  -- gravação do vínculo).
-  if v_conv.expira_em <= clock_timestamp() then
-    raise exception 'Convite não encontrado, vencido ou já respondido.'
-      using hint = 'convite_invalido';
-  end if;
-
-  -- 6. Academia suspensa não aceita (C6). Conferida aqui, depois de todas as
-  --    esperas, com o relógio de agora no fuso da academia (academia_ativa
-  --    usa o now() do início da transação): um trial que vence durante a
-  --    espera não aceita. Uma mudança de status espera a trava da academia,
-  --    que este aceite segura. O erro desfaz a gravação do vínculo.
-  if not public.academia_ativa_agora(v_conv.academia_id) then
-    raise exception 'A assinatura da academia está suspensa: o convite não pode ser aceito agora.'
-      using hint = 'academia_suspensa';
-  end if;
-
   -- As outras sessões da conta saem (a de quem aceitou fica). O vínculo só
   -- vale para tokens emitidos daqui em diante: vale_a_partir é o primeiro
   -- segundo inteiro depois do aceite (o iat do JWT é inteiro), e o front
@@ -936,6 +918,23 @@ begin
   delete from auth.sessions s
    where s.user_id = auth.uid()
      and s.id is distinct from nullif(nullif(current_setting('request.jwt.claims', true), '')::jsonb ->> 'session_id', '')::uuid;
+
+
+  -- Depois da última espera (o insert pode ter esperado a chave de um
+  -- vínculo, e o delete acima, uma outra sessão travada): validade e
+  -- assinatura de novo, com o relógio de agora. O erro desfaz o vínculo e a
+  -- exclusão das sessões.
+  if v_conv.expira_em <= clock_timestamp() then
+    raise exception 'Convite não encontrado, vencido ou já respondido.'
+      using hint = 'convite_invalido';
+  end if;
+  -- 6. Academia suspensa não aceita (C6), no fuso da academia (academia_ativa
+  --    usa o now() do início da transação). Uma mudança de status espera a
+  --    trava da academia, que este aceite segura.
+  if not public.academia_ativa_agora(v_conv.academia_id) then
+    raise exception 'A assinatura da academia está suspensa: o convite não pode ser aceito agora.'
+      using hint = 'academia_suspensa';
+  end if;
 
   -- Só agora, depois de todas as esperas, o marco: um token emitido enquanto
   -- o aceite esperava continua sem o vínculo.
