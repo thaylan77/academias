@@ -59,6 +59,12 @@ supabase test db                    # roda os testes pgTAP no banco local
   Auth do projeto que "Confirm email" está ligado. O convite da equipe e o
   vínculo do portal do aluno dependem disso. Um cadastro novo de teste só pode
   ficar confirmado depois de abrir o link.
+- O convite da equipe também depende do Auth do projeto na **v2.198.0 ou
+  mais nova** (o login reconfere a senha sob trava antes de criar a sessão;
+  sem isso, um login com a senha antiga pode terminar depois do aceite).
+  Antes do `db push` que trouxer o convite, confira a versão em
+  `GET /auth/v1/health` (com a chave publishable). Versão mais antiga: não
+  aplique e avise o dono do projeto.
 - O front de dev aponta para o `honorteam-dev` só com a URL e a chave
   `anon`/publishable. A `service_role` desse projeto não vai para `.env`
   de front nem para o repositório.
