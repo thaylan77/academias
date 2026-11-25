@@ -123,6 +123,9 @@ revoke all on public.convites_envios from anon, authenticated;
 -- de sessão revogada ainda não tenha expirado. Vínculo sem vale_a_partir (os anteriores e os
 -- de criar_academia) vale para qualquer token.
 alter table public.membros_academia add column vale_a_partir timestamptz;
+-- Sessão em que o convite foi aceito: ela e as sessões criadas depois de
+-- vale_a_partir usam o vínculo; uma sessão criada durante o aceite, não.
+alter table public.membros_academia add column sessao_do_aceite uuid;
 
 -- iat do JWT da requisição (0 se não houver).
 create or replace function public.jwt_iat()
@@ -165,6 +168,26 @@ $$;
 
 revoke execute on function public.sessao_valida(uuid, uuid) from public, anon, authenticated;
 
+-- O token pode usar um vínculo aceito por convite: emitido a partir de
+-- vale_a_partir, de uma sessão viva do usuário que é a do aceite ou foi
+-- criada depois do marco (uma sessão criada durante o aceite fica de fora).
+create or replace function public.sessao_elegivel(p_user_id uuid, p_sessao uuid, p_iat bigint,
+                                                  p_vale timestamptz, p_sessao_aceite uuid)
+returns boolean
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select p_vale is null
+      or (coalesce(p_iat, 0) >= extract(epoch from p_vale)
+          and exists (select 1 from auth.sessions s
+                       where s.id = p_sessao and s.user_id = p_user_id
+                         and (s.id = p_sessao_aceite or s.created_at >= p_vale)))
+$$;
+
+revoke execute on function public.sessao_elegivel(uuid, uuid, bigint, timestamptz, uuid) from public, anon, authenticated;
+
 create or replace function public.tem_papel(p_academia_id uuid, p_papeis text[] default null)
 returns boolean
 language sql
@@ -178,9 +201,8 @@ as $$
     where m.academia_id = p_academia_id
       and m.user_id = auth.uid()
       and m.ativo
-      and (m.vale_a_partir is null
-           or (public.jwt_iat() >= extract(epoch from m.vale_a_partir)
-               and public.sessao_valida(auth.uid(), public.jwt_sessao())))
+      and public.sessao_elegivel(auth.uid(), public.jwt_sessao(), public.jwt_iat(),
+                                 m.vale_a_partir, m.sessao_do_aceite)
       and case when p_papeis is null then m.papel <> 'totem'
                else m.papel = any (p_papeis) end
   );
@@ -261,9 +283,7 @@ as $$
     and m.ativo
     and m.papel in ('dono', 'admin')
     and u.deleted_at is null
-    and (m.vale_a_partir is null
-         or (coalesce(p_iat, 0) >= extract(epoch from m.vale_a_partir)
-             and public.sessao_valida(p_user_id, p_sessao)))
+    and public.sessao_elegivel(p_user_id, p_sessao, p_iat, m.vale_a_partir, m.sessao_do_aceite)
 $$;
 
 create or replace function public.convite_papel_ativo_sessao(p_academia_id uuid)
@@ -431,15 +451,6 @@ begin
   --    academia, sempre nessa ordem) serializa convites de academias
   --    diferentes para o mesmo endereço.
   perform pg_advisory_xact_lock(hashtextextended('convite_email:' || v_email, 0));
-  -- Relógio lido depois das travas: uma espera longa não deixa o envio
-  -- registrado com um horário antigo (now() é o início da transação).
-  v_agora := clock_timestamp();
-  -- A assinatura de novo, com o relógio de agora: a espera pelas travas pode
-  -- ter passado da virada do dia do trial.
-  if not public.academia_ativa_agora(p_academia_id) then
-    raise exception 'A assinatura da academia está suspensa: não é possível convidar.'
-      using hint = 'academia_suspensa';
-  end if;
   -- E o autor de novo, depois das esperas. Se o vínculo dele veio por convite
   -- (vale_a_partir), a sessão do token fica travada até o fim: uma revogação
   -- concorrente no Auth espera esta criação, ou ela vê a sessão apagada.
@@ -455,6 +466,16 @@ begin
   if public.convite_papel_ativo_iat(p_user_id, p_academia_id, p_iat, p_sessao) is null then
     raise exception 'Só o dono ou um admin da academia convida para a equipe.'
       using hint = 'sem_permissao';
+  end if;
+
+  -- Relógio lido depois das travas: uma espera longa não deixa o envio
+  -- registrado com um horário antigo (now() é o início da transação).
+  v_agora := clock_timestamp();
+  -- A assinatura de novo, com o relógio de agora: a espera pelas travas pode
+  -- ter passado da virada do dia do trial.
+  if not public.academia_ativa_agora(p_academia_id) then
+    raise exception 'A assinatura da academia está suspensa: não é possível convidar.'
+      using hint = 'academia_suspensa';
   end if;
 
   -- 6a. Com o histórico desta academia, o erro é explícito: só revela dados
@@ -955,7 +976,8 @@ begin
   -- Só agora, depois de todas as esperas, o marco: um token emitido enquanto
   -- o aceite esperava continua sem o vínculo.
   update public.membros_academia m
-     set vale_a_partir = date_trunc('second', clock_timestamp()) + interval '1 second'
+     set vale_a_partir = date_trunc('second', clock_timestamp()) + interval '1 second',
+         sessao_do_aceite = public.jwt_sessao()
    where m.academia_id = v_conv.academia_id and m.user_id = auth.uid();
 
   update public.convites_equipe c

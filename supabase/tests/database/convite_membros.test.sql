@@ -4,7 +4,7 @@
 -- Academias A e B (ativas) e S (suspensa).
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(122);
+select plan(124);
 
 -- ---------------------------------------------------------------------
 -- Auxiliares
@@ -628,6 +628,28 @@ select public.__como_token('e7c00000-0000-4000-8000-0000000000d1', floor(extract
                             'e7c00000-0000-4000-8000-0000000005a2');
 select is(public.__hint_de($$select * from public.equipe_da_academia('e7c00000-0000-4000-8000-00000000000a')$$),
   'sem_permissao', 'token novo de uma sessão revogada não usa o vínculo');
+-- Sessões criadas durante o aceite (antes do marco) não usam o vínculo; as
+-- criadas a partir dele, sim.
+reset role;
+insert into auth.sessions (id, user_id, created_at) values
+  ('e7c00000-0000-4000-8000-0000000005a3', 'e7c00000-0000-4000-8000-0000000000d1',
+   (select vale_a_partir from public.membros_academia
+     where academia_id = 'e7c00000-0000-4000-8000-00000000000a' and user_id = 'e7c00000-0000-4000-8000-0000000000d1')
+   - interval '500 milliseconds'),
+  ('e7c00000-0000-4000-8000-0000000005a4', 'e7c00000-0000-4000-8000-0000000000d1',
+   (select vale_a_partir from public.membros_academia
+     where academia_id = 'e7c00000-0000-4000-8000-00000000000a' and user_id = 'e7c00000-0000-4000-8000-0000000000d1'));
+set local role authenticated;
+select public.__como_token('e7c00000-0000-4000-8000-0000000000d1',
+  public.__vale('e7c00000-0000-4000-8000-00000000000a', 'e7c00000-0000-4000-8000-0000000000d1') + 5,
+  'e7c00000-0000-4000-8000-0000000005a3');
+select is(public.__hint_de($$select * from public.equipe_da_academia('e7c00000-0000-4000-8000-00000000000a')$$),
+  'sem_permissao', 'sessão criada durante o aceite não usa o vínculo, mesmo com token novo');
+select public.__como_token('e7c00000-0000-4000-8000-0000000000d1',
+  public.__vale('e7c00000-0000-4000-8000-00000000000a', 'e7c00000-0000-4000-8000-0000000000d1') + 5,
+  'e7c00000-0000-4000-8000-0000000005a4');
+select ok((select count(*) from public.equipe_da_academia('e7c00000-0000-4000-8000-00000000000a')) > 0,
+  'sessão criada a partir do marco usa o vínculo');
 select public.__como('e7c00000-0000-4000-8000-0000000000d1');
 select ok((select count(*) from public.equipe_da_academia('e7c00000-0000-4000-8000-00000000000a')) > 0,
   'token novo, depois do aceite, usa o vínculo');

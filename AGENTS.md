@@ -125,8 +125,8 @@ Helpers SQL:
 - `tem_papel(academia_id, papeis[])`: leitura. Sem lista de papéis vale para
   qualquer membro, **menos o `totem`**, que só entra quando a lista o cita.
   Vínculo com `vale_a_partir` (gravado no aceite do convite) só vale para
-  tokens emitidos depois dele (`iat` do JWT) e de uma sessão que ainda existe
-  no Auth (`session_id`).
+  tokens emitidos depois dele (`iat` do JWT) e de uma sessão viva do usuário
+  que é a do aceite (`sessao_do_aceite`) ou foi criada depois do marco.
 - `pode_gerir(academia_id, papeis[])`: escrita; exige também assinatura do
   SaaS em dia. Academia suspensa ou com trial vencido lê, mas não altera.
 - `academia_ativa(academia_id)`: assinatura ativa ou trial válido.
