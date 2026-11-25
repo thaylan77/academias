@@ -209,7 +209,7 @@ Deno.test({
   name: "fluxo inteiro pelo runtime: gateway, convite, senha nova pelo link, aceite e acesso depois de renovar",
   ignore: !ativo,
   async fn() {
-    const { c, token, academiaId } = await prepararDono("fluxo");
+    const { token, academiaId } = await prepararDono("fluxo");
     const funcoes = `${url}/functions/v1`;
 
     // O gateway recusa sem token (verify_jwt) e a função sobe pelo runtime.
@@ -226,13 +226,27 @@ Deno.test({
     const corpo = await r.json();
     assertEquals([r.status, corpo.email_enviado], [200, true], JSON.stringify(corpo));
 
-    // A pessoa abre o link (aqui, um link de convite gerado na hora) e
-    // define a senha nova pela concluir-senha, também pelo runtime.
-    const link = await c.servico.auth.admin.generateLink({ type: "magiclink", email: convidado });
-    if (link.error) throw link.error;
+    // A pessoa abre o link que chegou no e-mail (Mailpit): o Auth confere o
+    // token e redireciona para /painel/convites com a sessão no fragmento.
+    const textos = await emailsPara(convidado);
+    const achado = textos.map((x) =>
+      x.replace(/&amp;/g, "&").match(/https?:\/\/[^\s"'<>]+\/auth\/v1\/verify\?[^\s"'<>]+/)
+    )
+      .find((m) => m);
+    assert(achado, "o e-mail do convite traz o link de verificação");
+    const abre = await fetch(achado[0], { redirect: "manual" });
+    await abre.body?.cancel();
+    const destino = abre.headers.get("Location") ?? "";
+    assert(destino.startsWith("http://127.0.0.1:3000/painel/convites"), `o link leva a /painel/convites (${destino})`);
+    const fragmento = new URLSearchParams(destino.split("#")[1] ?? "");
+    const acesso = fragmento.get("access_token");
+    const renovacao = fragmento.get("refresh_token");
+    assert(acesso && renovacao, "o redirect traz a sessão aberta pelo link");
     const cliente = novoAnon();
-    const v = await cliente.auth.verifyOtp({ token_hash: link.data.properties.hashed_token, type: "magiclink" });
+    const v = await cliente.auth.setSession({ access_token: acesso, refresh_token: renovacao });
     if (v.error || !v.data.session) throw v.error ?? new Error("sem sessão");
+
+    // Define a senha nova pela concluir-senha, também pelo runtime.
     const s = await fetch(`${funcoes}/concluir-senha`, {
       method: "POST",
       headers: {
