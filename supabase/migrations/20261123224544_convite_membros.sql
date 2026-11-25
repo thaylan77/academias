@@ -559,6 +559,8 @@ begin
   -- travada até o fim (todo vínculo, inclusive os anteriores ao convite). Uma
   -- revogação concorrente no Auth espera esta criação, ou ela vê a sessão
   -- apagada.
+  -- A conta do autor também (a prova de senha dele não muda até o fim).
+  perform 1 from auth.users u where u.id = p_user_id for share;
   perform 1 from auth.sessions s where s.id = p_sessao and s.user_id = p_user_id for share;
   if not found then
     raise exception 'Só o dono ou um admin da academia convida para a equipe.'
@@ -797,6 +799,7 @@ begin
   select c.* into v_conv from public.convites_equipe c where c.id = p_convite_id for update;
   -- A sessão do token, viva, travada até o fim: uma revogação concorrente no
   -- Auth espera o cancelamento, ou ele vê a sessão apagada.
+  perform 1 from auth.users u where u.id = auth.uid() for share;
   perform 1 from auth.sessions s where s.id = public.jwt_sessao() and s.user_id = auth.uid() for share;
   if not found then
     raise exception 'Convite não encontrado.' using hint = 'convite_invalido';
@@ -1453,6 +1456,8 @@ begin
   -- A sessão do token, viva, travada até o fim, para todo vínculo (inclusive
   -- os anteriores ao convite): uma sessão apagada no Auth não altera a equipe,
   -- e uma revogação concorrente espera esta alteração.
+  -- A conta do autor também (a prova de senha dele não muda até o fim).
+  perform 1 from auth.users u where u.id = auth.uid() for share;
   perform 1 from auth.sessions s where s.id = public.jwt_sessao() and s.user_id = auth.uid() for share;
   if not found then
     raise exception 'Você não tem mais permissão para alterar esta equipe.'

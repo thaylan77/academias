@@ -49,6 +49,8 @@
 --      vale_a_partir): a criação também é recusada.
 --   AD. a recusa espera a conta de quem convidou e o convite vence nessa
 --      espera: a recusa é recusada e o convite fica pendente.
+--   AE. a senha de um dono que entrou por convite muda (fora do fluxo)
+--      enquanto ele altera a equipe: a alteração espera e é recusada.
 --   AB. o aceite de quem já tem um vínculo inativo e uma edição direta desse
 --      vínculo pela secretaria, com a academia travada por uma terceira
 --      transação: as duas terminam, sem deadlock.
@@ -59,7 +61,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 create extension if not exists dblink with schema extensions;
-select plan(116);
+select plan(120);
 
 create function pg_temp.conexao(p_nome text) returns text language sql as $$
   select format('host=%s port=%s dbname=%s user=postgres password=postgres application_name=%s',
@@ -807,6 +809,30 @@ select extensions.dblink_exec('s1', 'commit');
 select matches(pg_temp.resultado_s2(), 'HINT: +convite_invalido', 'AD: o convite venceu na espera: a recusa é recusada');
 select is((select status from public.convites_equipe where id = 'e7d00000-0000-4000-8000-0000000002d4'),
   'pendente', 'AD: o convite vencido continua pendente, sem resposta gravada');
+
+-- ---------------------------------------------------------------------
+-- AE. bc (dono de O por convite) com a prova de senha válida; s1 troca a
+--     senha dele sem confirmar; bc altera o professor u12 em s2;
+--     s1 confirma.
+-- ---------------------------------------------------------------------
+select extensions.dblink_exec('prep', $$update auth.users
+   set raw_app_meta_data = raw_app_meta_data || jsonb_build_object('senha_comprovada', md5(coalesce(encrypted_password, '')))
+ where id = 'e7d00000-0000-4000-8000-0000000000bc'$$);
+select pg_temp.como('s2', 'e7d00000-0000-4000-8000-0000000000bc');
+select extensions.dblink_exec('s1', 'reset role');
+select extensions.dblink_exec('s1', $q$set request.jwt.claim.sub = ''; set request.jwt.claim.role = ''; set request.jwt.claims = ''$q$);
+select extensions.dblink_exec('s1', 'begin');
+select extensions.dblink_exec('s1', $$update auth.users set encrypted_password = 'trocada-de-novo'
+  where id = 'e7d00000-0000-4000-8000-0000000000bc'$$);
+select is(extensions.dblink_send_query('s2', $$update public.membros_academia set papel = 'recepcao'
+  where academia_id = 'e7d00000-0000-4000-8000-00000000000e' and user_id = 'e7d00000-0000-4000-8000-0000000000dd'$$),
+  1, 'AE: s2 envia a alteração do professor');
+select ok(pg_temp.s2_espera_s1(), 'AE: a alteração espera a troca de senha do autor');
+select extensions.dblink_exec('s1', 'commit');
+select matches(pg_temp.resultado_s2(), 'HINT: +sem_permissao', 'AE: com a prova do autor invalidada, a alteração é recusada');
+select is((select papel from public.membros_academia
+            where academia_id = 'e7d00000-0000-4000-8000-00000000000e' and user_id = 'e7d00000-0000-4000-8000-0000000000dd'),
+  'professor', 'AE: o professor continua professor');
 
 -- ---------------------------------------------------------------------
 -- AA. bc (dono de O, desativado em U) volta ativo, como vínculo aceito por
