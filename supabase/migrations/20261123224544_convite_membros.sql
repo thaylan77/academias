@@ -275,7 +275,8 @@ as $$
 $$;
 
 -- Papel de quem convida: dono ou admin ativo da academia, com a conta do
--- Auth existente e não apagada (exclusão lógica também conta). Não olha a
+-- Auth existente e não apagada (exclusão lógica também conta). Vínculo aceito
+-- por convite só conta enquanto a senha atual for a comprovada. Não olha a
 -- assinatura. Null se não for.
 create or replace function public.convite_papel_ativo(p_user_id uuid, p_academia_id uuid)
 returns text
@@ -292,6 +293,8 @@ as $$
     and m.ativo
     and m.papel in ('dono', 'admin')
     and u.deleted_at is null
+    and (m.vale_a_partir is null
+         or u.raw_app_meta_data ->> 'senha_comprovada' = md5(coalesce(u.encrypted_password, '')))
 $$;
 
 -- O convite ainda pode ser aceito do lado de quem convidou (passo 5 do
@@ -946,6 +949,10 @@ begin
   v_conv := public.convite_do_login_travado(p_convite_id, true);
 
   -- 5. Quem convidou ainda pode dar esse acesso.
+  -- A conta de quem convidou fica travada (for share) até o fim: uma troca de
+  -- senha dele que invalide a prova espera o aceite, ou o aceite espera a
+  -- troca e relê o hash.
+  perform 1 from auth.users u where u.id = v_conv.convidado_por for share;
   if not public.convite_de_quem_pode(v_conv) then
     raise exception 'Convite não encontrado, vencido ou já respondido.'
       using hint = 'convite_invalido';

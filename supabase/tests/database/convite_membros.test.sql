@@ -4,7 +4,7 @@
 -- Academias A e B (ativas) e S (suspensa).
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(131);
+select plan(133);
 
 -- ---------------------------------------------------------------------
 -- Auxiliares
@@ -915,6 +915,35 @@ select is(public.__hint_de('select public.expurgar_convites_envios(0)') || '/'
   'dados_invalidos/dados_invalidos', 'expurgo recusa lote zero ou nulo, antes de apagar');
 select is((select count(*) from public.convites_envios where email = 'apagada@conv.test'), 5::bigint,
   'expurgo mantém a cota vigente, inclusive da academia apagada');
+
+-- O autor (dono que entrou por convite) troca a senha fora do fluxo: o
+-- convite de dono que ele fez deixa de valer; com a prova refeita, volta.
+reset role;
+insert into auth.users (id, email, email_confirmed_at, raw_app_meta_data, encrypted_password) values
+  ('e7c00000-0000-4000-8000-0000000000e4', 'autorsuspenso@conv.test', now(),
+   jsonb_build_object('senha_comprovada', md5('hash-antigo')), 'hash-novo'),
+  ('e7c00000-0000-4000-8000-0000000000e5', 'convidadodele@conv.test', now(),
+   jsonb_build_object('senha_redefinida_em', 1, 'senha_redefinida_sessao', 'e7c00000-0000-4000-8000-0000000000e5',
+                      'senha_comprovada', md5('hash-do-convidado')), 'hash-do-convidado');
+insert into auth.sessions (id, user_id, created_at) values
+  ('e7c00000-0000-4000-8000-0000000000e5', 'e7c00000-0000-4000-8000-0000000000e5', now());
+insert into public.membros_academia (academia_id, user_id, papel, vale_a_partir) values
+  ('e7c00000-0000-4000-8000-00000000000a', 'e7c00000-0000-4000-8000-0000000000e4', 'dono', now() - interval '1 hour');
+insert into public.convites_equipe (academia_id, email, papel, convidado_por, expira_em) values
+  ('e7c00000-0000-4000-8000-00000000000a', 'convidadodele@conv.test', 'dono', 'e7c00000-0000-4000-8000-0000000000e4', now() + interval '7 days');
+set local role authenticated;
+select public.__como('e7c00000-0000-4000-8000-0000000000e5');
+select is(public.__hint_de(format('select public.aceitar_convite(%L)', (public.__conv('e7c00000-0000-4000-8000-00000000000a', 'convidadodele@conv.test')).id)),
+  'convite_invalido', 'convite de um autor sem a prova de senha válida não é aceito');
+reset role;
+update auth.users set raw_app_meta_data = raw_app_meta_data || jsonb_build_object('senha_comprovada', md5('hash-novo'))
+ where id = 'e7c00000-0000-4000-8000-0000000000e4';
+set local role authenticated;
+select public.__como('e7c00000-0000-4000-8000-0000000000e5');
+select public.aceitar_convite((public.__conv('e7c00000-0000-4000-8000-00000000000a', 'convidadodele@conv.test')).id);
+select is(public.__membro('e7c00000-0000-4000-8000-00000000000a', 'e7c00000-0000-4000-8000-0000000000e5'), 'dono',
+  'com a prova do autor refeita, o mesmo convite é aceito');
+reset role;
 
 select * from finish();
 rollback;
