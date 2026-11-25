@@ -53,6 +53,18 @@ supabase test db                    # roda os testes pgTAP no banco local
 - Depois de cada merge que traga migration, na pasta original (`academias`,
   em `main`, já linkada ao projeto): `npx supabase@2.119.0 db push`.
   Precisa de `supabase login` na máquina.
+- A configuração do Auth (`supabase/config.toml`, por exemplo a confirmação
+  de e-mail) não vai com o `db push`: depois do merge que a mudar, rode também
+  `npx supabase@2.119.0 config push` na mesma pasta e confira no painel do
+  Auth do projeto que "Confirm email" está ligado. O convite da equipe e o
+  vínculo do portal do aluno dependem disso. Um cadastro novo de teste só pode
+  ficar confirmado depois de abrir o link.
+- O convite da equipe também depende do Auth do projeto na **v2.198.0 ou
+  mais nova** (o login reconfere a senha sob trava antes de criar a sessão;
+  sem isso, um login com a senha antiga pode terminar depois do aceite).
+  Antes do `db push` que trouxer o convite, confira a versão em
+  `GET /auth/v1/health` (com a chave publishable). Versão mais antiga: não
+  aplique e avise o dono do projeto.
 - O front de dev aponta para o `honorteam-dev` só com a URL e a chave
   `anon`/publishable. A `service_role` desse projeto não vai para `.env`
   de front nem para o repositório.
@@ -118,12 +130,34 @@ mostrar menos: o menu do painel esconde Matrículas do professor.
 Helpers SQL:
 - `tem_papel(academia_id, papeis[])`: leitura. Sem lista de papéis vale para
   qualquer membro, **menos o `totem`**, que só entra quando a lista o cita.
+  Vínculo com `vale_a_partir` (gravado no aceite do convite) só vale para
+  tokens emitidos depois dele (`iat` do JWT) e de uma sessão viva do usuário
+  que é a do aceite (`sessao_do_aceite`) ou foi criada depois do marco.
 - `pode_gerir(academia_id, papeis[])`: escrita; exige também assinatura do
   SaaS em dia. Academia suspensa ou com trial vencido lê, mas não altera.
 - `academia_ativa(academia_id)`: assinatura ativa ou trial válido.
 - `sou_o_aluno(aluno_id)`: o login é o aluno ou o responsável dele.
 - `hoje_academia(academia_id)`: data de hoje no fuso da academia. Use no lugar
   de `current_date` em qualquer regra de negócio.
+
+Gatilho `membros_academia_ultimo_dono`: nenhuma alteração pela API deixa a
+academia sem dono ativo (`hint = ultimo_dono`), e a perda de poder de um dono
+ou admin trava a academia, como as funções de convite. Conta só outro dono
+com acesso (vínculo por convite exige a prova de senha válida), com a conta
+dele travada durante a saída. Se esse dono trocar a senha fora do fluxo
+depois, ele mesmo recupera o acesso refazendo a prova pela `concluir-senha`.
+Refazer a prova derruba as outras sessões da conta e move o marco do vínculo
+(`vale_a_partir`) para depois dela: o front renova a sessão em seguida. Exclusão lógica de conta
+no Auth (`deleted_at`) é proibida: o gatilho `auth_users_exclusao_logica`
+recusa para todos (`exclusao_logica_bloqueada`); conta se apaga de verdade,
+e o delete em cascata leva os vínculos.
+
+Entrada na equipe só pelo convite (`aceitar_convite`) ou por `criar_academia`:
+`authenticated` não insere em `membros_academia` e só atualiza `papel` e
+`ativo` (trocar o titular do vínculo é só para o `service_role`). Nenhum
+update pela API leva um vínculo de aluno ou totem para a equipe (gatilho
+`membros_academia_sem_atalho`). Toda alteração direta de um vínculo pela API
+trava a academia e reconfere o papel e a assinatura de quem altera.
 
 **Única exceção** à regra "suspensa lê, mas não altera": `anonimizar_aluno`
 usa `tem_papel` (dono, admin) sem checar a assinatura, porque pedido de
@@ -155,6 +189,13 @@ Plano, status e slug da academia só mudam via `service_role` (billing do SaaS).
 | `trancar_matricula(matricula_id)` / `destrancar_matricula(matricula_id)` | secretaria | trancada não gera cobrança nem aceita check-in, mas ocupa a turma; trancar devolve as pendentes de hoje em diante; destrancar (só a trancada em andamento) reativa o aluno |
 | `salvar_turma(academia_id, dados, turma_id?)` | dono, admin | turma e horários numa transação; turma com presença não troca de modalidade |
 | `anonimizar_aluno(aluno_id)`           | dono, admin  | LGPD: substitui o delete de aluno                          |
+| `criar_convite_interna(user_id, academia_id, email, papel)` | Edge Function `convidar-membro` (service_role) | convite da equipe por e-mail (dono convida até dono; admin, até admin), um pendente por e-mail e academia, 7 dias; devolve o estado da conta só para a função; limite de reenvio e diário |
+| `confirmar_envio_convite_interna(envio_id)` / `liberar_envio_convite_interna(envio_id)` | Edge Function `convidar-membro` (service_role) | confirma a reserva de envio quando o provedor aceita (o intervalo conta dali) ou a tira da cota quando ele recusa de vez |
+| `definir_senha_comprovada_interna(user_id, sessao, senha)` | Edge Function `concluir-senha` (service_role) | grava a senha nova (bcrypt) e a prova (horário, sessão e hash dessa senha) na mesma operação, com a conta travada; o aceite e o vínculo por convite exigem a prova |
+| `expurgar_convites_envios(lote?)` | job pg_cron (06:30 UTC) | apaga de `convites_envios` os registros fora das janelas da C10 (mais de 3 dias), em lotes |
+| `cancelar_convite(convite_id)` | dono, admin | cancela convite pendente (admin não cancela o de dono) |
+| `meus_convites()` / `aceitar_convite(convite_id)` / `recusar_convite(convite_id)` | logado | convites pendentes do e-mail confirmado do login; o aceite grava em `membros_academia` (novo, reativação ou troca do papel `aluno`) |
+| `equipe_da_academia(academia_id)` | dono, admin | membros da equipe e o totem, sem o papel `aluno`; e-mail só de vínculo verificado (`membros_academia.verificado`: convite aceito, criação da academia ou `service_role`; os anteriores ao convite ficam sem e-mail até um aceite) |
 | `registrar_graduacao(academia_id, dados)` | dono, admin, professor | graduação com data no dia da academia (nunca no futuro) e grau dentro da faixa |
 | `vw_graduacao_atual`                   | equipe/aluno | faixa e grau atuais por modalidade                         |
 | `vw_progresso_graduacao`               | equipe/aluno | aulas e meses desde a última graduação, campo `apto`       |

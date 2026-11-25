@@ -11,6 +11,11 @@ language sql immutable as $$ select md5('honor-rls:' || chave)::uuid $$;
 insert into auth.users (id, email)
 select pg_temp.id('usuario-' || n), 'rls-' || n || '@example.test'
 from generate_series(1, 10) n;
+-- Uma sessão viva por usuário (id = o do usuário): a alteração direta da
+-- equipe exige a sessão do token (session_id) em auth.sessions.
+insert into auth.sessions (id, user_id, created_at)
+select pg_temp.id('usuario-' || n), pg_temp.id('usuario-' || n), now()
+from generate_series(1, 10) n;
 
 insert into public.academias (id, nome, slug, status)
 values (pg_temp.id('A'), 'Academia RLS A', 'teste-rls-a', 'ativa'),
@@ -118,7 +123,7 @@ insert into casos_insert values
 ('presencas', $$insert into public.presencas (academia_id, aluno_id, turma_id, data) values (pg_temp.id('A'), pg_temp.id('aluno-A1'), pg_temp.id('turma-A'), public.hoje_academia(pg_temp.id('A')) - 2)$$, array['dono','admin','professor','recepcao']),
 ('graduacoes', $$insert into public.graduacoes (academia_id, aluno_id, faixa_id) values (pg_temp.id('A'), pg_temp.id('aluno-A1'), pg_temp.id('faixa-A'))$$, array['dono','admin','professor']),
 ('cobrancas', $$insert into public.cobrancas (academia_id, aluno_id, valor, vencimento) values (pg_temp.id('A'), pg_temp.id('aluno-A1'), 100, public.hoje_academia(pg_temp.id('A')))$$, array['dono','admin','recepcao']),
-('membros_academia', $$insert into public.membros_academia (academia_id, user_id, papel) values (pg_temp.id('A'), pg_temp.id('usuario-9'), 'professor')$$, array['dono','admin']);
+('membros_academia', $$insert into public.membros_academia (academia_id, user_id, papel) values (pg_temp.id('A'), pg_temp.id('usuario-9'), 'professor')$$, array[]::text[]);
 grant select on casos_insert to authenticated;
 
 -- RLS deve estar habilitado em todas as tabelas de negócio.
@@ -242,6 +247,7 @@ select throws_ok($$delete from public.cobrancas where aluno_id = pg_temp.id('alu
   '42501', 'permission denied for table cobrancas', 'Recepção recebe permission denied ao apagar cobrança');
 
 select set_config('request.jwt.claim.sub', pg_temp.id('usuario-2')::text, true);
+select set_config('request.jwt.claims', json_build_object('sub', pg_temp.id('usuario-2'), 'role', 'authenticated', 'session_id', pg_temp.id('usuario-2'))::text, true);
 select pg_temp.escrita($$insert into public.membros_academia (academia_id, user_id, papel) values (pg_temp.id('A'), pg_temp.id('usuario-9'), 'dono')$$, false, 'Admin não cria dono');
 select pg_temp.escrita($$update public.membros_academia set papel = 'dono' where user_id = pg_temp.id('usuario-2')$$, false, 'Admin não promove a si mesmo');
 select pg_temp.escrita($$update public.membros_academia set papel = 'professor' where user_id = pg_temp.id('usuario-1')$$, false, 'Admin não rebaixa dono');
@@ -249,7 +255,9 @@ select pg_temp.escrita($$delete from public.membros_academia where user_id = pg_
 select pg_temp.escrita($$update public.membros_academia set papel = 'recepcao' where user_id = pg_temp.id('usuario-3')$$, true, 'Admin gerencia equipe sem papel dono');
 
 select set_config('request.jwt.claim.sub', pg_temp.id('usuario-1')::text, true);
+select set_config('request.jwt.claims', json_build_object('sub', pg_temp.id('usuario-1'), 'role', 'authenticated', 'session_id', pg_temp.id('usuario-1'))::text, true);
 select pg_temp.escrita($$update public.membros_academia set papel = 'dono' where user_id = pg_temp.id('usuario-3')$$, true, 'Dono pode promover outro dono');
+select set_config('request.jwt.claims', '', true);
 select pg_temp.escrita($$update public.academias set nome = 'Novo nome' where id = pg_temp.id('A')$$, true, 'Dono ativo atualiza nome');
 select pg_temp.escrita(format('update public.academias set %I = %L where id = pg_temp.id(''A'')', coluna, valor), false,
   'Dono não altera coluna de billing: ' || coluna)

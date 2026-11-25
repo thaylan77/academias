@@ -47,14 +47,14 @@ Fica de fora:
 |---|---------|----------|---------|
 | C1 | Quem convida quem | O dono convida `dono`, `admin`, `professor` e `recepcao`. O admin convida `admin`, `professor` e `recepcao`. Ninguém convida `aluno` nem `totem`. | É a regra que o RLS de `membros_academia` já aplica. Totem e aluno têm entrada própria (seção 1). |
 | C2 | Validade | 7 dias. Reenviar renova a validade e manda o e-mail de novo. | Curto o bastante para um e-mail esquecido não virar porta aberta. |
-| C3 | Como o convite prova quem aceita | Pelo **e-mail confirmado do login**: aceita quem entrou com o mesmo e-mail do convite (`auth.users.email_confirmed_at` preenchido). O link não carrega token. | Mesmo critério de `vincular_meu_cadastro_aluno`. Um link encaminhado não serve para outra pessoa, e não há segredo para guardar nem vazar. |
+| C3 | Como o convite prova quem aceita | Pelo **e-mail confirmado do login**: aceita quem entrou com o mesmo e-mail do convite (`auth.users.email_confirmed_at` preenchido). O link não carrega token. Na implementação, o aceite também exige que a sessão tenha sido aberta por um link enviado ao e-mail (`amr` do JWT: link mágico, OTP, convite, recuperação ou confirmação de cadastro; `hint = convite_exige_link`), e a confirmação de e-mail fica ligada no Auth (`enable_confirmations`): o e-mail confirmado sozinho não prova a posse se o Auth estiver configurado sem confirmação. | Mesmo critério de `vincular_meu_cadastro_aluno`. Um link encaminhado não serve para outra pessoa, e não há segredo para guardar nem vazar. |
 | C4 | E-mail com conta confirmada | Recebe um link mágico para `/painel/convites`. Ao aceitar, o vínculo vai para a conta que já existe; nenhuma conta nova é criada. | Uma pessoa, um login, várias academias: é o modelo atual do painel. |
 | C5 | E-mail sem conta, ou com conta **não confirmada** | Sem conta: `auth.admin.inviteUserByEmail`. Conta não confirmada: a função troca a senha dela por uma aleatória que ninguém conhece e manda o link mágico. Nos dois casos, a conta é marcada para definir senha (4.4), e o painel pede a senha antes do aceite. | A conta não confirmada pode ter sido criada por outra pessoa, com uma senha que ela conhece (4.4, passo 2). |
 | C6 | Academia suspensa | Não convida, não reenvia, não cancela, não aceita e não recusa (`hint = academia_suspensa`). | "Suspensa lê, mas não altera", sem exceção nova. Um convite parado não abre acesso, porque o aceite também está bloqueado. |
 | C7 | Quem já é da academia | Membro ativo da equipe (papel diferente de `aluno`): o convite é recusado (`ja_membro`), no criar e no aceitar; troca de papel é na seção Equipe. Membro **inativo**: o aceite reativa com o papel do convite. Quem só tem o papel `aluno`: o aceite troca para o papel da equipe, e o acesso de aluno continua (vem de `alunos.user_id`, por `sou_o_aluno`). | A chave `(academia_id, user_id)` só cabe um papel. O de equipe prevalece, como já acontece em `vincular_meu_cadastro_aluno` (`on conflict do nothing`). Sem totem no convite, nenhum aluno vira totem e perde o catálogo. |
 | C8 | Último dono | Gatilho em `membros_academia`: recusa o update ou delete que deixe a academia sem **nenhum dono ativo** (`hint = ultimo_dono`). Vale também para o dono que altera a própria linha. Só passa o `service_role`, ou o delete em cascata de uma academia que está sendo apagada (4.5). | Uma academia sem dono fica sem ninguém que possa alterar outro dono. |
 | C9 | Convite duplicado | Um convite pendente por e-mail e academia. Convidar de novo o mesmo e-mail atualiza o papel, a validade e o `convidado_por` do pendente, se quem convida pode convidar **o papel novo e o papel do pendente**. | Evita dois convites com papéis diferentes para a mesma pessoa, e impede que um admin rebaixe o convite de um dono. |
-| C10 | Limite de envio | No máximo 1 e-mail por convite a cada 60 segundos (`hint = convite_reenvio_cedo`) e 30 convites novos por academia a cada 24 horas (`hint = limite_convites`). | Qualquer login cria uma academia em trial. Sem limite, uma conta abusiva gasta a cota de SMTP de todo o SaaS. |
+| C10 | Limite de envio | No máximo 1 e-mail para o mesmo endereço a cada 60 segundos e 5 em 24 horas, contando todas as academias e os convites cancelados e recusados; e 30 convites criados ou com envio por academia em 24 horas (`limite_convites`). Pelo histórico da própria academia (tentativas, com e-mail ou sem), o erro é explícito (`convite_reenvio_cedo`, `limite_convites`); pelos envios reais de outras, o convite e a tentativa são gravados como num envio, mas o e-mail não sai (`enviar = false`). A resposta ao front, as colunas que a academia lê e os próximos limites ficam iguais nos dois casos; os envios reais ficam em `convites_envios`, tabela do projeto todo que `authenticated` não lê e que não some quando uma academia é apagada. Assim nada revela a atividade de outro tenant. Os limites por endereço valem no projeto todo (decisão do dono do projeto na revisão do PR #82): uma academia em trial não usa outras para mandar spam ao mesmo endereço. | Qualquer login cria uma academia em trial. Sem limite, uma conta abusiva gasta a cota de SMTP de todo o SaaS. |
 
 ## 4. Schema e banco
 
@@ -121,7 +121,7 @@ nas `*_interna`.
 | Função | Quem chama | Faz |
 |--------|-----------|-----|
 | `criar_convite_interna(p_user_id, p_academia_id, p_email, p_papel)` | Edge Function (`service_role`) | Ver abaixo. Devolve `{convite_id, email, conta}`, com `conta` igual a `nenhuma`, `nao_confirmada` ou `confirmada`, mais o `user_id` da conta. |
-| `equipe_da_academia(p_academia_id)` | dono, admin | Membros com papel diferente de `aluno`: `user_id`, e-mail (de `auth.users`), papel, ativo, `created_at`. |
+| `equipe_da_academia(p_academia_id)` | dono, admin | Membros com papel diferente de `aluno`: `user_id`, e-mail (de `auth.users`), papel, ativo, `created_at`. O e-mail vem só de vínculo verificado (`membros_academia.verificado`); vínculos gravados antes do convite, sem o aceite da conta, vêm com e-mail nulo até um aceite. |
 | `cancelar_convite(p_convite_id)` | dono, admin | Ver abaixo. |
 | `meus_convites()` | logado | Convites pendentes e não vencidos para o e-mail confirmado do login, com o nome da academia, o papel e a validade. Com e-mail não confirmado, devolve a lista vazia. |
 | `aceitar_convite(p_convite_id)` | logado | Ver abaixo. |
@@ -176,8 +176,12 @@ quem não é o convidado:
    `convite_invalido`. É um código só, para não revelar qual dos casos é.
 5. `convidado_por` nulo, ou que já não é dono ou admin ativo da academia,
    ou que é admin num convite `dono`: `convite_invalido`. O convite morre
-   com o acesso de quem o fez.
-6. `academia_ativa` falha: `academia_suspensa`.
+   com o acesso de quem o fez: a revogação (desativar, rebaixar, apagar ou
+   trocar o titular do vínculo) já cancela os convites pendentes que a
+   pessoa não pode mais conceder, e recuperar o papel não os traz de volta.
+6. `academia_ativa` falha: `academia_suspensa`. Na implementação, esta
+   checagem roda no fim, depois de todas as esperas, com o relógio de agora
+   no fuso da academia (um trial que vence durante a espera não aceita).
 7. Quem aceita já é membro ativo com papel diferente de `aluno`:
    `ja_membro`. Isso cobre quem foi reativado pela tela Equipe depois do
    convite.
@@ -223,21 +227,57 @@ A entrada é `{ academia_id, email, papel }`, com o JWT de quem convida.
    - `confirmada`: manda o link mágico (`signInWithOtp`,
      `shouldCreateUser: false`).
 
+   Se `criar_convite_interna` devolve `enviar = false` (limite por endereço
+   estourado pelo histórico de outra academia), a função não manda e-mail e
+   responde ao front exatamente como num envio: o front não distingue os
+   dois casos.
+
    O `redirectTo` é `SITE_URL + "/painel/convites"`, com `SITE_URL` vindo de
    variável de ambiente da função, nunca do pedido. O e-mail usado é o
    **normalizado**, devolvido pela função interna.
 3. Se o e-mail não sair, o convite fica pendente e a tela mostra "Convite
    criado, mas o e-mail não saiu. Tente reenviar em um minuto."
+   Para cada envio liberado (`enviar = true`), o `envio_id` devolvido é
+   uma reserva: com o provedor aceitando, a função chama
+   `confirmar_envio_convite_interna(envio_id)`, e o intervalo de
+   60 segundos passa a contar dali; com o provedor recusando de vez, chama
+   `liberar_envio_convite_interna(envio_id)`, e o envio sai da
+   cota do endereço no projeto todo, para a falha não suprimir convites de
+   outras academias. Enquanto a reserva não tem resultado, ela bloqueia o
+   intervalo de 60 segundos e conta no teto de 5. A função deve resolver cada
+   reserva logo; se cair antes de saber o resultado, o endereço fica seguro
+   até o expurgo diário apagar a reserva, depois de 3 dias (lado seguro
+   contra spam).
 
 Reenviar é chamar a mesma função com o mesmo e-mail (C9 e C10). No
 reenvio, a conta criada pelo primeiro convite aparece como `nao_confirmada`
 (ou `confirmada`, se a pessoa já clicou) e continua marcada para definir
 senha. A pessoa não fica sem senha.
 
+Para aceitar, toda conta (nova ou antiga) define uma senha nova na sessão
+aberta pelo link do convite: a `concluir-senha` grava
+`app_metadata.senha_redefinida_em` (epoch) e `senha_redefinida_sessao` (o
+`session_id` do JWT), e o aceite exige que a troca seja posterior ao login
+pelo link e tenha sido feita na mesma sessão, que precisa existir no Auth. O aceite também apaga as outras sessões da
+conta, e o vínculo só vale para tokens emitidos depois dele
+((`membros_academia.vale_a_partir`, o primeiro segundo inteiro depois do aceite,
+comparado com o `iat` inteiro do JWT): o front renova a sessão a partir desse
+segundo e, se o token novo ainda vier com `iat` menor, renova de novo.
+Isso protege contas criadas enquanto a confirmação de e-mail estava
+desligada (a senha antiga pode estar com outra pessoa). A `concluir-senha` grava a
+senha e a prova numa só operação, chamando
+`definir_senha_comprovada_interna(user_id, session_id, senha)` com a conta
+travada (nenhuma troca concorrente fica entre a senha e a prova), e guarda
+também o hash da senha comprovada: o vínculo aceito por convite só
+vale enquanto a senha atual for essa, e uma troca fora desse fluxo suspende o
+acesso da equipe até uma nova prova. A
+`criar_convite_interna` recebe o `iat` do token que a Edge Function conferiu.
+
 `app_metadata` só é gravado com `service_role`, então o usuário não
 consegue apagar a marca sozinho. Quem tira a marca é uma segunda Edge
-Function, `concluir-senha`: o painel a chama depois que
-`auth.updateUser({ password })` dá certo, e ela confere o JWT e remove
+Function, `concluir-senha`: o painel manda a senha nova para ela (não usa
+`auth.updateUser`), e ela confere o JWT e chama
+`definir_senha_comprovada_interna`, que grava a senha e remove
 `definir_senha`. A função `aceitar_convite` lê a marca em
 `auth.users.raw_app_meta_data`.
 
@@ -268,7 +308,12 @@ mesmo tempo esperam um pelo outro, e o segundo é recusado.
 
 Apagar no Auth a conta do último dono de uma academia (o delete em cascata
 de `auth.users`) também é recusado, porque o Auth não roda como
-`service_role`. A conta só pode ser apagada depois de passar a academia
+`service_role`. A exclusão lógica (`deleted_at`) é proibida (decisão do dono do projeto
+na revisão do PR #82): um gatilho em `auth.users` a recusa com
+`exclusao_logica_bloqueada`, porque uma conta apagada logicamente, com um JWT
+emitido antes, continuaria passando pelo RLS em vários pontos. Vale para todos,
+inclusive o SQL do projeto. Conta se apaga de verdade, e o delete em cascata
+leva os vínculos e solta os cadastros de aluno e professor. A conta só pode ser apagada depois de passar a academia
 para outro dono. Pedido de titular (LGPD) com essa conta é tratado
 manualmente, pelo SQL do projeto.
 
@@ -284,7 +329,7 @@ manualmente, pelo SQL do projeto.
     `dono`.
 - **`/painel/convites`**, para qualquer login: mostra `meus_convites()`,
   com aceitar e recusar. Se a conta está marcada para definir senha, pede a
-  senha antes (`auth.updateUser`, depois `concluir-senha`). Ao aceitar, vai
+  senha antes (pela `concluir-senha`). Ao aceitar, vai
   para a escolha de academia.
 
 `convites` precisa entrar na lista de segmentos que o painel reconhece. Não

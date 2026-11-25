@@ -76,7 +76,7 @@ O código vai no `hint` do erro (`raise exception '<mensagem em português>' usi
 | Código | Função | Quando |
 |--------|--------|--------|
 | `checkin_token_invalido` | `fazer_checkin` | token ausente, errado ou vencido; turma inexistente ou inativa |
-| `academia_suspensa` | `fazer_checkin`, `emitir_token_checkin`, `totem_turmas_agora` | assinatura suspensa ou trial vencido. **Só em RPC autenticada.** |
+| `academia_suspensa` | `fazer_checkin`, `emitir_token_checkin`, `totem_turmas_agora`, `criar_convite_interna`, `cancelar_convite`, `aceitar_convite`, `recusar_convite` | assinatura suspensa ou trial vencido. **Só em RPC autenticada.** Nos convites, só depois de conferir que quem chama tem acesso ao convite (convite de outra academia ou de outro e-mail dá `convite_invalido`, nunca este código); `criar_convite_interna` é chamada pela Edge Function `convidar-membro` com o JWT conferido |
 | `checkin_fora_do_horario` | `fazer_checkin`, `emitir_token_checkin` | fora da janela, ou turma sem horário |
 | `checkin_sem_matricula` | `fazer_checkin` | login sem aluno ativo com matrícula ativa na turma |
 | `checkin_multiplos_alunos` | `fazer_checkin` | responsável com mais de um aluno na turma e sem `p_aluno_id`. O `detail` traz os candidatos (ver abaixo) |
@@ -86,8 +86,8 @@ O código vai no `hint` do erro (`raise exception '<mensagem em português>' usi
 | `aluno_anonimizado` | gravação em `alunos` | cadastro anonimizado não pode ser alterado |
 | `anonimizar_cobranca_pendente` | `anonimizar_aluno` | o aluno tem cobrança pendente: cancelar ou dar baixa antes |
 | `menor_sem_responsavel` | `matricula_online` | menor de 18 anos sem nome e CPF do responsável |
-| `dados_invalidos` | `matricula_online`, `criar_matricula`, `encerrar_matricula`, `salvar_turma`, `registrar_graduacao`, `baixar_cobranca_manual` | nome vazio, termo não aceito, plano inválido, CPF malformado (D7); e qualquer entrada malformada: `p_dados` que não é objeto, `plano_id` que não é uuid, `data_nascimento` fora de `AAAA-MM-DD`, inexistente ou no futuro, `aceite_termo` que não é o booleano `true`, `turma_ids` que não é lista de uuids; na baixa, forma, data ou valor inválidos |
-| `sem_permissao` | `emitir_token_checkin`, `totem_turmas_agora`, `rotacionar_segredo_checkin`, `anonimizar_aluno`, `criar_matricula`, `aprovar_matricula`, `encerrar_matricula`, `trancar_matricula`, `destrancar_matricula`, `salvar_turma`, `registrar_graduacao`, `baixar_cobranca_manual`, `cancelar_cobranca`, `gerar_cobrancas_matricula` | quem chama não tem o papel na academia (D7); em `anonimizar_aluno`, também aluno inexistente; nas três de cobrança, também cobrança ou matrícula inexistente e academia com assinatura vencida (`pode_gerir`) |
+| `dados_invalidos` | `matricula_online`, `criar_matricula`, `encerrar_matricula`, `salvar_turma`, `registrar_graduacao`, `baixar_cobranca_manual`, `criar_convite_interna` | nome vazio, termo não aceito, plano inválido, CPF malformado (D7); e qualquer entrada malformada: `p_dados` que não é objeto, `plano_id` que não é uuid, `data_nascimento` fora de `AAAA-MM-DD`, inexistente ou no futuro, `aceite_termo` que não é o booleano `true`, `turma_ids` que não é lista de uuids; na baixa, forma, data ou valor inválidos; no convite, e-mail malformado ou papel fora de `dono`, `admin`, `professor` e `recepcao` |
+| `sem_permissao` | `emitir_token_checkin`, `totem_turmas_agora`, `rotacionar_segredo_checkin`, `anonimizar_aluno`, `criar_matricula`, `aprovar_matricula`, `encerrar_matricula`, `trancar_matricula`, `destrancar_matricula`, `salvar_turma`, `registrar_graduacao`, `baixar_cobranca_manual`, `cancelar_cobranca`, `gerar_cobrancas_matricula`, `criar_convite_interna`, `cancelar_convite`, `equipe_da_academia` | quem chama não tem o papel na academia (D7); em `anonimizar_aluno`, também aluno inexistente; nas três de cobrança, também cobrança ou matrícula inexistente e academia com assinatura vencida (`pode_gerir`); em `criar_convite_interna`, admin convidando `dono`, alterando um convite pendente de `dono` ou trazendo de volta um `dono` inativo; em `cancelar_convite`, admin cancelando convite de `dono` |
 | `slug_reservado` | `criar_academia` | slug é caminho do app (`painel`, `portal`, `api`, `admin`, `entrar`, `assets`). O check `academias_slug_nao_reservado` vale também para a troca de slug pelo billing |
 | `slug_em_uso` | `criar_academia` | outra academia já usa o slug |
 | `slug_invalido` | `criar_academia` | slug fora do formato: 3 a 40 caracteres, letras minúsculas, números e hífen, sem hífen nas pontas |
@@ -101,13 +101,24 @@ O código vai no `hint` do erro (`raise exception '<mensagem em português>' usi
 | `cobranca_emitida` | `baixar_cobranca_manual`, `cancelar_cobranca` | a cobrança foi emitida no gateway: baixa e cancelamento acontecem por lá |
 | `cobranca_nao_pendente` | `baixar_cobranca_manual`, `cancelar_cobranca` (e as `*_interna`) | baixa de cobrança paga ou cancelada; cancelamento de cobrança paga. Cancelar uma já cancelada, ou repetir a mesma baixa, não é erro (volta sem mudar nada) |
 | `cobranca_paga_gateway` | `baixar_cobranca_interna` | a cobrança já foi paga pelo gateway |
-| `email_nao_confirmado` | `vincular_meu_cadastro_aluno` | o login não tem e-mail confirmado (o link mágico confirma) |
+| `email_nao_confirmado` | `vincular_meu_cadastro_aluno`, `aceitar_convite`, `recusar_convite` | o login não tem e-mail confirmado (o link mágico confirma) |
 | `horario_invalido` | `salvar_turma` | dia fora de domingo a sábado, hora fora de `HH:MM` ou fim não depois do início |
 | `horario_sobreposto` | `salvar_turma` | dois horários da turma se sobrepõem no mesmo dia |
 | `turma_nao_encontrada` | `salvar_turma` | a turma editada não é da academia informada |
 | `turma_com_presencas` | gravação em `turmas` (e `salvar_turma`) | trocar a modalidade de turma que já tem presença (mudaria o progresso de graduação) |
 | `grau_invalido` | `registrar_graduacao` e gravação em `graduacoes` | grau acima do máximo da faixa |
 | `graduacao_repetida` | `registrar_graduacao` | mesma faixa, grau e data já registrados para o aluno |
+| `ja_membro` | `criar_convite_interna`, `aceitar_convite` | o e-mail já é membro ativo da equipe nesta academia, ou é o login de um totem dela |
+| `convite_invalido` | `cancelar_convite`, `aceitar_convite`, `recusar_convite` | convite inexistente, de academia que quem chama não gere, não pendente, vencido (no aceite), de outro e-mail ou de quem perdeu o acesso. Um código só, para não revelar qual |
+| `convite_reenvio_cedo` | `criar_convite_interna` | menos de 60 segundos desde a última tentativa desta academia para o mesmo endereço, contando convites cancelados e recusados. Pelos envios reais de outras academias não há erro: o convite e a tentativa são gravados como num envio, mas o e-mail não sai (`enviar = false`); os envios reais ficam em `convites_envios`, que `authenticated` não lê, para não revelar outro tenant |
+| `limite_convites` | `criar_convite_interna` | 5 e-mails desta academia para o mesmo endereço em 24 horas (pelas outras academias, grava sem envio, como acima), ou 30 convites criados ou com envio na academia em 24 horas |
+| `senha_pendente` | `aceitar_convite` | a conta não definiu senha nova depois de abrir o link (`app_metadata.senha_redefinida_em`, gravado pela Edge Function `concluir-senha`), ou ainda está marcada para definir senha (`app_metadata.definir_senha`) |
+| `senha_repetida` | `definir_senha_comprovada_interna` (pela `concluir-senha`) | a senha nova é igual à atual |
+| `senha_nao_verificavel` | `definir_senha_comprovada_interna` (pela `concluir-senha`) | a senha atual da conta está num formato que o banco não confere (não é bcrypt); a pessoa usa "esqueci a senha" do Auth |
+| `convite_exige_link` | `aceitar_convite` | a sessão não foi aberta por um link enviado ao e-mail (link mágico, OTP, convite, recuperação ou confirmação de cadastro; conferido no `amr` do JWT). A tela pede o link do convite |
+| `ultimo_dono` | gravação em `membros_academia` (gatilho `membros_academia_ultimo_dono`) | a alteração deixaria a academia sem dono ativo com conta não apagada. Passam o `service_role`, a sessão administrativa sem JWT e o delete em cascata da academia |
+| `exclusao_logica_bloqueada` | `auth.users` (gatilho `auth_users_exclusao_logica`) | qualquer um (o Auth, uma requisição ou o SQL do projeto) tentou a exclusão lógica (`deleted_at`) de uma conta. Conta se apaga de verdade |
+| `isolamento_nao_suportado` | `criar_convite_interna`, `cancelar_convite`, `aceitar_convite`, `recusar_convite` e o gatilho de revogação de `membros_academia` | a transação não está em read committed (repeatable read ou serializable); as travas por academia supõem read committed, o padrão do PostgREST |
 | `matricula_duplicada` | gravação em `matricula_turmas` e em `matriculas` | o aluno já tem matrícula não cancelada na turma em período sobreposto. O `detail` traz `matricula_id` e `turma_id` em conflito. Regra em `docs/specs/matricula-duplicada.md` |
 
 
