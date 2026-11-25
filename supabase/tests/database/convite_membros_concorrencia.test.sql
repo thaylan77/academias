@@ -40,6 +40,8 @@
 --      segundo: vale_a_partir é calculado depois da espera.
 --   Y. o mesmo, mas o convite vence durante essa espera: o aceite é recusado
 --      e desfaz tudo (sem vínculo, sessões intactas, convite pendente).
+--   Z. a sessão de um admin que entrou por convite é revogada enquanto ele
+--      cria um convite: a criação é recusada, sem convite nem reserva.
 -- A espera é provada pelo pid: s2 está bloqueada e s1 está entre os que a
 -- bloqueiam. As fixtures são gravadas e confirmadas por uma conexão própria,
 -- apagadas antes (se uma execução anterior parou no meio) e depois, pela
@@ -47,7 +49,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 create extension if not exists dblink with schema extensions;
-select plan(97);
+select plan(101);
 
 create function pg_temp.conexao(p_nome text) returns text language sql as $$
   select format('host=%s port=%s dbname=%s user=postgres password=postgres application_name=%s',
@@ -141,7 +143,7 @@ begin
       'e7d00000-0000-4000-8000-0000000000bc', 'e7d00000-0000-4000-8000-0000000000bd',
       'e7d00000-0000-4000-8000-0000000000dd', 'e7d00000-0000-4000-8000-0000000000de',
       'e7d00000-0000-4000-8000-0000000000df', 'e7d00000-0000-4000-8000-0000000000e0',
-      'e7d00000-0000-4000-8000-0000000000e1',
+      'e7d00000-0000-4000-8000-0000000000e1', 'e7d00000-0000-4000-8000-0000000000be',
       'e7d00000-0000-4000-8000-0000000000d1', 'e7d00000-0000-4000-8000-0000000000d2');
   $f$);
 end
@@ -186,7 +188,8 @@ select extensions.dblink_exec('prep', $f$
     ('e7d00000-0000-4000-8000-0000000000de', 'u13@concorre.test',   now()),
     ('e7d00000-0000-4000-8000-0000000000df', 'u14@concorre.test',   now()),
     ('e7d00000-0000-4000-8000-0000000000e0', 'u15@concorre.test',   now()),
-    ('e7d00000-0000-4000-8000-0000000000e1', 'u16@concorre.test',   now());
+    ('e7d00000-0000-4000-8000-0000000000e1', 'u16@concorre.test',   now()),
+    ('e7d00000-0000-4000-8000-0000000000be', 'admin14@concorre.test', now());
   -- Senha nova já definida (concluir-senha), como pede o aceite.
   -- Cada usuário com uma sessão (id = o próprio id do usuário, como o
   -- session_id que pg_temp.como põe no JWT) e a senha nova definida nela.
@@ -196,6 +199,8 @@ select extensions.dblink_exec('prep', $f$
   insert into auth.sessions (id, user_id) select id, id from auth.users where email like '%@concorre.test';
   insert into auth.sessions (id, user_id) values ('e7d00000-0000-4000-8000-0000000006e0', 'e7d00000-0000-4000-8000-0000000000e0');
   insert into auth.sessions (id, user_id) values ('e7d00000-0000-4000-8000-0000000006e1', 'e7d00000-0000-4000-8000-0000000000e1');
+  update public.membros_academia set vale_a_partir = now() - interval '1 hour'
+   where user_id = 'e7d00000-0000-4000-8000-0000000000be';
   insert into public.academias (id, nome, slug, status) values
     ('e7d00000-0000-4000-8000-00000000000a', 'Concorre K', 'convite-concorre-k', 'ativa'),
     ('e7d00000-0000-4000-8000-00000000000b', 'Concorre L', 'convite-concorre-l', 'ativa'),
@@ -217,7 +222,8 @@ select extensions.dblink_exec('prep', $f$
     ('e7d00000-0000-4000-8000-00000000000d', 'e7d00000-0000-4000-8000-0000000000b9', 'admin'),
     ('e7d00000-0000-4000-8000-00000000000e', 'e7d00000-0000-4000-8000-0000000000bc', 'dono'),
     ('e7d00000-0000-4000-8000-00000000000e', 'e7d00000-0000-4000-8000-0000000000bd', 'dono'),
-    ('e7d00000-0000-4000-8000-00000000000e', 'e7d00000-0000-4000-8000-0000000000dd', 'professor');
+    ('e7d00000-0000-4000-8000-00000000000e', 'e7d00000-0000-4000-8000-0000000000dd', 'professor'),
+    ('e7d00000-0000-4000-8000-00000000000e', 'e7d00000-0000-4000-8000-0000000000be', 'admin');
   insert into public.convites_equipe (id, academia_id, email, papel, convidado_por, expira_em) values
     ('e7d00000-0000-4000-8000-0000000002c1', 'e7d00000-0000-4000-8000-00000000000a', 'u1@concorre.test', 'professor',
      'e7d00000-0000-4000-8000-0000000000a1', now() + interval '7 days'),
@@ -718,6 +724,24 @@ select is((select (select count(*) from public.membros_academia
                   || '/' || (select count(*) from auth.sessions where user_id = 'e7d00000-0000-4000-8000-0000000000e1')::text
            from public.convites_equipe c where c.id = 'e7d00000-0000-4000-8000-0000000002d2'),
   '0/pendente/2', 'Y: sem vínculo, convite pendente e as duas sessões intactas');
+
+-- ---------------------------------------------------------------------
+-- Z. s1 (administrativa) apaga, sem confirmar, a sessão de admin14; s2, como
+--    a Edge Function, cria um convite com o token dessa sessão; s1 confirma.
+-- ---------------------------------------------------------------------
+select pg_temp.como('s2', 'service_role');
+select extensions.dblink_exec('s1', 'begin');
+select extensions.dblink_exec('s1', $$delete from auth.sessions where id = 'e7d00000-0000-4000-8000-0000000000be'$$);
+select is(extensions.dblink_send_query('s2', format($q$select public.criar_convite_interna(
+    'e7d00000-0000-4000-8000-0000000000be', 'e7d00000-0000-4000-8000-00000000000e', 'zeta@concorre.test', 'professor',
+    %s, 'e7d00000-0000-4000-8000-0000000000be')::text$q$, floor(extract(epoch from clock_timestamp()))::bigint)),
+  1, 'Z: s2 envia a criação');
+select ok(pg_temp.s2_espera_s1(), 'Z: a criação espera a revogação da sessão do autor');
+select extensions.dblink_exec('s1', 'commit');
+select matches(pg_temp.resultado_s2(), 'HINT: +sem_permissao', 'Z: com a sessão revogada, a criação é recusada');
+select is((select count(*) from public.convites_equipe where email = 'zeta@concorre.test')
+          + (select count(*) from public.convites_envios where email = 'zeta@concorre.test'),
+  0::bigint, 'Z: sem convite nem reserva');
 
 -- ---------------------------------------------------------------------
 -- Limpeza.

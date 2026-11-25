@@ -440,6 +440,22 @@ begin
     raise exception 'A assinatura da academia está suspensa: não é possível convidar.'
       using hint = 'academia_suspensa';
   end if;
+  -- E o autor de novo, depois das esperas. Se o vínculo dele veio por convite
+  -- (vale_a_partir), a sessão do token fica travada até o fim: uma revogação
+  -- concorrente no Auth espera esta criação, ou ela vê a sessão apagada.
+  if exists (select 1 from public.membros_academia m
+              where m.academia_id = p_academia_id and m.user_id = p_user_id
+                and m.vale_a_partir is not null) then
+    perform 1 from auth.sessions s where s.id = p_sessao and s.user_id = p_user_id for share;
+    if not found then
+      raise exception 'Só o dono ou um admin da academia convida para a equipe.'
+        using hint = 'sem_permissao';
+    end if;
+  end if;
+  if public.convite_papel_ativo_iat(p_user_id, p_academia_id, p_iat, p_sessao) is null then
+    raise exception 'Só o dono ou um admin da academia convida para a equipe.'
+      using hint = 'sem_permissao';
+  end if;
 
   -- 6a. Com o histórico desta academia, o erro é explícito: só revela dados
   --     dela mesma.
