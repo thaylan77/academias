@@ -647,7 +647,7 @@ isOneToOne: false
 { Args: { "p_academia_id": string,"p_dados": Json }; Returns: string
                            },
 "definir_senha_comprovada_interna":
-{ Args: { "p_senha": string,"p_sessao": string,"p_user_id": string }; Returns: undefined
+{ Args: { "p_aal"?: string,"p_senha": string,"p_sessao": string,"p_user_id": string }; Returns: undefined
                            },
 "destrancar_matricula":
 { Args: { "p_matricula_id": string }; Returns: undefined
