@@ -50,6 +50,15 @@ async function tratar(req: Request, deps: DepsSenha): Promise<Response> {
   }
   if (typeof senha !== "string") return erro(400, "dados_invalidos");
 
+  // Limite por conta antes do bcrypt (5 em 15 minutos), registrado numa
+  // transação própria: a recusa da senha não desfaz a tentativa.
+  const tentativa = await deps.rpc("registrar_tentativa_senha_interna", { p_user_id: userId });
+  if (tentativa.error) {
+    deps.log(`concluir-senha: erro ao registrar a tentativa (código ${codigoDoErro(tentativa.error)})`);
+    return erro(500, "erro_interno");
+  }
+  if (tentativa.data !== true) return erro(429, "limite_tentativas");
+
   const { error } = await deps.rpc("definir_senha_comprovada_interna", {
     p_user_id: userId,
     p_sessao: claims.sessao,

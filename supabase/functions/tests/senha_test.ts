@@ -105,3 +105,33 @@ Deno.test("mfa_necessario do banco repassado como 400", async () => {
   const r = await chama({ rpc: { definir_senha_comprovada_interna: { error: { hint: "mfa_necessario" } } } });
   assertEquals([r.status, r.corpo], [400, { erro: "mfa_necessario" }]);
 });
+
+Deno.test("limite de tentativas: 429 limite_tentativas, sem chegar ao bcrypt", async () => {
+  const r = await chama({ rpc: { registrar_tentativa_senha_interna: { data: false } } });
+  assertEquals([r.status, r.corpo], [429, { erro: "limite_tentativas" }]);
+  assertEquals(r.de("rpc:definir_senha_comprovada_interna").length, 0);
+});
+
+Deno.test("chamadas concorrentes: as que passam do limite não chegam ao bcrypt", async () => {
+  let restantes = 5;
+  const s = depsSimuladas();
+  const original = s.deps.rpc;
+  s.deps.rpc = (nome, args) => {
+    if (nome === "registrar_tentativa_senha_interna") {
+      return Promise.resolve({ data: restantes-- > 0, error: null });
+    }
+    return original(nome, args);
+  };
+  const respostas = await Promise.all(
+    Array.from({ length: 8 }, () => concluirSenha(pedido(SENHA), s.deps)),
+  );
+  const status = respostas.map((r) => r.status).sort();
+  assertEquals(status.filter((x) => x === 429).length, 3);
+  assertEquals(s.de("rpc:definir_senha_comprovada_interna").length, 5);
+});
+
+Deno.test("falha ao registrar a tentativa: 500, sem gravar a senha", async () => {
+  const r = await chama({ rpc: { registrar_tentativa_senha_interna: { error: { code: "57014" } } } });
+  assertEquals([r.status, r.corpo], [500, { erro: "erro_interno" }]);
+  assertEquals(r.de("rpc:definir_senha_comprovada_interna").length, 0);
+});

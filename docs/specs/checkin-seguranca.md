@@ -117,6 +117,7 @@ O código vai no `hint` do erro (`raise exception '<mensagem em português>' usi
 | `senha_nao_verificavel` | `definir_senha_comprovada_interna` (pela `concluir-senha`) | a senha atual da conta está num formato que o banco não confere (não é bcrypt); a pessoa usa "esqueci a senha" do Auth |
 | `sem_sessao` | Edge Functions `convidar-membro` e `concluir-senha` | pedido sem token ou com token que o Auth não aceita |
 | `mfa_necessario` | `definir_senha_comprovada_interna` (pela `concluir-senha`) | a conta tem fator MFA verificado e a sessão ainda não passou pelo segundo fator (aal1) |
+| `limite_tentativas` | Edge Function `concluir-senha` | mais de 5 tentativas de definir a senha na mesma conta em 15 minutos |
 | `erro_interno` | Edge Functions `convidar-membro` e `concluir-senha` | falha inesperada (o texto do erro fica só no log da função) |
 | `convite_exige_link` | `aceitar_convite` | a sessão não foi aberta por um link enviado ao e-mail (link mágico, OTP, convite, recuperação ou confirmação de cadastro; conferido no `amr` do JWT). A tela pede o link do convite |
 | `ultimo_dono` | gravação em `membros_academia` (gatilho `membros_academia_ultimo_dono`) | a alteração deixaria a academia sem dono ativo com conta não apagada. Passam o `service_role`, a sessão administrativa sem JWT e o delete em cascata da academia |

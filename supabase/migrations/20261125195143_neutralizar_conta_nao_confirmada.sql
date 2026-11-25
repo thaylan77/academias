@@ -300,3 +300,41 @@ begin
   end if;
 end
 $$;
+
+-- Limite de tentativas da concluir-senha (revisão do Codex, PR 84): cada
+-- tentativa custa um bcrypt e trava a conta. A Edge Function registra a
+-- tentativa aqui, numa transação própria (a recusa da senha não a desfaz),
+-- antes de chamar definir_senha_comprovada_interna: no máximo 5 por conta em
+-- 15 minutos. Sem academia_id: é do login, não de uma academia.
+create table public.convites_senha_tentativas (
+  id         bigint generated always as identity primary key,
+  user_id    uuid not null references auth.users (id) on delete cascade,
+  tentado_em timestamptz not null default clock_timestamp()
+);
+create index convites_senha_tentativas_user_idx on public.convites_senha_tentativas (user_id, tentado_em);
+alter table public.convites_senha_tentativas enable row level security;
+revoke all on public.convites_senha_tentativas from anon, authenticated;
+
+create or replace function public.registrar_tentativa_senha_interna(p_user_id uuid)
+returns boolean
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  -- Uma trava curta por conta (sem bcrypt): tentativas concorrentes entram
+  -- em fila aqui e são contadas uma a uma.
+  perform pg_advisory_xact_lock(hashtextextended('senha_tentativa:' || p_user_id::text, 0));
+  delete from public.convites_senha_tentativas t
+   where t.user_id = p_user_id and t.tentado_em < clock_timestamp() - interval '1 day';
+  if (select count(*) from public.convites_senha_tentativas t
+       where t.user_id = p_user_id and t.tentado_em > clock_timestamp() - interval '15 minutes') >= 5 then
+    return false;
+  end if;
+  insert into public.convites_senha_tentativas (user_id) values (p_user_id);
+  return true;
+end
+$$;
+
+revoke execute on function public.registrar_tentativa_senha_interna(uuid) from public, anon, authenticated;
+grant execute on function public.registrar_tentativa_senha_interna(uuid) to service_role;

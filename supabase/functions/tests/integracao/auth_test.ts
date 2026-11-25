@@ -648,3 +648,32 @@ Deno.test({
     assert(entra.error, "a senha do cadastro continua inválida depois da confirmação");
   },
 });
+
+Deno.test({
+  name: "concluir-senha concorrente: só 5 tentativas por conta chegam ao banco; as demais recebem limite_tentativas",
+  ignore: !ativo,
+  async fn() {
+    const dono = await prepararDono("limite-dono");
+    const endereco = email("limite");
+    const conta = await dono.c.servico.auth.admin.createUser({ email: endereco, email_confirm: true });
+    if (conta.error) throw conta.error;
+    const convite = await convidarMembro(
+      pedido(dono.token, { academia_id: dono.academiaId, email: endereco, papel: "professor" }),
+      depsConvidar(dono.c, "http://127.0.0.1:3000"),
+    );
+    assertEquals(convite.status, 200);
+    const { sessao } = await sessaoPorLink(dono.c.servico, endereco);
+
+    const respostas = await Promise.all(
+      Array.from(
+        { length: 7 },
+        () => concluirSenha(pedido(sessao.access_token, { senha: "senha-repetida-1" }), depsSenha(dono.c)),
+      ),
+    );
+    const corpos = await Promise.all(respostas.map((r) => r.json()));
+    assertEquals(corpos.filter((x) => x.erro === "limite_tentativas").length, 2, JSON.stringify(corpos));
+    const tentativas = await dono.c.servico.from("convites_senha_tentativas").select("id")
+      .eq("user_id", conta.data.user!.id);
+    assertEquals(tentativas.data?.length, 5, "só 5 tentativas registradas");
+  },
+});

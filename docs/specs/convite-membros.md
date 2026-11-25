@@ -344,7 +344,9 @@ A função não grava em tabela de negócio fora de `criar_convite_interna`. O
   disso, `convite_invalido`. Conta comum troca a senha pelo Auth. Conta com
   fator MFA verificado só grava com o token apresentado em aal2 (o `aal` do
   JWT vai para o banco) e a sessão viva também em aal2, como a troca de
-  senha do Auth; senão, `mfa_necessario`.
+  senha do Auth; senão, `mfa_necessario`. Antes do bcrypt, cada tentativa é registrada numa
+  transação própria (`registrar_tentativa_senha_interna`): no máximo 5 por
+  conta em 15 minutos; a partir daí, 429 `limite_tentativas`.
   Sucesso: `{ ok: true }`, e o front renova a sessão.
 
 **Dependência de ambiente:** o SMTP padrão do Supabase só entrega para os
