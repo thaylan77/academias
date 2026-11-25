@@ -4,7 +4,7 @@
 -- Academias A e B (ativas) e S (suspensa).
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(130);
+select plan(131);
 
 -- ---------------------------------------------------------------------
 -- Auxiliares
@@ -805,6 +805,25 @@ select is(public.__hint_de($$delete from public.membros_academia
   'ultimo_dono', 'o único dono não se apaga');
 select is(public.__hint_de($$select public.__apaga_membro_definer('e7c00000-0000-4000-8000-00000000000b', 'e7c00000-0000-4000-8000-0000000000b1')$$),
   'ultimo_dono', 'função security definer chamada pela API também não fura a trava');
+
+-- Um segundo dono que entrou por convite, mas trocou a senha fora do fluxo
+-- (sem acesso), não conta: b1 continua sendo o último dono.
+reset role;
+insert into auth.users (id, email, email_confirmed_at, raw_app_meta_data, encrypted_password) values
+  ('e7c00000-0000-4000-8000-0000000000e3', 'donosuspenso@conv.test', now(),
+   jsonb_build_object('senha_comprovada', md5('hash-antigo')), 'hash-novo');
+insert into public.membros_academia (academia_id, user_id, papel, vale_a_partir) values
+  ('e7c00000-0000-4000-8000-00000000000b', 'e7c00000-0000-4000-8000-0000000000e3', 'dono', now() - interval '1 hour');
+set local role authenticated;
+select public.__como('e7c00000-0000-4000-8000-0000000000b1');
+select is(public.__hint_de($$update public.membros_academia set papel = 'admin'
+                             where academia_id = 'e7c00000-0000-4000-8000-00000000000b' and user_id = 'e7c00000-0000-4000-8000-0000000000b1'$$),
+  'ultimo_dono', 'dono por convite com a prova de senha invalidada não conta como outro dono');
+reset role;
+select public.__sem_jwt();
+delete from public.membros_academia where user_id = 'e7c00000-0000-4000-8000-0000000000e3';
+delete from auth.users where id = 'e7c00000-0000-4000-8000-0000000000e3';
+set local role authenticated;
 
 -- conf (dono) convida um dono; rebaixado a admin pelo outro dono, o convite
 -- de dono dele morre.

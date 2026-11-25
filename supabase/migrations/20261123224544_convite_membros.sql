@@ -1122,6 +1122,10 @@ as $$
       and m.ativo
       and m.user_id <> p_user_id
       and u.deleted_at is null
+      -- Um vínculo aceito por convite só conta enquanto a senha atual for a
+      -- comprovada: um dono sem acesso não segura a academia.
+      and (m.vale_a_partir is null
+           or u.raw_app_meta_data ->> 'senha_comprovada' = md5(coalesce(u.encrypted_password, '')))
   )
 $$;
 
