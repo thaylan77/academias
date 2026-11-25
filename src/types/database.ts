@@ -168,6 +168,19 @@ isOneToOne: false
       referencedColumns: ["id"]
     }
                   ]
+                },"convites_senha_tentativas": {
+                  Row: {
+                    "id": number,"tentado_em": string,"user_id": string
+                  }
+                  Insert: {
+                    "id"?: never,"tentado_em"?: string,"user_id": string
+                  }
+                  Update: {
+                    "id"?: never,"tentado_em"?: string,"user_id"?: string
+                  }
+                  Relationships: [
+                    
+                  ]
                 },"faixas": {
                   Row: {
                     "academia_id": string,"cor": string | null,"created_at": string,"id": string,"max_graus": number,"min_aulas": number,"min_meses": number,"modalidade_id": string,"nome": string,"ordem": number
@@ -733,6 +746,9 @@ isOneToOne: false
                            },
 "registrar_graduacao":
 { Args: { "p_academia_id": string,"p_dados": Json }; Returns: string
+                           },
+"registrar_tentativa_senha_interna":
+{ Args: { "p_user_id": string }; Returns: boolean
                            },
 "reservar_emissao_interna":
 { Args: { "p_cobranca_id": string,"p_gateway_conta_id": string,"p_tentativa_conferida"?: string,"p_user_id": string }; Returns: Json
