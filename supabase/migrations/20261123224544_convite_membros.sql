@@ -898,16 +898,15 @@ begin
       end if;
       -- 9a. Reativação, ou troca do papel aluno pelo da equipe.
       update public.membros_academia m
-         set papel = v_conv.papel, ativo = true,
-             vale_a_partir = date_trunc('second', clock_timestamp()) + interval '1 second'
+         set papel = v_conv.papel, ativo = true
        where m.academia_id = v_conv.academia_id and m.user_id = auth.uid();
       exit;
     end if;
 
     -- 9b. Membro novo. Se o vínculo apareceu agora, volta ao começo.
+    -- vale_a_partir provisório (bloqueia qualquer token até o fim do aceite).
     insert into public.membros_academia (academia_id, user_id, papel, vale_a_partir)
-    values (v_conv.academia_id, auth.uid(), v_conv.papel,
-            date_trunc('second', clock_timestamp()) + interval '1 second')
+    values (v_conv.academia_id, auth.uid(), v_conv.papel, 'infinity')
     on conflict (academia_id, user_id) do nothing;
     exit when found;
   end loop;
@@ -937,6 +936,12 @@ begin
   delete from auth.sessions s
    where s.user_id = auth.uid()
      and s.id is distinct from nullif(nullif(current_setting('request.jwt.claims', true), '')::jsonb ->> 'session_id', '')::uuid;
+
+  -- Só agora, depois de todas as esperas, o marco: um token emitido enquanto
+  -- o aceite esperava continua sem o vínculo.
+  update public.membros_academia m
+     set vale_a_partir = date_trunc('second', clock_timestamp()) + interval '1 second'
+   where m.academia_id = v_conv.academia_id and m.user_id = auth.uid();
 
   update public.convites_equipe c
      set status = 'aceito', aceito_por = auth.uid(), aceito_em = now()
