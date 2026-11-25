@@ -662,7 +662,8 @@ select ok((select count(*) from public.equipe_da_academia('e7c00000-0000-4000-80
 -- uma sessão antiga e gravada depois do aceite) suspende o vínculo até uma
 -- nova prova (definir_senha_comprovada_interna, chamada pela concluir-senha).
 reset role;
-update auth.users set encrypted_password = 'senha-de-outra-pessoa' where id = 'e7c00000-0000-4000-8000-0000000000d1';
+update auth.users set encrypted_password = extensions.crypt('senha-de-outra-pessoa', extensions.gen_salt('bf', 4))
+ where id = 'e7c00000-0000-4000-8000-0000000000d1';
 set local role authenticated;
 select public.__como('e7c00000-0000-4000-8000-0000000000d1');
 select is(public.__hint_de($$select * from public.equipe_da_academia('e7c00000-0000-4000-8000-00000000000a')$$),
