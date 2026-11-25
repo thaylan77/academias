@@ -4,7 +4,7 @@
 -- Academias A e B (ativas) e S (suspensa).
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(139);
+select plan(141);
 
 -- ---------------------------------------------------------------------
 -- Auxiliares
@@ -676,6 +676,9 @@ update auth.users set recovery_token = 'token-de-recuperacao-antigo', email_chan
  where id = 'e7c00000-0000-4000-8000-0000000000d1';
 insert into auth.one_time_tokens (id, user_id, token_type, token_hash, relates_to)
   values (gen_random_uuid(), 'e7c00000-0000-4000-8000-0000000000d1', 'recovery_token', 'hash-antigo-de-recuperacao', 'conf@conv.test');
+-- Sessão aberta durante a suspensão (com a senha trocada fora do fluxo).
+insert into auth.sessions (id, user_id, created_at) values
+  ('e7c00000-0000-4000-8000-0000000005a5', 'e7c00000-0000-4000-8000-0000000000d1', now() + interval '1 minute');
 set local role service_role;
 select public.__como_servico();
 select public.definir_senha_comprovada_interna('e7c00000-0000-4000-8000-0000000000d1', 'e7c00000-0000-4000-8000-0000000000d1', 'senha-nova-do-convite');
@@ -742,6 +745,13 @@ set local role authenticated;
 select public.__como('e7c00000-0000-4000-8000-0000000000d1');
 select ok((select count(*) from public.equipe_da_academia('e7c00000-0000-4000-8000-00000000000a')) > 0,
   'depois de uma nova prova da senha, o vínculo volta');
+select public.__como_token('e7c00000-0000-4000-8000-0000000000d1',
+  public.__vale('e7c00000-0000-4000-8000-00000000000a', 'e7c00000-0000-4000-8000-0000000000d1') + 5,
+  'e7c00000-0000-4000-8000-0000000005a5');
+select is(public.__hint_de($$select * from public.equipe_da_academia('e7c00000-0000-4000-8000-00000000000a')$$),
+  'sem_permissao', 'sessão aberta durante a suspensão não volta a valer com a nova prova');
+select is(public.__sessoes('e7c00000-0000-4000-8000-0000000000d1'), 'e7c00000-0000-4000-8000-0000000000d1',
+  'a nova prova derruba as outras sessões da conta');
 select public.__como('e7c00000-0000-4000-8000-0000000000d1');
 select ok((select count(*) from public.equipe_da_academia('e7c00000-0000-4000-8000-00000000000a')) > 0,
   'token novo, depois do aceite, usa o vínculo');

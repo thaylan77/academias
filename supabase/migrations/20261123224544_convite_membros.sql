@@ -257,6 +257,16 @@ begin
            - 'definir_senha'
    where u.id = p_user_id;
   delete from auth.one_time_tokens o where o.user_id = p_user_id;
+  -- Como a troca de senha do Auth, as outras sessões caem. E os vínculos já
+  -- aceitos por convite passam a valer só a partir desta prova: tokens
+  -- posteriores desta sessão ou de sessões novas. Uma sessão aberta com uma
+  -- senha anterior (por exemplo, durante uma suspensão) não volta a valer.
+  delete from auth.sessions s where s.user_id = p_user_id and s.id <> p_sessao;
+  update public.membros_academia m
+     set vale_a_partir = date_trunc('second', clock_timestamp()) + interval '1 second',
+         sessao_do_aceite = p_sessao
+   where m.user_id = p_user_id
+     and m.vale_a_partir is not null;
 end
 $$;
 
