@@ -190,13 +190,19 @@ async function processarEnvio(c: Criado, deps: DepsConvidar): Promise<void> {
       const r = await deps.convidarPorEmail(c.email, redirectTo);
       falha = r.erro;
       if (!falha && r.userId) {
-        // A marca vem no banco, condicional: se a pessoa já gravou a senha
-        // nova (o link saiu antes desta linha), ela não volta.
+        // No banco, com a conta travada: marca definir_senha (não depois de a
+        // senha nova ter sido gravada) ou, se alguém se cadastrou com senha
+        // entre a leitura e o convite (o Auth reaproveita a conta sem tocar na
+        // senha), neutraliza a conta. Aí o link do convite caiu junto, e sai
+        // um link novo, já sem a senha do cadastro.
         const m = await deps.rpc("marcar_definir_senha_interna", { p_user_id: r.userId });
         if (m.error) {
           deps.log(
             `convidar-membro: convite enviado, mas a marca definir_senha falhou (código ${codigoDoErro(m.error)})`,
           );
+        } else if (m.data === "neutralizada") {
+          deps.log("convidar-membro: conta reaproveitada com senha neutralizada; novo link");
+          falha = await deps.enviarLinkMagico(c.email, redirectTo);
         }
       }
     } else {

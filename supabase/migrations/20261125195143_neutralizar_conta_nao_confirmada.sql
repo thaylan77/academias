@@ -77,23 +77,45 @@ $$;
 revoke execute on function public.neutralizar_conta_nao_confirmada_interna(uuid) from public, anon, authenticated;
 grant execute on function public.neutralizar_conta_nao_confirmada_interna(uuid) to service_role;
 
--- Conta criada agora pelo convite do Auth: marca definir_senha, com a conta
--- travada e só se a pessoa ainda não tiver gravado a senha nova pela
--- concluir-senha (senha_comprovada). O link sai antes desta marca; se a
--- pessoa já concluiu a senha nesse meio-tempo, a marca não volta.
+-- Depois do convite do Auth para um endereço que não tinha conta. Com a conta
+-- travada:
+--   * se alguém se cadastrou com senha entre a leitura de criar_convite_interna
+--     e o convite (o Auth reaproveita a conta não confirmada e manda o link
+--     sem tocar na senha), neutraliza a conta como em
+--     neutralizar_conta_nao_confirmada_interna e devolve 'neutralizada': o
+--     link do convite caiu junto, e a função manda um link novo;
+--   * se a pessoa já gravou a senha nova pela concluir-senha (o link sai antes
+--     desta chamada), não mexe e devolve 'ja_definida';
+--   * senão, marca definir_senha e devolve 'marcada'.
 create or replace function public.marcar_definir_senha_interna(p_user_id uuid)
-returns boolean
+returns text
 language plpgsql
 security definer
 set search_path = ''
 as $$
+declare
+  v_confirmada timestamptz;
+  v_hash       text;
+  v_meta       jsonb;
 begin
-  perform 1 from auth.users u where u.id = p_user_id for update;
+  select u.email_confirmed_at, u.encrypted_password, coalesce(u.raw_app_meta_data, '{}'::jsonb)
+    into v_confirmada, v_hash, v_meta
+    from auth.users u where u.id = p_user_id for update;
+  if not found then
+    return 'ja_definida';
+  end if;
+  if v_meta ? 'senha_comprovada' then
+    return 'ja_definida';
+  end if;
+  if v_confirmada is null and coalesce(v_hash, '') <> ''
+     and coalesce(v_meta ->> 'neutralizada', '') <> md5(v_hash) then
+    perform public.neutralizar_conta_nao_confirmada_interna(p_user_id);
+    return 'neutralizada';
+  end if;
   update auth.users u
-     set raw_app_meta_data = coalesce(u.raw_app_meta_data, '{}'::jsonb) || jsonb_build_object('definir_senha', true)
-   where u.id = p_user_id
-     and not (coalesce(u.raw_app_meta_data, '{}'::jsonb) ? 'senha_comprovada');
-  return found;
+     set raw_app_meta_data = v_meta || jsonb_build_object('definir_senha', true)
+   where u.id = p_user_id;
+  return 'marcada';
 end
 $$;
 
@@ -113,6 +135,7 @@ as $$
 declare
   v_hash  text;
   v_atual text;
+  v_aal   text;
 begin
   if p_senha is null or length(p_senha) < 8 or octet_length(p_senha) > 72 then
     raise exception 'A senha precisa ter de 8 a 72 caracteres.'
@@ -124,10 +147,18 @@ begin
    where m.user_id = p_user_id and m.vale_a_partir is not null
      for update;
   select u.encrypted_password into v_atual from auth.users u where u.id = p_user_id for update;
-  perform 1 from auth.sessions s where s.id = p_sessao and s.user_id = p_user_id for share;
+  select s.aal::text into v_aal from auth.sessions s where s.id = p_sessao and s.user_id = p_user_id for share;
   if not found then
     raise exception 'Abra o link enviado ao seu e-mail para definir a senha.'
       using hint = 'convite_exige_link';
+  end if;
+
+  -- Como a troca de senha do Auth: conta com fator MFA verificado só troca a
+  -- senha numa sessão que passou pelo segundo fator (aal2).
+  if exists (select 1 from auth.mfa_factors f where f.user_id = p_user_id and f.status = 'verified')
+     and coalesce(v_aal, 'aal1') = 'aal1' then
+    raise exception 'Confirme o segundo fator de autenticação para definir a senha.'
+      using hint = 'mfa_necessario';
   end if;
 
   -- Só no fluxo do convite: um convite pendente e válido para o e-mail

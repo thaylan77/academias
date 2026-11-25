@@ -220,7 +220,10 @@ A entrada é `{ academia_id, email, papel }`, com o JWT de quem convida.
    - `nenhuma`: chama `auth.admin.inviteUserByEmail(email, { redirectTo })` e
      marca `app_metadata.definir_senha = true` por
      `marcar_definir_senha_interna`, com a conta travada e só se a pessoa
-     ainda não gravou a senha nova (o link sai antes da marca);
+     ainda não gravou a senha nova (o link sai antes da marca). Se alguém se
+     cadastrou com senha entre a leitura e o convite (o Auth reaproveita a
+     conta sem tocar na senha), a mesma função neutraliza a conta, e a
+     Edge Function manda um link novo;
    - `nao_confirmada`: chama `neutralizar_conta_nao_confirmada_interna`,
      que, com a conta travada e só se o e-mail continuar não confirmado,
      troca a senha por uma aleatória que ninguém recebe, derruba as sessões
@@ -338,7 +341,9 @@ A função não grava em tabela de negócio fora de `criar_convite_interna`. O
   `email/signup` ou `email_change`, a mesma lista do aceite) e com `session_id`; senão, `convite_exige_link`.
   Só grava para conta com convite pendente e válido para o e-mail
   confirmado ou com vínculo já aceito por convite (refazer a prova); fora
-  disso, `convite_invalido`. Conta comum troca a senha pelo Auth.
+  disso, `convite_invalido`. Conta comum troca a senha pelo Auth. Conta com
+  fator MFA verificado só grava numa sessão aal2, como a troca de senha do
+  Auth; senão, `mfa_necessario`.
   Sucesso: `{ ok: true }`, e o front renova a sessão.
 
 **Dependência de ambiente:** o SMTP padrão do Supabase só entrega para os

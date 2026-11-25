@@ -2,7 +2,7 @@
 -- 4.4): só age em conta com o e-mail não confirmado, com a conta travada.
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(16);
+select plan(20);
 
 insert into auth.users (id, email, email_confirmed_at, encrypted_password, raw_app_meta_data, recovery_token) values
   ('e7e00000-0000-4000-8000-0000000000a1', 'intruso@neutraliza.test', null,
@@ -78,7 +78,7 @@ insert into auth.users (id, email, email_confirmed_at, raw_app_meta_data) values
   ('e7e00000-0000-4000-8000-0000000000a4', 'jadefiniu@neutraliza.test', now(), '{"senha_comprovada": "h"}');
 set local role service_role;
 select is(public.marcar_definir_senha_interna('e7e00000-0000-4000-8000-0000000000a3')::text || '/'
-          || public.marcar_definir_senha_interna('e7e00000-0000-4000-8000-0000000000a4')::text, 'true/false',
+          || public.marcar_definir_senha_interna('e7e00000-0000-4000-8000-0000000000a4')::text, 'marcada/ja_definida',
   'marca a conta nova; a que já gravou a senha nova não é marcada');
 reset role;
 select is((select string_agg(coalesce(raw_app_meta_data ->> 'definir_senha', '-'), ',' order by email)
@@ -100,6 +100,44 @@ reset role;
 select is((select (raw_app_meta_data ->> 'definir_senha') || '/' || (select count(*) from auth.one_time_tokens o where o.user_id = u.id)::text
              from auth.users u where id = 'e7e00000-0000-4000-8000-0000000000a5'),
   'true/1', 'o link do convite da conta nova continua valendo, e ela fica marcada para definir senha');
+
+-- Cadastro com senha que surgiu entre a leitura e o convite do Auth: a conta
+-- reaproveitada é neutralizada (a senha cai) e a função pede um link novo.
+insert into auth.users (id, email, email_confirmed_at, encrypted_password, raw_app_meta_data) values
+  ('e7e00000-0000-4000-8000-0000000000a6', 'cadastro-no-meio@neutraliza.test', null,
+   extensions.crypt('senha-do-cadastro', extensions.gen_salt('bf', 4)), '{}');
+set local role service_role;
+select is(public.marcar_definir_senha_interna('e7e00000-0000-4000-8000-0000000000a6'), 'neutralizada',
+  'conta reaproveitada com senha: neutralizada');
+reset role;
+select is((select (encrypted_password = extensions.crypt('senha-do-cadastro', encrypted_password))::text
+                  || '/' || (raw_app_meta_data ->> 'definir_senha')
+             from auth.users where id = 'e7e00000-0000-4000-8000-0000000000a6'),
+  'false/true', 'a senha do cadastro concorrente caiu e a conta ficou marcada');
+
+-- MFA: conta com fator verificado só define a senha numa sessão aal2.
+insert into public.academias (id, nome, slug, status) values
+  ('e7e00000-0000-4000-8000-00000000000a', 'Neutraliza MFA', 'neutraliza-mfa', 'ativa');
+insert into auth.users (id, email, email_confirmed_at, encrypted_password, raw_app_meta_data) values
+  ('e7e00000-0000-4000-8000-0000000000a7', 'mfa@neutraliza.test', now(), '', '{}');
+insert into public.membros_academia (academia_id, user_id, papel, vale_a_partir) values
+  ('e7e00000-0000-4000-8000-00000000000a', 'e7e00000-0000-4000-8000-0000000000a7', 'professor', now());
+insert into auth.sessions (id, user_id, created_at, aal) values
+  ('e7e00000-0000-4000-8000-0000000006a7', 'e7e00000-0000-4000-8000-0000000000a7', now(), 'aal1');
+insert into auth.mfa_factors (id, user_id, friendly_name, factor_type, status, created_at, updated_at) values
+  (gen_random_uuid(), 'e7e00000-0000-4000-8000-0000000000a7', 'app', 'totp', 'verified', now(), now());
+set local role service_role;
+select throws_ok($$select public.definir_senha_comprovada_interna('e7e00000-0000-4000-8000-0000000000a7',
+    'e7e00000-0000-4000-8000-0000000006a7', 'senha-nova-com-mfa')$$, 'P0001',
+  'Confirme o segundo fator de autenticação para definir a senha.',
+  'conta com MFA verificado não define a senha numa sessão aal1');
+reset role;
+update auth.sessions set aal = 'aal2' where id = 'e7e00000-0000-4000-8000-0000000006a7';
+set local role service_role;
+select lives_ok($$select public.definir_senha_comprovada_interna('e7e00000-0000-4000-8000-0000000000a7',
+    'e7e00000-0000-4000-8000-0000000006a7', 'senha-nova-com-mfa')$$,
+  'depois do segundo fator (aal2), a senha é definida');
+reset role;
 
 select * from finish();
 rollback;

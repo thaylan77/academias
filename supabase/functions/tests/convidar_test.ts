@@ -319,3 +319,29 @@ Deno.test("reserva já liberada como abandonada (worker atrasado): não envia ne
     assert(r.logs.some((l) => l.includes("não assumida")));
   }
 });
+
+Deno.test("conta nova reaproveitada com senha de um cadastro concorrente: neutraliza e manda um link novo", async () => {
+  const r = await chama({
+    rpc: { criar_convite_interna: criado("nenhuma"), marcar_definir_senha_interna: { data: "neutralizada" } },
+  });
+  assertEquals(r.corpo, { convite_id: CONVITE });
+  assert(r.nomes().indexOf("rpc:marcar_definir_senha_interna") < r.nomes().indexOf("enviarLinkMagico"));
+  assertEquals(r.de("enviarLinkMagico")[0].args, ["pessoa@exemplo.test", REDIRECT]);
+  assertEquals(r.de("rpc:confirmar_envio_convite_interna").length, 1);
+});
+
+Deno.test("conta nova marcada normalmente: só o convite, sem link extra", async () => {
+  const r = await chama({
+    rpc: { criar_convite_interna: criado("nenhuma"), marcar_definir_senha_interna: { data: "marcada" } },
+  });
+  assertEquals(r.de("enviarLinkMagico").length, 0);
+});
+
+Deno.test("link novo depois da neutralização recusado (4xx): libera a reserva", async () => {
+  const r = await chama({
+    rpc: { criar_convite_interna: criado("nenhuma"), marcar_definir_senha_interna: { data: "neutralizada" } },
+    link: { status: 422 },
+  });
+  assertEquals(r.de("rpc:liberar_envio_convite_interna").length, 1);
+  assertEquals(r.de("rpc:confirmar_envio_convite_interna").length, 0);
+});

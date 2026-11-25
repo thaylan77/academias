@@ -435,3 +435,107 @@ Deno.test({
     assertEquals((await emailsPara(endereco)).length, 1, "o endereço voltou a receber convite");
   },
 });
+
+/** Código TOTP (RFC 6238, SHA-1, 6 dígitos, 30 s) para o segredo em base32. */
+async function codigoTotp(segredo: string): Promise<string> {
+  const alfabeto = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+  let bits = "";
+  for (const ch of segredo.replace(/=+$/, "").toUpperCase()) bits += alfabeto.indexOf(ch).toString(2).padStart(5, "0");
+  const chave = new Uint8Array(Math.floor(bits.length / 8));
+  for (let i = 0; i < chave.length; i++) chave[i] = parseInt(bits.slice(i * 8, i * 8 + 8), 2);
+  const contador = new ArrayBuffer(8);
+  new DataView(contador).setBigUint64(0, BigInt(Math.floor(Date.now() / 30000)));
+  const k = await crypto.subtle.importKey("raw", chave, { name: "HMAC", hash: "SHA-1" }, false, ["sign"]);
+  const h = new Uint8Array(await crypto.subtle.sign("HMAC", k, contador));
+  const o = h[h.length - 1] & 0xf;
+  const n = ((h[o] & 0x7f) << 24) | (h[o + 1] << 16) | (h[o + 2] << 8) | h[o + 3];
+  return String(n % 1_000_000).padStart(6, "0");
+}
+
+Deno.test({
+  name: "cadastro com senha entre a reserva e o convite: a conta reaproveitada é neutralizada e sai um link novo",
+  ignore: !ativo,
+  async fn() {
+    const a = await prepararDono("cadastro-meio");
+    const endereco = email("cadastro-meio");
+    const base = depsConvidar(a.c, "http://127.0.0.1:3000");
+    const deps = {
+      ...base,
+      async convidarPorEmail(e: string, redirectTo: string) {
+        // Alguém se cadastra com senha depois da leitura de criar_convite_interna
+        // e antes do convite do Auth, que reaproveita a conta não confirmada.
+        const cadastro = await a.c.servico.auth.admin.createUser({
+          email: e,
+          email_confirm: false,
+          password: "senha-do-cadastro-1",
+        });
+        if (cadastro.error) throw cadastro.error;
+        return await base.convidarPorEmail(e, redirectTo);
+      },
+    };
+    const r = await convidarMembro(
+      pedido(a.token, { academia_id: a.academiaId, email: endereco, papel: "professor" }),
+      deps,
+    );
+    assertEquals(r.status, 200, await r.clone().text());
+    assertEquals((await emailsPara(endereco)).length >= 1, true, "o convite saiu");
+
+    // Depois de confirmar o e-mail, a senha do cadastro concorrente não vale.
+    const u = await usuarioPorEmail(a.c, endereco);
+    assertEquals(u?.app_metadata?.definir_senha, true);
+    const confirma = await a.c.servico.auth.admin.updateUserById(u!.id, { email_confirm: true });
+    if (confirma.error) throw confirma.error;
+    const entra = await novoAnon().auth.signInWithPassword({ email: endereco, password: "senha-do-cadastro-1" });
+    assert(entra.error, "a senha do cadastro concorrente foi invalidada");
+  },
+});
+
+Deno.test({
+  name: "conta com MFA: concluir-senha recusa a sessão aal1 do link e aceita depois do segundo fator",
+  ignore: !ativo,
+  async fn() {
+    const dono = await prepararDono("mfa-dono");
+    const endereco = email("mfa");
+    const conta = await dono.c.servico.auth.admin.createUser({
+      email: endereco,
+      email_confirm: true,
+      password: "senha-com-mfa-1",
+    });
+    if (conta.error) throw conta.error;
+
+    // A pessoa tem um fator TOTP verificado.
+    const comSenha = novoAnon();
+    const login = await comSenha.auth.signInWithPassword({ email: endereco, password: "senha-com-mfa-1" });
+    if (login.error) throw login.error;
+    const fator = await comSenha.auth.mfa.enroll({ factorType: "totp" });
+    if (fator.error) throw fator.error;
+    const ativa = await comSenha.auth.mfa.challengeAndVerify({
+      factorId: fator.data.id,
+      code: await codigoTotp(fator.data.totp.secret),
+    });
+    if (ativa.error) throw ativa.error;
+
+    // Convite pendente para o e-mail e sessão aberta pelo link (aal1).
+    const convite = await convidarMembro(
+      pedido(dono.token, { academia_id: dono.academiaId, email: endereco, papel: "professor" }),
+      depsConvidar(dono.c, "http://127.0.0.1:3000"),
+    );
+    assertEquals(convite.status, 200, await convite.clone().text());
+    const { cliente, sessao } = await sessaoPorLink(dono.c.servico, endereco);
+    const aal1 = await concluirSenha(pedido(sessao.access_token, { senha: "senha-nova-mfa-1" }), depsSenha(dono.c));
+    assertEquals([aal1.status, await aal1.json()], [400, { erro: "mfa_necessario" }]);
+
+    // Com o segundo fator na mesma sessão (aal2), a senha é definida.
+    const segundo = await cliente.auth.mfa.challengeAndVerify({
+      factorId: fator.data.id,
+      code: await codigoTotp(fator.data.totp.secret),
+    });
+    if (segundo.error) throw segundo.error;
+    const { data: atual } = await cliente.auth.getSession();
+    const aal2 = await concluirSenha(
+      pedido(atual.session!.access_token, { senha: "senha-nova-mfa-1" }),
+      depsSenha(dono.c),
+    );
+    assertEquals([aal2.status, await aal2.json()], [200, { ok: true }]);
+  },
+});
