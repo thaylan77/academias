@@ -595,6 +595,9 @@ isOneToOne: false
 "confirmar_envio_convite_interna":
 { Args: { "p_envio_id": string }; Returns: undefined
                            },
+"conta_nao_confirmada_por_email_interna":
+{ Args: { "p_email": string }; Returns: string
+                           },
 "convite_de_quem_pode":
 { Args: { "p_convite": Database["public"]['Tables']["convites_equipe"]['Row'] }; Returns: boolean
                            },
@@ -701,9 +704,6 @@ isOneToOne: false
                            },
 "liberar_reservas_abandonadas_interna":
 { Args: { "p_idade"?: string }; Returns: number
-                           },
-"marcar_definir_senha_interna":
-{ Args: { "p_user_id": string }; Returns: string
                            },
 "matricula_online":
 { Args: { "p_dados": Json,"p_slug": string }; Returns: string
