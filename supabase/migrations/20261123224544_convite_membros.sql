@@ -184,7 +184,7 @@ as $$
           and exists (select 1 from auth.sessions s
                        where s.id = p_sessao and s.user_id = p_user_id
                          and (s.id = p_sessao_aceite or s.created_at >= p_vale))
-          -- A senha atual é a comprovada (marcar_senha_comprovada_interna):
+          -- A senha atual é a comprovada (definir_senha_comprovada_interna):
           -- uma troca fora desse fluxo, inclusive uma autorizada por uma
           -- sessão antiga e gravada depois do aceite, suspende o vínculo até
           -- uma nova prova.
@@ -195,29 +195,45 @@ $$;
 
 revoke execute on function public.sessao_elegivel(uuid, uuid, bigint, timestamptz, uuid) from public, anon, authenticated;
 
--- Chamada pela Edge Function concluir-senha logo depois de a pessoa trocar a
--- senha na sessão aberta pelo link: grava em app_metadata a prova (horário,
--- sessão e o hash da senha atual, calculado aqui). Só service_role.
-create or replace function public.marcar_senha_comprovada_interna(p_user_id uuid, p_sessao uuid)
+-- Chamada pela Edge Function concluir-senha com a senha nova que a pessoa
+-- escolheu na sessão aberta pelo link. Grava a senha (bcrypt, o formato do
+-- Auth) e a prova (horário, sessão e hash da senha) na mesma operação, com a
+-- conta travada: nenhuma troca concorrente fica entre a senha e a prova. A
+-- sessão precisa existir e ser do usuário. Só service_role.
+create or replace function public.definir_senha_comprovada_interna(p_user_id uuid, p_sessao uuid, p_senha text)
 returns void
 language plpgsql
 security definer
 set search_path = ''
 as $$
+declare
+  v_hash text;
 begin
+  if p_senha is null or length(p_senha) < 8 then
+    raise exception 'A senha precisa ter pelo menos 8 caracteres.'
+      using hint = 'dados_invalidos';
+  end if;
   perform 1 from auth.users u where u.id = p_user_id for update;
+  perform 1 from auth.sessions s where s.id = p_sessao and s.user_id = p_user_id for share;
+  if not found then
+    raise exception 'Abra o link enviado ao seu e-mail para definir a senha.'
+      using hint = 'convite_exige_link';
+  end if;
+
+  v_hash := extensions.crypt(p_senha, extensions.gen_salt('bf'));
   update auth.users u
-     set raw_app_meta_data = coalesce(u.raw_app_meta_data, '{}'::jsonb)
+     set encrypted_password = v_hash,
+         raw_app_meta_data = (coalesce(u.raw_app_meta_data, '{}'::jsonb)
            || jsonb_build_object('senha_redefinida_em', floor(extract(epoch from clock_timestamp()))::bigint,
                                  'senha_redefinida_sessao', p_sessao::text,
-                                 'senha_comprovada', md5(coalesce(u.encrypted_password, '')))
+                                 'senha_comprovada', md5(v_hash)))
            - 'definir_senha'
    where u.id = p_user_id;
 end
 $$;
 
-revoke execute on function public.marcar_senha_comprovada_interna(uuid, uuid) from public, anon, authenticated;
-grant execute on function public.marcar_senha_comprovada_interna(uuid, uuid) to service_role;
+revoke execute on function public.definir_senha_comprovada_interna(uuid, uuid, text) from public, anon, authenticated;
+grant execute on function public.definir_senha_comprovada_interna(uuid, uuid, text) to service_role;
 
 create or replace function public.tem_papel(p_academia_id uuid, p_papeis text[] default null)
 returns boolean

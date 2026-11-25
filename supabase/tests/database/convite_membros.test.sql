@@ -4,7 +4,7 @@
 -- Academias A e B (ativas) e S (suspensa).
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(127);
+select plan(130);
 
 -- ---------------------------------------------------------------------
 -- Auxiliares
@@ -660,7 +660,7 @@ select ok((select count(*) from public.equipe_da_academia('e7c00000-0000-4000-80
   'sessão criada a partir do marco usa o vínculo');
 -- Uma troca de senha fora do fluxo do convite (por exemplo, autorizada por
 -- uma sessão antiga e gravada depois do aceite) suspende o vínculo até uma
--- nova prova (marcar_senha_comprovada_interna, chamada pela concluir-senha).
+-- nova prova (definir_senha_comprovada_interna, chamada pela concluir-senha).
 reset role;
 update auth.users set encrypted_password = 'senha-de-outra-pessoa' where id = 'e7c00000-0000-4000-8000-0000000000d1';
 set local role authenticated;
@@ -670,7 +670,17 @@ select is(public.__hint_de($$select * from public.equipe_da_academia('e7c00000-0
 reset role;
 set local role service_role;
 select public.__como_servico();
-select public.marcar_senha_comprovada_interna('e7c00000-0000-4000-8000-0000000000d1', 'e7c00000-0000-4000-8000-0000000000d1');
+select public.definir_senha_comprovada_interna('e7c00000-0000-4000-8000-0000000000d1', 'e7c00000-0000-4000-8000-0000000000d1', 'senha-nova-do-convite');
+select is((select encrypted_password = extensions.crypt('senha-nova-do-convite', encrypted_password)
+             and raw_app_meta_data ->> 'senha_comprovada' = md5(encrypted_password)
+             and raw_app_meta_data ->> 'senha_redefinida_sessao' = 'e7c00000-0000-4000-8000-0000000000d1'
+             and not (raw_app_meta_data ? 'definir_senha')
+           from auth.users where id = 'e7c00000-0000-4000-8000-0000000000d1'),
+  true, 'definir_senha_comprovada_interna grava a senha (bcrypt) e a prova dela juntas');
+select is(public.__hint_de($$select public.definir_senha_comprovada_interna('e7c00000-0000-4000-8000-0000000000d1', 'e7c00000-0000-4000-8000-0000000000d2', 'outra-senha-longa')$$),
+  'convite_exige_link', 'a senha só é definida com uma sessão do próprio usuário');
+select is(public.__hint_de($$select public.definir_senha_comprovada_interna('e7c00000-0000-4000-8000-0000000000d1', 'e7c00000-0000-4000-8000-0000000000d1', 'curta')$$),
+  'dados_invalidos', 'senha curta é recusada');
 reset role;
 set local role authenticated;
 select public.__como('e7c00000-0000-4000-8000-0000000000d1');

@@ -265,16 +265,19 @@ comparado com o `iat` inteiro do JWT): o front renova a sessão a partir desse
 segundo e, se o token novo ainda vier com `iat` menor, renova de novo.
 Isso protege contas criadas enquanto a confirmação de e-mail estava
 desligada (a senha antiga pode estar com outra pessoa). A `concluir-senha` grava a
-prova chamando `marcar_senha_comprovada_interna(user_id, session_id)`, que
-guarda também o hash da senha comprovada: o vínculo aceito por convite só
+senha e a prova numa só operação, chamando
+`definir_senha_comprovada_interna(user_id, session_id, senha)` com a conta
+travada (nenhuma troca concorrente fica entre a senha e a prova), e guarda
+também o hash da senha comprovada: o vínculo aceito por convite só
 vale enquanto a senha atual for essa, e uma troca fora desse fluxo suspende o
 acesso da equipe até uma nova prova. A
 `criar_convite_interna` recebe o `iat` do token que a Edge Function conferiu.
 
 `app_metadata` só é gravado com `service_role`, então o usuário não
 consegue apagar a marca sozinho. Quem tira a marca é uma segunda Edge
-Function, `concluir-senha`: o painel a chama depois que
-`auth.updateUser({ password })` dá certo, e ela confere o JWT e remove
+Function, `concluir-senha`: o painel manda a senha nova para ela (não usa
+`auth.updateUser`), e ela confere o JWT e chama
+`definir_senha_comprovada_interna`, que grava a senha e remove
 `definir_senha`. A função `aceitar_convite` lê a marca em
 `auth.users.raw_app_meta_data`.
 
@@ -326,7 +329,7 @@ manualmente, pelo SQL do projeto.
     `dono`.
 - **`/painel/convites`**, para qualquer login: mostra `meus_convites()`,
   com aceitar e recusar. Se a conta está marcada para definir senha, pede a
-  senha antes (`auth.updateUser`, depois `concluir-senha`). Ao aceitar, vai
+  senha antes (pela `concluir-senha`). Ao aceitar, vai
   para a escolha de academia.
 
 `convites` precisa entrar na lista de segmentos que o painel reconhece. Não
