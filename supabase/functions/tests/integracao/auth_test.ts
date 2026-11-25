@@ -61,6 +61,24 @@ Deno.test({
     if (criado.error) throw criado.error;
 
     const { cliente, sessao } = await sessaoPorLink(c.servico, endereco);
+
+    // Conta comum, mesmo entrando por link: sem convite, não troca a senha
+    // por aqui (troca pelo Auth).
+    const semConvite = await concluirSenha(
+      pedido(sessao.access_token, { senha: "senha-nova-do-convite" }),
+      depsSenha(c),
+    );
+    assertEquals([semConvite.status, await semConvite.json()], [400, { erro: "convite_invalido" }]);
+    const intacta = await novoAnon().auth.signInWithPassword({ email: endereco, password: "senha-antiga-123" });
+    assertEquals(intacta.error, null, "sem convite, a senha da conta não muda");
+
+    // Com um convite pendente para o e-mail, a mesma sessão define a senha.
+    const dono = await prepararDono("senha");
+    const convite = await convidarMembro(
+      pedido(dono.token, { academia_id: dono.academiaId, email: endereco, papel: "professor" }),
+      depsConvidar(dono.c, "http://127.0.0.1:3000"),
+    );
+    assertEquals(convite.status, 200, await convite.clone().text());
     const rec = await c.servico.auth.admin.generateLink({ type: "recovery", email: endereco });
     if (rec.error) throw rec.error;
 
@@ -290,22 +308,41 @@ Deno.test({
     });
     if (squat.error) throw squat.error;
 
-    async function convidar(token: string, academiaId: string) {
-      const r = await convidarMembro(
-        pedido(token, { academia_id: academiaId, email: ocupado, papel: "professor" }),
-        deps,
-      );
+    // Como no runtime: a primeira academia responde antes do envio, e o envio
+    // fica retido (depois de criar a reserva e neutralizar a conta) até a
+    // segunda academia convidar. A reserva ainda está em aberto nesse ponto.
+    let soltar!: () => void;
+    const retido = new Promise<void>((ok) => (soltar = ok));
+    let envioA: Promise<void> = Promise.resolve();
+    const depsA = {
+      ...deps,
+      async enviarLinkMagico(endereco: string, redirectTo: string) {
+        await retido;
+        return await deps.enviarLinkMagico(endereco, redirectTo);
+      },
+      emSegundoPlano(tarefa: () => Promise<void>) {
+        envioA = tarefa();
+        return Promise.resolve();
+      },
+    };
+    async function convidar(token: string, academiaId: string, d = deps) {
+      const r = await convidarMembro(pedido(token, { academia_id: academiaId, email: ocupado, papel: "professor" }), d);
       return await r.json();
     }
-    const r1 = await convidar(a.token, a.academiaId);
+    const r1 = await convidar(a.token, a.academiaId, depsA);
     assertEquals(typeof r1.convite_id, "string", JSON.stringify(r1));
-    const primeiro = await emailsPara(ocupado);
-    assertEquals(primeiro.length, 1);
+    const reserva = await a.c.servico.from("convites_envios").select("enviado_em, liberado_em")
+      .eq("convite_id", r1.convite_id);
+    assertEquals(reserva.data, [{ enviado_em: null, liberado_em: null }], "a reserva do primeiro envio está em aberto");
 
-    // Dentro do intervalo de 60 s do endereço: a segunda academia grava o
-    // convite sem envio, e a resposta é a mesma de um envio.
+    // Com a reserva em aberto, a segunda academia grava o convite sem envio,
+    // e a resposta é a mesma.
     const r2 = await convidar(b.token, b.academiaId);
     assertEquals(typeof r2.convite_id, "string", JSON.stringify(r2));
+    soltar();
+    await envioA;
+    const primeiro = await emailsPara(ocupado);
+    assertEquals(primeiro.length, 1);
     await new Promise((ok) => setTimeout(ok, 1000));
     assertEquals((await emailsPara(ocupado)).length, 1, "o segundo envio foi suprimido");
 

@@ -329,6 +329,9 @@ A função não grava em tabela de negócio fora de `criar_convite_interna`. O
 - A `concluir-senha` recebe `{ senha }` e só aceita token de sessão aberta
   por link (`amr` com `otp`, `magiclink`, `invite`, `recovery`,
   `email/signup` ou `email_change`, a mesma lista do aceite) e com `session_id`; senão, `convite_exige_link`.
+  Só grava para conta com convite pendente e válido para o e-mail
+  confirmado ou com vínculo já aceito por convite (refazer a prova); fora
+  disso, `convite_invalido`. Conta comum troca a senha pelo Auth.
   Sucesso: `{ ok: true }`, e o front renova a sessão.
 
 **Dependência de ambiente:** o SMTP padrão do Supabase só entrega para os
