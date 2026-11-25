@@ -608,3 +608,43 @@ Deno.test({
     assertEquals((await emailsPara(endereco)).length, 1, "a outra academia enviou depois da limpeza");
   },
 });
+
+Deno.test({
+  name:
+    "cadastro recente com link de confirmação entregue e convite com envio recusado: o link original confirma, sem a senha",
+  ignore: !ativo,
+  async fn() {
+    const a = await prepararDono("recente-dono");
+    const endereco = email("recente");
+
+    // Alguém se cadastra com senha; o link de confirmação vai para o endereço.
+    const cadastro = await novoAnon().auth.signUp({
+      email: endereco,
+      password: "senha-do-cadastro-3",
+      options: { emailRedirectTo: "http://127.0.0.1:3000/painel/convites" },
+    });
+    if (cadastro.error) throw cadastro.error;
+    const original = await emailsPara(endereco);
+    assertEquals(original.length, 1, "o link de confirmação do cadastro chegou");
+
+    // O convite neutraliza a conta, e o Auth recusa o envio do link novo.
+    const deps = {
+      ...depsConvidar(a.c, "http://127.0.0.1:3000"),
+      enviarLinkMagico: () => Promise.resolve({ status: 429, message: "limite" }),
+    };
+    const r = await convidarMembro(
+      pedido(a.token, { academia_id: a.academiaId, email: endereco, papel: "professor" }),
+      deps,
+    );
+    assertEquals(r.status, 200);
+
+    // O link original ainda confirma o endereço, e a senha do cadastro não entra.
+    const achado = original[0].replace(/&amp;/g, "&").match(/https?:\/\/[^\s"'<>]+\/auth\/v1\/verify\?[^\s"'<>]+/);
+    assert(achado, "o e-mail do cadastro traz o link de confirmação");
+    const abre = await fetch(achado[0], { redirect: "manual" });
+    await abre.body?.cancel();
+    assert((abre.headers.get("Location") ?? "").includes("access_token="), "o link original ainda confirma");
+    const entra = await novoAnon().auth.signInWithPassword({ email: endereco, password: "senha-do-cadastro-3" });
+    assert(entra.error, "a senha do cadastro continua inválida depois da confirmação");
+  },
+});

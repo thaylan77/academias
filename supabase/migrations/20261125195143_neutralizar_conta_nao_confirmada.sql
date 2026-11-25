@@ -69,7 +69,12 @@ begin
            - 'senha_comprovada' - 'senha_redefinida_em' - 'senha_redefinida_sessao'
    where u.id = p_user_id;
   delete from auth.sessions s where s.user_id = p_user_id;
-  delete from auth.one_time_tokens o where o.user_id = p_user_id;
+  -- O link de confirmação do cadastro foi para o próprio endereço (o dono
+  -- dele é quem o abre) e fica: confirmar a conta não devolve a senha
+  -- derrubada aqui. Os demais tokens de uso único caem.
+  delete from auth.one_time_tokens o
+   where o.user_id = p_user_id
+     and o.token_type::text <> 'confirmation_token';
   return true;
 end
 $$;

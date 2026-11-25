@@ -229,7 +229,8 @@ A entrada é `{ academia_id, email, papel }`, com o JWT de quem convida.
      e os tokens de uso único e marca `app_metadata.definir_senha = true`.
      Depois manda o link mágico. Isso derruba a senha de quem tenha criado a
      conta com o e-mail de outra pessoa, sem tirar a de quem confirmou o
-     cadastro no meio-tempo; numa conta sem senha (a criada agora pelo convite
+     cadastro no meio-tempo; o link de confirmação do cadastro, que foi para
+     o próprio endereço, fica (confirmar não devolve a senha derrubada); numa conta sem senha (a criada agora pelo convite
      do Auth, ou a que o Auth limpou ao emitir o link) só marca
      `definir_senha`, sem apagar o link já entregue; a neutralização é idempotente (guarda em
      `app_metadata.neutralizada` o hash da senha que gravou): uma segunda

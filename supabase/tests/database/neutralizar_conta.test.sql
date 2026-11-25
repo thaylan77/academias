@@ -2,7 +2,7 @@
 -- 4.4): só age em conta com o e-mail não confirmado, com a conta travada.
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(20);
+select plan(21);
 
 insert into auth.users (id, email, email_confirmed_at, encrypted_password, raw_app_meta_data, recovery_token) values
   ('e7e00000-0000-4000-8000-0000000000a1', 'intruso@neutraliza.test', null,
@@ -140,6 +140,23 @@ select lives_ok($$select public.definir_senha_comprovada_interna('e7e00000-0000-
     'e7e00000-0000-4000-8000-0000000006a7', 'senha-nova-com-mfa', 'aal2')$$,
   'token e sessão em aal2: a senha é definida');
 reset role;
+
+-- O link de confirmação do cadastro (foi para o próprio endereço) fica; os
+-- demais tokens de uso único e a senha caem.
+insert into auth.users (id, email, email_confirmed_at, encrypted_password, raw_app_meta_data) values
+  ('e7e00000-0000-4000-8000-0000000000a8', 'recem-cadastro@neutraliza.test', null,
+   extensions.crypt('senha-do-cadastro-2', extensions.gen_salt('bf', 4)), '{}');
+insert into auth.one_time_tokens (id, user_id, token_type, token_hash, relates_to) values
+  (gen_random_uuid(), 'e7e00000-0000-4000-8000-0000000000a8', 'confirmation_token', 'link-do-cadastro', 'recem-cadastro@neutraliza.test'),
+  (gen_random_uuid(), 'e7e00000-0000-4000-8000-0000000000a8', 'recovery_token', 'link-de-recuperacao', 'recem-cadastro@neutraliza.test');
+set local role service_role;
+select public.neutralizar_conta_nao_confirmada_interna('e7e00000-0000-4000-8000-0000000000a8');
+reset role;
+select is((select string_agg(o.token_type::text, ',' order by o.token_type::text) from auth.one_time_tokens o
+            where o.user_id = 'e7e00000-0000-4000-8000-0000000000a8')
+          || '/' || (select (encrypted_password = extensions.crypt('senha-do-cadastro-2', encrypted_password))::text
+                       from auth.users where id = 'e7e00000-0000-4000-8000-0000000000a8'),
+  'confirmation_token/false', 'o link de confirmação do cadastro fica; a recuperação e a senha caem');
 
 select * from finish();
 rollback;
