@@ -1132,6 +1132,11 @@ begin
     raise exception 'Convite não encontrado, vencido ou já respondido.'
       using hint = 'convite_invalido';
   end if;
+  -- A espera pela conta do autor pode ter passado do vencimento.
+  if v_conv.expira_em <= clock_timestamp() then
+    raise exception 'Convite não encontrado, vencido ou já respondido.'
+      using hint = 'convite_invalido';
+  end if;
 
   if not public.academia_ativa_agora(v_conv.academia_id) then
     raise exception 'A assinatura da academia está suspensa: o convite não pode ser respondido agora.'

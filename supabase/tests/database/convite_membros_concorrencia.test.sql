@@ -47,6 +47,8 @@
 --      recusada (ultimo_dono).
 --   AC. o mesmo de Z, para um admin com vínculo anterior ao convite (sem
 --      vale_a_partir): a criação também é recusada.
+--   AD. a recusa espera a conta de quem convidou e o convite vence nessa
+--      espera: a recusa é recusada e o convite fica pendente.
 --   AB. o aceite de quem já tem um vínculo inativo e uma edição direta desse
 --      vínculo pela secretaria, com a academia travada por uma terceira
 --      transação: as duas terminam, sem deadlock.
@@ -57,7 +59,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 create extension if not exists dblink with schema extensions;
-select plan(112);
+select plan(116);
 
 create function pg_temp.conexao(p_nome text) returns text language sql as $$
   select format('host=%s port=%s dbname=%s user=postgres password=postgres application_name=%s',
@@ -152,7 +154,7 @@ begin
       'e7d00000-0000-4000-8000-0000000000dd', 'e7d00000-0000-4000-8000-0000000000de',
       'e7d00000-0000-4000-8000-0000000000df', 'e7d00000-0000-4000-8000-0000000000e0',
       'e7d00000-0000-4000-8000-0000000000e1', 'e7d00000-0000-4000-8000-0000000000be',
-      'e7d00000-0000-4000-8000-0000000000e2',
+      'e7d00000-0000-4000-8000-0000000000e2', 'e7d00000-0000-4000-8000-0000000000e3',
       'e7d00000-0000-4000-8000-0000000000d1', 'e7d00000-0000-4000-8000-0000000000d2');
   $f$);
 end
@@ -199,7 +201,8 @@ select extensions.dblink_exec('prep', $f$
     ('e7d00000-0000-4000-8000-0000000000e0', 'u15@concorre.test',   now()),
     ('e7d00000-0000-4000-8000-0000000000e1', 'u16@concorre.test',   now()),
     ('e7d00000-0000-4000-8000-0000000000be', 'admin14@concorre.test', now()),
-    ('e7d00000-0000-4000-8000-0000000000e2', 'u17@concorre.test',   now());
+    ('e7d00000-0000-4000-8000-0000000000e2', 'u17@concorre.test',   now()),
+    ('e7d00000-0000-4000-8000-0000000000e3', 'u18@concorre.test',   now());
   -- Senha nova já definida (concluir-senha), como pede o aceite.
   -- Cada usuário com uma sessão (id = o próprio id do usuário, como o
   -- session_id que pg_temp.como põe no JWT) e a senha nova definida nela.
@@ -276,6 +279,8 @@ select extensions.dblink_exec('prep', $f$
     ('e7d00000-0000-4000-8000-0000000002d2', 'e7d00000-0000-4000-8000-00000000000e', 'u16@concorre.test', 'professor',
      'e7d00000-0000-4000-8000-0000000000bd', now() + interval '7 days'),
     ('e7d00000-0000-4000-8000-0000000002d3', 'e7d00000-0000-4000-8000-00000000000e', 'u17@concorre.test', 'admin',
+     'e7d00000-0000-4000-8000-0000000000bd', now() + interval '7 days'),
+    ('e7d00000-0000-4000-8000-0000000002d4', 'e7d00000-0000-4000-8000-00000000000e', 'u18@concorre.test', 'professor',
      'e7d00000-0000-4000-8000-0000000000bd', now() + interval '7 days');
 $f$);
 
@@ -781,6 +786,27 @@ select matches(pg_temp.resultado_s2(), 'HINT: +sem_permissao', 'AC: vínculo ant
 select is((select count(*) from public.convites_equipe where email = 'zeta2@concorre.test')
           + (select count(*) from public.convites_envios where email = 'zeta2@concorre.test'),
   0::bigint, 'AC: sem convite nem reserva');
+
+-- ---------------------------------------------------------------------
+-- AD. O convite de u18 passa a vencer em 2 s; s1 atualiza a conta de bd
+--     (quem convidou) sem confirmar; u18 recusa em s2 e espera; o convite
+--     vence; s1 confirma.
+-- ---------------------------------------------------------------------
+select extensions.dblink_exec('prep', $$update public.convites_equipe set expira_em = clock_timestamp() + interval '2 seconds'
+  where id = 'e7d00000-0000-4000-8000-0000000002d4'$$);
+select pg_temp.como('s2', 'e7d00000-0000-4000-8000-0000000000e3');
+select extensions.dblink_exec('s1', 'reset role');
+select extensions.dblink_exec('s1', $q$set request.jwt.claim.sub = ''; set request.jwt.claim.role = ''; set request.jwt.claims = ''$q$);
+select extensions.dblink_exec('s1', 'begin');
+select extensions.dblink_exec('s1', $$update auth.users set updated_at = updated_at where id = 'e7d00000-0000-4000-8000-0000000000bd'$$);
+select is(extensions.dblink_send_query('s2', $$select public.recusar_convite('e7d00000-0000-4000-8000-0000000002d4')$$),
+  1, 'AD: s2 envia a recusa antes do vencimento');
+select ok(pg_temp.s2_espera_s1(), 'AD: a recusa espera a conta de quem convidou');
+select pg_sleep(2.5);
+select extensions.dblink_exec('s1', 'commit');
+select matches(pg_temp.resultado_s2(), 'HINT: +convite_invalido', 'AD: o convite venceu na espera: a recusa é recusada');
+select is((select status from public.convites_equipe where id = 'e7d00000-0000-4000-8000-0000000002d4'),
+  'pendente', 'AD: o convite vencido continua pendente, sem resposta gravada');
 
 -- ---------------------------------------------------------------------
 -- AA. bc (dono de O, desativado em U) volta ativo, como vínculo aceito por
