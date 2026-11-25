@@ -45,6 +45,8 @@
 --   AA. o outro dono, que entrou por convite, troca a senha fora do fluxo
 --      enquanto um dono sai: a saída espera a troca, relê a prova e é
 --      recusada (ultimo_dono).
+--   AC. o mesmo de Z, para um admin com vínculo anterior ao convite (sem
+--      vale_a_partir): a criação também é recusada.
 --   AB. o aceite de quem já tem um vínculo inativo e uma edição direta desse
 --      vínculo pela secretaria, com a academia travada por uma terceira
 --      transação: as duas terminam, sem deadlock.
@@ -55,7 +57,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 create extension if not exists dblink with schema extensions;
-select plan(108);
+select plan(112);
 
 create function pg_temp.conexao(p_nome text) returns text language sql as $$
   select format('host=%s port=%s dbname=%s user=postgres password=postgres application_name=%s',
@@ -304,7 +306,7 @@ select ok(pg_temp.ninguem_esperando(), 'B: antes do envio, s2 não espera ningu�
 select extensions.dblink_exec('s1', 'begin');
 select extensions.dblink_exec('s1', $q$do $d$ begin perform public.aceitar_convite('e7d00000-0000-4000-8000-0000000002c3'); end $d$$q$);
 select is(extensions.dblink_send_query('s2', $$select public.criar_convite_interna(
-    'e7d00000-0000-4000-8000-0000000000a1', 'e7d00000-0000-4000-8000-00000000000a', 'u2@concorre.test', 'admin')::text$$),
+    'e7d00000-0000-4000-8000-0000000000a1', 'e7d00000-0000-4000-8000-00000000000a', 'u2@concorre.test', 'admin', null, 'e7d00000-0000-4000-8000-0000000000a1')::text$$),
   1, 'B: s2 envia o convite novo');
 select ok(pg_temp.s2_espera_s1(), 'B: o convite novo espera a trava do aceite');
 select extensions.dblink_exec('s1', 'commit');
@@ -420,9 +422,9 @@ select pg_temp.como('s2', 'service_role');
 select ok(pg_temp.ninguem_esperando(), 'J: antes do envio, s2 não espera ninguém');
 select extensions.dblink_exec('s1', 'begin');
 select extensions.dblink_exec('s1', $q$do $d$ begin perform public.criar_convite_interna(
-    'e7d00000-0000-4000-8000-0000000000a2', 'e7d00000-0000-4000-8000-00000000000a', 'disputa@concorre.test', 'professor'); end $d$$q$);
+    'e7d00000-0000-4000-8000-0000000000a2', 'e7d00000-0000-4000-8000-00000000000a', 'disputa@concorre.test', 'professor', null, 'e7d00000-0000-4000-8000-0000000000a2'); end $d$$q$);
 select is(extensions.dblink_send_query('s2', $$select public.criar_convite_interna(
-    'e7d00000-0000-4000-8000-0000000000b2', 'e7d00000-0000-4000-8000-00000000000b', 'disputa@concorre.test', 'professor')::text$$),
+    'e7d00000-0000-4000-8000-0000000000b2', 'e7d00000-0000-4000-8000-00000000000b', 'disputa@concorre.test', 'professor', null, 'e7d00000-0000-4000-8000-0000000000b2')::text$$),
   1, 'J: s2 envia o convite pela outra academia');
 select ok(pg_temp.s2_espera_s1(), 'J: o segundo convite espera a trava do e-mail');
 select extensions.dblink_exec('s1', 'commit');
@@ -446,7 +448,7 @@ select extensions.dblink_exec('s1', 'begin');
 select extensions.dblink_exec('s1', $$update public.academias set updated_at = updated_at where id = 'e7d00000-0000-4000-8000-00000000000b'$$);
 select pg_sleep(1.5);
 select is(extensions.dblink_send_query('s2', $$select public.criar_convite_interna(
-    'e7d00000-0000-4000-8000-0000000000b2', 'e7d00000-0000-4000-8000-00000000000b', 'relogio@concorre.test', 'professor')::text$$),
+    'e7d00000-0000-4000-8000-0000000000b2', 'e7d00000-0000-4000-8000-00000000000b', 'relogio@concorre.test', 'professor', null, 'e7d00000-0000-4000-8000-0000000000b2')::text$$),
   1, 'K: s2 envia o convite');
 select ok(pg_temp.s2_espera_s1(), 'K: o convite espera a trava da academia');
 select extensions.dblink_exec('s1', 'commit');
@@ -755,6 +757,30 @@ select matches(pg_temp.resultado_s2(), 'HINT: +sem_permissao', 'Z: com a sessão
 select is((select count(*) from public.convites_equipe where email = 'zeta@concorre.test')
           + (select count(*) from public.convites_envios where email = 'zeta@concorre.test'),
   0::bigint, 'Z: sem convite nem reserva');
+
+-- ---------------------------------------------------------------------
+-- AC. admin14 sem vale_a_partir (vínculo anterior ao convite) e com uma
+--     sessão nova; s1 apaga a sessão sem confirmar; s2 cria; s1 confirma.
+-- ---------------------------------------------------------------------
+select extensions.dblink_exec('prep', $$update public.membros_academia set vale_a_partir = null
+  where user_id = 'e7d00000-0000-4000-8000-0000000000be'$$);
+select extensions.dblink_exec('prep', $$insert into auth.sessions (id, user_id, created_at)
+  values ('e7d00000-0000-4000-8000-0000000000be', 'e7d00000-0000-4000-8000-0000000000be', now())$$);
+select pg_temp.como('s2', 'service_role');
+select extensions.dblink_exec('s1', 'reset role');
+select extensions.dblink_exec('s1', $q$set request.jwt.claim.sub = ''; set request.jwt.claim.role = ''; set request.jwt.claims = ''$q$);
+select extensions.dblink_exec('s1', 'begin');
+select extensions.dblink_exec('s1', $$delete from auth.sessions where id = 'e7d00000-0000-4000-8000-0000000000be'$$);
+select is(extensions.dblink_send_query('s2', $$select public.criar_convite_interna(
+    'e7d00000-0000-4000-8000-0000000000be', 'e7d00000-0000-4000-8000-00000000000e', 'zeta2@concorre.test', 'professor',
+    null, 'e7d00000-0000-4000-8000-0000000000be')::text$$),
+  1, 'AC: s2 envia a criação');
+select ok(pg_temp.s2_espera_s1(), 'AC: a criação espera a revogação da sessão do autor');
+select extensions.dblink_exec('s1', 'commit');
+select matches(pg_temp.resultado_s2(), 'HINT: +sem_permissao', 'AC: vínculo anterior ao convite, sessão revogada: a criação é recusada');
+select is((select count(*) from public.convites_equipe where email = 'zeta2@concorre.test')
+          + (select count(*) from public.convites_envios where email = 'zeta2@concorre.test'),
+  0::bigint, 'AC: sem convite nem reserva');
 
 -- ---------------------------------------------------------------------
 -- AA. bc (dono de O, desativado em U) volta ativo, como vínculo aceito por

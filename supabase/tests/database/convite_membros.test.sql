@@ -4,7 +4,7 @@
 -- Academias A e B (ativas) e S (suspensa).
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(148);
+select plan(150);
 
 -- ---------------------------------------------------------------------
 -- Auxiliares
@@ -121,7 +121,8 @@ create function public.__cc(p_user text, p_acad text, p_email text, p_papel text
 returns jsonb
 language sql
 as $$
-  select public.criar_convite_interna(p_user::uuid, p_acad::uuid, p_email, p_papel)
+  -- Como a Edge Function: com a sessão do autor (nas fixtures, id = user_id).
+  select public.criar_convite_interna(p_user::uuid, p_acad::uuid, p_email, p_papel, null, p_user::uuid)
 $$;
 
 grant execute on function public.__como(text), public.__como_senha(text), public.__como_token(text, bigint, text), public.__como_servico(), public.__sem_jwt(),
@@ -1060,6 +1061,25 @@ select is(public.__hint_de(format('select public.aceitar_convite(%L)', (public._
 select is(public.__hint_de(format('select public.recusar_convite(%L)', (public.__conv('e7c00000-0000-4000-8000-00000000000a', 'convidadodele@conv.test')).id))
           || '/' || (public.__conv('e7c00000-0000-4000-8000-00000000000a', 'convidadodele@conv.test')).status,
   'convite_invalido/pendente', 'convite de um autor sem a prova de senha válida também não é recusado');
+-- Um admin com vínculo anterior ao convite e a sessão do token apagada no
+-- Auth (JWT ainda na validade) não cancela nem cria convites.
+reset role;
+insert into public.membros_academia (academia_id, user_id, papel) values
+  ('e7c00000-0000-4000-8000-00000000000a', 'e7c00000-0000-4000-8000-0000000000df', 'admin');
+set local role authenticated;
+select public.__como('e7c00000-0000-4000-8000-0000000000df');
+select is(public.__hint_de(format('select public.cancelar_convite(%L)', (public.__conv('e7c00000-0000-4000-8000-00000000000a', 'convidadodele@conv.test')).id)),
+  'convite_invalido', 'token de sessão revogada não cancela convite, mesmo com vínculo anterior ao convite');
+reset role;
+set local role service_role;
+select public.__como_servico();
+select is(public.__hint_de($$select public.__cc('e7c00000-0000-4000-8000-0000000000df', 'e7c00000-0000-4000-8000-00000000000a', 'semsessao-convida@conv.test', 'professor')$$),
+  'sem_permissao', 'sessão revogada não cria convite, mesmo com vínculo anterior ao convite');
+reset role;
+select public.__sem_jwt();
+delete from public.membros_academia
+ where academia_id = 'e7c00000-0000-4000-8000-00000000000a' and user_id = 'e7c00000-0000-4000-8000-0000000000df';
+set local role authenticated;
 reset role;
 update auth.users set raw_app_meta_data = raw_app_meta_data || jsonb_build_object('senha_comprovada', md5('hash-novo'))
  where id = 'e7c00000-0000-4000-8000-0000000000e4';

@@ -555,17 +555,14 @@ begin
   --    academia, sempre nessa ordem) serializa convites de academias
   --    diferentes para o mesmo endereço.
   perform pg_advisory_xact_lock(hashtextextended('convite_email:' || v_email, 0));
-  -- E o autor de novo, depois das esperas. Se o vínculo dele veio por convite
-  -- (vale_a_partir), a sessão do token fica travada até o fim: uma revogação
-  -- concorrente no Auth espera esta criação, ou ela vê a sessão apagada.
-  if exists (select 1 from public.membros_academia m
-              where m.academia_id = p_academia_id and m.user_id = p_user_id
-                and m.vale_a_partir is not null) then
-    perform 1 from auth.sessions s where s.id = p_sessao and s.user_id = p_user_id for share;
-    if not found then
-      raise exception 'Só o dono ou um admin da academia convida para a equipe.'
-        using hint = 'sem_permissao';
-    end if;
+  -- E o autor de novo, depois das esperas: a sessão do token, viva, fica
+  -- travada até o fim (todo vínculo, inclusive os anteriores ao convite). Uma
+  -- revogação concorrente no Auth espera esta criação, ou ela vê a sessão
+  -- apagada.
+  perform 1 from auth.sessions s where s.id = p_sessao and s.user_id = p_user_id for share;
+  if not found then
+    raise exception 'Só o dono ou um admin da academia convida para a equipe.'
+      using hint = 'sem_permissao';
   end if;
   if public.convite_papel_ativo_iat(p_user_id, p_academia_id, p_iat, p_sessao) is null then
     raise exception 'Só o dono ou um admin da academia convida para a equipe.'
@@ -798,6 +795,12 @@ begin
   -- Trava e relê.
   perform 1 from public.academias a where a.id = v_academia for no key update;
   select c.* into v_conv from public.convites_equipe c where c.id = p_convite_id for update;
+  -- A sessão do token, viva, travada até o fim: uma revogação concorrente no
+  -- Auth espera o cancelamento, ou ele vê a sessão apagada.
+  perform 1 from auth.sessions s where s.id = public.jwt_sessao() and s.user_id = auth.uid() for share;
+  if not found then
+    raise exception 'Convite não encontrado.' using hint = 'convite_invalido';
+  end if;
   v_papel_eu := public.convite_papel_ativo_sessao(v_academia);
   if v_conv.id is null or v_papel_eu is null then
     raise exception 'Convite não encontrado.' using hint = 'convite_invalido';
