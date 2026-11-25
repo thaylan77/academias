@@ -710,6 +710,9 @@ isOneToOne: false
               "academia_id": string,"academia_nome": string,"convite_id": string,"expira_em": string,"papel": string
             }[]
                            },
+"neutralizar_conta_nao_confirmada_interna":
+{ Args: { "p_user_id": string }; Returns: boolean
+                           },
 "pode_gerir":
 { Args: { "p_academia_id": string,"p_papeis": (string)[] }; Returns: boolean
                            },
