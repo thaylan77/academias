@@ -671,12 +671,15 @@ reset role;
 set local role service_role;
 select public.__como_servico();
 select public.definir_senha_comprovada_interna('e7c00000-0000-4000-8000-0000000000d1', 'e7c00000-0000-4000-8000-0000000000d1', 'senha-nova-do-convite');
+reset role;
 select is((select encrypted_password = extensions.crypt('senha-nova-do-convite', encrypted_password)
              and raw_app_meta_data ->> 'senha_comprovada' = md5(encrypted_password)
              and raw_app_meta_data ->> 'senha_redefinida_sessao' = 'e7c00000-0000-4000-8000-0000000000d1'
              and not (raw_app_meta_data ? 'definir_senha')
            from auth.users where id = 'e7c00000-0000-4000-8000-0000000000d1'),
   true, 'definir_senha_comprovada_interna grava a senha (bcrypt) e a prova dela juntas');
+set local role service_role;
+select public.__como_servico();
 select is(public.__hint_de($$select public.definir_senha_comprovada_interna('e7c00000-0000-4000-8000-0000000000d1', 'e7c00000-0000-4000-8000-0000000000d2', 'outra-senha-longa')$$),
   'convite_exige_link', 'a senha só é definida com uma sessão do próprio usuário');
 select is(public.__hint_de($$select public.definir_senha_comprovada_interna('e7c00000-0000-4000-8000-0000000000d1', 'e7c00000-0000-4000-8000-0000000000d1', 'curta')$$),
