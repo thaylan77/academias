@@ -65,6 +65,10 @@ export function depsSimuladas(s: Simulado = {}) {
     },
     rpc(nome, args) {
       registra("rpc:" + nome, args);
+      // Padrão: a reserva é assumida (o worker pode chamar o Auth).
+      if (nome === "assumir_envio_convite_interna" && !s.rpc?.[nome]) {
+        return Promise.resolve({ data: true, error: null });
+      }
       const r = s.rpc?.[nome];
       if (Array.isArray(r)) {
         const i = Math.min(consumo[nome] ?? 0, r.length - 1);

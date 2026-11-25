@@ -166,6 +166,22 @@ async function processarEnvio(c: Criado, deps: DepsConvidar): Promise<void> {
   // e-mail.
   if (!c.enviar) return;
 
+  // Assume a reserva logo antes de chamar o Auth (marca durável): uma reserva
+  // que nenhum worker assumiu em 2 minutos é liberada pelo job; a assumida
+  // fica, porque o e-mail pode ter saído. Se ela já foi liberada (este worker
+  // atrasou), não envia.
+  if (c.envio_id) {
+    const assumida = await deps.rpc("assumir_envio_convite_interna", { p_envio_id: c.envio_id });
+    if (assumida.error || assumida.data !== true) {
+      deps.log(
+        `convidar-membro: reserva ${c.envio_id} não assumida (código ${
+          assumida.error ? codigoDoErro(assumida.error) : "liberada"
+        }); sem envio`,
+      );
+      return;
+    }
+  }
+
   // 2. Envio, segundo a conta. A conta que deixou de estar não confirmada
   //    no meio do caminho recebe o link mágico como uma confirmada.
   let falha: ErroAuth | null = falhaAntes;

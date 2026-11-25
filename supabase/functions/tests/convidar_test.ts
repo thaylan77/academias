@@ -298,3 +298,24 @@ Deno.test("exceção no envio em segundo plano fica no log, sem derrubar a respo
   assertEquals(r.status, 200);
   assert(s.logs.some((l) => l.includes("exceção no envio (TypeError)")));
 });
+
+Deno.test("assume a reserva antes de chamar o Auth", async () => {
+  const r = await chama({ rpc: { criar_convite_interna: criado("confirmada") } });
+  assertEquals(r.de("rpc:assumir_envio_convite_interna").map((c) => c.args[0]), [RESERVA]);
+  assert(r.nomes().indexOf("rpc:assumir_envio_convite_interna") < r.nomes().indexOf("enviarLinkMagico"));
+});
+
+Deno.test("reserva já liberada como abandonada (worker atrasado): não envia nem mexe na reserva", async () => {
+  for (const assumir of [{ data: false }, { error: { code: "57014" } }]) {
+    const r = await chama({
+      rpc: { criar_convite_interna: criado("confirmada"), assumir_envio_convite_interna: assumir },
+    });
+    assertEquals(r.corpo, { convite_id: CONVITE });
+    assertEquals(r.de("enviarLinkMagico").length + r.de("convidarPorEmail").length, 0);
+    assertEquals(
+      r.de("rpc:confirmar_envio_convite_interna").length + r.de("rpc:liberar_envio_convite_interna").length,
+      0,
+    );
+    assert(r.logs.some((l) => l.includes("não assumida")));
+  }
+});

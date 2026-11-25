@@ -198,3 +198,83 @@ $$;
 
 revoke execute on function public.definir_senha_comprovada_interna(uuid, uuid, text) from public, anon, authenticated;
 grant execute on function public.definir_senha_comprovada_interna(uuid, uuid, text) to service_role;
+
+-- Reserva de envio abandonada (revisão do Codex, PR 84): a convidar-membro
+-- responde antes de enviar (EdgeRuntime.waitUntil). Se o worker cair entre a
+-- reserva e a chamada ao Auth, nenhum e-mail saiu, mas a reserva sem
+-- resultado seguraria o endereço em todas as academias até o expurgo.
+-- tentativa_em marca, de forma durável, o momento em que o worker vai chamar
+-- o Auth: antes dele, uma reserva com mais de 2 minutos é abandonada e o job
+-- a libera; depois dele, o e-mail pode ter saído e a reserva fica (lado
+-- seguro contra spam), como antes.
+alter table public.convites_envios add column tentativa_em timestamptz;
+
+-- O worker assume a reserva logo antes de chamar o Auth. Devolve false se
+-- ela já foi resolvida ou liberada como abandonada: aí o worker não envia.
+create or replace function public.assumir_envio_convite_interna(p_envio_id uuid)
+returns boolean
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_email text;
+begin
+  select v.email into v_email from public.convites_envios v where v.id = p_envio_id;
+  if v_email is null then
+    return false;
+  end if;
+  -- Mesma trava do endereço de criar_convite_interna.
+  perform pg_advisory_xact_lock(hashtextextended('convite_email:' || v_email, 0));
+  update public.convites_envios v
+     set tentativa_em = clock_timestamp()
+   where v.id = p_envio_id
+     and v.enviado_em is null
+     and v.liberado_em is null
+     and v.tentativa_em is null;
+  return found;
+end
+$$;
+
+revoke execute on function public.assumir_envio_convite_interna(uuid) from public, anon, authenticated;
+grant execute on function public.assumir_envio_convite_interna(uuid) to service_role;
+
+-- Libera as reservas que nenhum worker assumiu em 2 minutos (o worker caiu
+-- antes de chamar o Auth). Roda a cada minuto pelo pg_cron.
+create or replace function public.liberar_reservas_abandonadas_interna(p_idade interval default interval '2 minutes')
+returns integer
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_n integer;
+begin
+  if p_idade is null or p_idade < interval '1 minute' then
+    raise exception 'Idade mínima de 1 minuto.' using hint = 'dados_invalidos';
+  end if;
+  update public.convites_envios v
+     set liberado_em = clock_timestamp()
+   where v.enviado_em is null
+     and v.liberado_em is null
+     and v.tentativa_em is null
+     and v.reservado_em < clock_timestamp() - p_idade;
+  get diagnostics v_n = row_count;
+  return v_n;
+end
+$$;
+
+revoke execute on function public.liberar_reservas_abandonadas_interna(interval) from public, anon, authenticated;
+grant execute on function public.liberar_reservas_abandonadas_interna(interval) to service_role;
+
+do $$
+begin
+  if exists (select 1 from pg_available_extensions where name = 'pg_cron') then
+    create extension if not exists pg_cron with schema pg_catalog;
+    perform cron.schedule('liberar-reservas-convite-abandonadas', '* * * * *',
+                          'select public.liberar_reservas_abandonadas_interna()');
+  else
+    raise notice 'pg_cron indisponível neste banco: o job liberar-reservas-convite-abandonadas não foi agendado';
+  end if;
+end
+$$;

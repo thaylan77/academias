@@ -308,8 +308,8 @@ Deno.test({
     });
     if (squat.error) throw squat.error;
 
-    // Como no runtime: a primeira academia responde antes do envio, e o envio
-    // fica retido (depois de criar a reserva e neutralizar a conta) até a
+    // Como no runtime: a primeira academia responde antes do envio. O Auth
+    // emite e entrega o link, e o retorno ao handler fica retido até a
     // segunda academia convidar. A reserva ainda está em aberto nesse ponto.
     let soltar!: () => void;
     const retido = new Promise<void>((ok) => (soltar = ok));
@@ -317,8 +317,11 @@ Deno.test({
     const depsA = {
       ...deps,
       async enviarLinkMagico(endereco: string, redirectTo: string) {
+        // O Auth emite e manda o link de verdade; o retorno ao handler fica
+        // retido, com a reserva ainda em aberto.
+        const resultado = await deps.enviarLinkMagico(endereco, redirectTo);
         await retido;
-        return await deps.enviarLinkMagico(endereco, redirectTo);
+        return resultado;
       },
       emSegundoPlano(tarefa: () => Promise<void>) {
         envioA = tarefa();
@@ -334,6 +337,8 @@ Deno.test({
     const reserva = await a.c.servico.from("convites_envios").select("enviado_em, liberado_em")
       .eq("convite_id", r1.convite_id);
     assertEquals(reserva.data, [{ enviado_em: null, liberado_em: null }], "a reserva do primeiro envio está em aberto");
+
+    assertEquals((await emailsPara(ocupado)).length, 1, "o primeiro link já foi emitido e entregue");
 
     // Com a reserva em aberto, a segunda academia grava o convite sem envio,
     // e a resposta é a mesma.
@@ -391,5 +396,42 @@ Deno.test({
     await abre.body?.cancel();
     const destino = abre.headers.get("Location") ?? "";
     assert(destino.includes("access_token="), `o link do primeiro convite vale (${destino.replace(/#.*/, "#...")})`);
+  },
+});
+
+Deno.test({
+  name: "worker que cai antes de chamar o Auth: a reserva abandonada é liberada e o endereço volta a receber convite",
+  ignore: !ativo,
+  async fn() {
+    const a = await prepararDono("cai-a");
+    const b = await prepararDono("cai-b");
+    const endereco = email("abandonado");
+
+    // A primeira academia cria o convite e a reserva, mas o trabalho em
+    // segundo plano nunca roda (o worker caiu).
+    const depsCaiu = { ...depsConvidar(a.c, "http://127.0.0.1:3000"), emSegundoPlano: () => Promise.resolve() };
+    const r1 = await convidarMembro(
+      pedido(a.token, { academia_id: a.academiaId, email: endereco, papel: "professor" }),
+      depsCaiu,
+    );
+    const { convite_id } = await r1.json();
+    const reserva = await a.c.servico.from("convites_envios").select("id, tentativa_em").eq("convite_id", convite_id);
+    assertEquals(reserva.data?.length, 1);
+    assertEquals(reserva.data![0].tentativa_em, null, "nenhum worker assumiu a reserva");
+
+    // Passados 2 minutos (aqui, a reserva envelhecida), o job a libera.
+    const envelhece = await a.c.servico.from("convites_envios")
+      .update({ reservado_em: new Date(Date.now() - 5 * 60_000).toISOString() }).eq("id", reserva.data![0].id);
+    if (envelhece.error) throw envelhece.error;
+    const job = await a.c.servico.rpc("liberar_reservas_abandonadas_interna");
+    assertEquals([job.error, job.data], [null, 1]);
+
+    // Outra academia convida o mesmo endereço e o e-mail sai.
+    const r2 = await convidarMembro(
+      pedido(b.token, { academia_id: b.academiaId, email: endereco, papel: "professor" }),
+      depsConvidar(b.c, "http://127.0.0.1:3000"),
+    );
+    assertEquals(r2.status, 200, await r2.clone().text());
+    assertEquals((await emailsPara(endereco)).length, 1, "o endereço voltou a receber convite");
   },
 });
