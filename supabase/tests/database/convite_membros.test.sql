@@ -4,7 +4,7 @@
 -- Academias A e B (ativas) e S (suspensa).
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(135);
+select plan(138);
 
 -- ---------------------------------------------------------------------
 -- Auxiliares
@@ -673,11 +673,12 @@ select public.__como_servico();
 select public.definir_senha_comprovada_interna('e7c00000-0000-4000-8000-0000000000d1', 'e7c00000-0000-4000-8000-0000000000d1', 'senha-nova-do-convite');
 reset role;
 select is((select encrypted_password = extensions.crypt('senha-nova-do-convite', encrypted_password)
+             and encrypted_password like '$2a$10$%'
              and raw_app_meta_data ->> 'senha_comprovada' = md5(encrypted_password)
              and raw_app_meta_data ->> 'senha_redefinida_sessao' = 'e7c00000-0000-4000-8000-0000000000d1'
              and not (raw_app_meta_data ? 'definir_senha')
            from auth.users where id = 'e7c00000-0000-4000-8000-0000000000d1'),
-  true, 'definir_senha_comprovada_interna grava a senha (bcrypt) e a prova dela juntas');
+  true, 'definir_senha_comprovada_interna grava a senha (bcrypt custo 10) e a prova dela juntas');
 set local role service_role;
 select public.__como_servico();
 select is(public.__hint_de($$select public.definir_senha_comprovada_interna('e7c00000-0000-4000-8000-0000000000d1', 'e7c00000-0000-4000-8000-0000000000d1', 'senha-nova-do-convite')$$),
@@ -687,6 +688,36 @@ select is((select encrypted_password = extensions.crypt('senha-nova-do-convite',
              and raw_app_meta_data ->> 'senha_comprovada' = md5(encrypted_password)
            from auth.users where id = 'e7c00000-0000-4000-8000-0000000000d1'),
   true, 'a recusa da senha repetida não muda a credencial nem a prova');
+set local role service_role;
+select public.__como_servico();
+-- Hashes preexistentes nas variantes $2b$ e $2y$ do bcrypt também são
+-- conferidos; um formato que não é bcrypt é recusado.
+reset role;
+create temp table __senha_d1 on commit drop as
+  select encrypted_password, raw_app_meta_data from auth.users where id = 'e7c00000-0000-4000-8000-0000000000d1';
+update auth.users set encrypted_password = '$2b' || substr(extensions.crypt('senha-antiga-2b', extensions.gen_salt('bf', 10)), 4)
+ where id = 'e7c00000-0000-4000-8000-0000000000d1';
+set local role service_role;
+select public.__como_servico();
+select is(public.__hint_de($$select public.definir_senha_comprovada_interna('e7c00000-0000-4000-8000-0000000000d1', 'e7c00000-0000-4000-8000-0000000000d1', 'senha-antiga-2b')$$),
+  'senha_repetida', 'a senha atual num hash $2b$ não serve como senha nova');
+reset role;
+update auth.users set encrypted_password = '$2y' || substr(extensions.crypt('senha-antiga-2y', extensions.gen_salt('bf', 10)), 4)
+ where id = 'e7c00000-0000-4000-8000-0000000000d1';
+set local role service_role;
+select public.__como_servico();
+select is(public.__hint_de($$select public.definir_senha_comprovada_interna('e7c00000-0000-4000-8000-0000000000d1', 'e7c00000-0000-4000-8000-0000000000d1', 'senha-antiga-2y')$$),
+  'senha_repetida', 'a senha atual num hash $2y$ não serve como senha nova');
+reset role;
+update auth.users set encrypted_password = 'argon2-ou-outro-formato'
+ where id = 'e7c00000-0000-4000-8000-0000000000d1';
+set local role service_role;
+select public.__como_servico();
+select is(public.__hint_de($$select public.definir_senha_comprovada_interna('e7c00000-0000-4000-8000-0000000000d1', 'e7c00000-0000-4000-8000-0000000000d1', 'qualquer-senha-nova')$$),
+  'senha_nao_verificavel', 'senha atual num formato que o banco não confere: recusa, sem gravar');
+reset role;
+update auth.users u set encrypted_password = s.encrypted_password, raw_app_meta_data = s.raw_app_meta_data
+  from __senha_d1 s where u.id = 'e7c00000-0000-4000-8000-0000000000d1';
 set local role service_role;
 select public.__como_servico();
 select is(public.__hint_de($$select public.definir_senha_comprovada_interna('e7c00000-0000-4000-8000-0000000000d1', 'e7c00000-0000-4000-8000-0000000000d2', 'outra-senha-longa')$$),

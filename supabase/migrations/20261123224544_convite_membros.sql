@@ -210,8 +210,8 @@ declare
   v_hash  text;
   v_atual text;
 begin
-  if p_senha is null or length(p_senha) < 8 then
-    raise exception 'A senha precisa ter pelo menos 8 caracteres.'
+  if p_senha is null or length(p_senha) < 8 or octet_length(p_senha) > 72 then
+    raise exception 'A senha precisa ter de 8 a 72 caracteres.'
       using hint = 'dados_invalidos';
   end if;
   select u.encrypted_password into v_atual from auth.users u where u.id = p_user_id for update;
@@ -223,13 +223,24 @@ begin
 
   -- A senha nova não pode ser a atual: quem já a conhecia (a conta pode ter
   -- sido criada com a confirmação de e-mail desligada) entraria de novo.
-  -- O Auth grava bcrypt ($2a$/$2b$/$2y$); outro formato não se compara.
-  if v_atual ~ '^\$2[aby]?\$' and extensions.crypt(p_senha, v_atual) = v_atual then
-    raise exception 'Escolha uma senha diferente da atual.'
-      using hint = 'senha_repetida';
+  -- O Auth grava bcrypt. O pgcrypto só confere o prefixo $2a$; $2b$ e $2y$
+  -- calculam o mesmo hash para senhas de até 72 bytes (o limite acima), então
+  -- são conferidos trocando o prefixo. Outro formato não dá para conferir e
+  -- é recusado.
+  if coalesce(v_atual, '') <> '' then
+    if v_atual !~ '^\$2[abxy]\$[0-9]{2}\$[./A-Za-z0-9]{53}$' then
+      raise exception 'Não foi possível conferir a senha atual desta conta. Use "esqueci a senha".'
+        using hint = 'senha_nao_verificavel';
+    end if;
+    v_atual := '$2a' || substr(v_atual, 4);
+    if extensions.crypt(p_senha, v_atual) = v_atual then
+      raise exception 'Escolha uma senha diferente da atual.'
+        using hint = 'senha_repetida';
+    end if;
   end if;
 
-  v_hash := extensions.crypt(p_senha, extensions.gen_salt('bf'));
+  -- Custo 10, o mesmo do Auth (o padrão do gen_salt('bf') é 6).
+  v_hash := extensions.crypt(p_senha, extensions.gen_salt('bf', 10));
   update auth.users u
      set encrypted_password = v_hash,
          raw_app_meta_data = (coalesce(u.raw_app_meta_data, '{}'::jsonb)
