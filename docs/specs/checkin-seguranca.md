@@ -115,6 +115,8 @@ O código vai no `hint` do erro (`raise exception '<mensagem em português>' usi
 | `senha_pendente` | `aceitar_convite` | a conta não definiu senha nova depois de abrir o link (`app_metadata.senha_redefinida_em`, gravado pela Edge Function `concluir-senha`), ou ainda está marcada para definir senha (`app_metadata.definir_senha`) |
 | `senha_repetida` | `definir_senha_comprovada_interna` (pela `concluir-senha`) | a senha nova é igual à atual |
 | `senha_nao_verificavel` | `definir_senha_comprovada_interna` (pela `concluir-senha`) | a senha atual da conta está num formato que o banco não confere (não é bcrypt); a pessoa usa "esqueci a senha" do Auth |
+| `sem_sessao` | Edge Functions `convidar-membro` e `concluir-senha` | pedido sem token ou com token que o Auth não aceita |
+| `erro_interno` | Edge Functions `convidar-membro` e `concluir-senha` | falha inesperada (o texto do erro fica só no log da função) |
 | `convite_exige_link` | `aceitar_convite` | a sessão não foi aberta por um link enviado ao e-mail (link mágico, OTP, convite, recuperação ou confirmação de cadastro; conferido no `amr` do JWT). A tela pede o link do convite |
 | `ultimo_dono` | gravação em `membros_academia` (gatilho `membros_academia_ultimo_dono`) | a alteração deixaria a academia sem dono ativo com conta não apagada. Passam o `service_role`, a sessão administrativa sem JWT e o delete em cascata da academia |
 | `exclusao_logica_bloqueada` | `auth.users` (gatilho `auth_users_exclusao_logica`) | qualquer um (o Auth, uma requisição ou o SQL do projeto) tentou a exclusão lógica (`deleted_at`) de uma conta. Conta se apaga de verdade |

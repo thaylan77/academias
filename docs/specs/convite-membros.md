@@ -284,6 +284,26 @@ Function, `concluir-senha`: o painel manda a senha nova para ela (não usa
 A função não grava em tabela de negócio fora de `criar_convite_interna`. O
 `service_role` serve só para o Auth. O log não leva o e-mail completo.
 
+**Contrato implementado** (`supabase/functions/`, PR 2):
+
+- Resposta de sucesso da `convidar-membro`: `{ convite_id, email_enviado }`.
+  `email_enviado` é `true` também quando `enviar = false` (o front não
+  distingue) e `false` quando o envio falhou; o convite fica pendente nos
+  dois casos.
+- Erro: `{ erro: <hint> }`, só o código estável, nunca o texto do banco.
+  Status 401 para `sem_sessao`, 403 para `sem_permissao`, 429 para
+  `limite_convites` e `convite_reenvio_cedo`, 400 para os demais e 500 para
+  `erro_interno`.
+- Reserva de envio: confirmada quando o Auth aceita o envio; liberada quando
+  ele recusa com 4xx ou quando o envio nem chega a ser tentado (falha ao
+  trocar a senha da conta não confirmada); mantida (até o expurgo) quando a
+  falha é 5xx ou de rede, porque aí não se sabe se o e-mail saiu.
+- A senha da conta `nao_confirmada` é trocada mesmo quando `enviar = false`.
+- A `concluir-senha` recebe `{ senha }` e só aceita token de sessão aberta
+  por link (`amr` com `otp`, `magiclink`, `invite`, `recovery`, `email`,
+  `signup` ou `email_change`) e com `session_id`; senão, `convite_exige_link`.
+  Sucesso: `{ ok: true }`, e o front renova a sessão.
+
 **Dependência de ambiente:** o SMTP padrão do Supabase só entrega para os
 e-mails da equipe do projeto e tem limite baixo por hora. Para convidar
 gente de fora no `honorteam-dev`, é preciso configurar um SMTP próprio no
