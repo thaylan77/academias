@@ -2,7 +2,7 @@
 -- 4.4): só age em conta com o e-mail não confirmado, com a conta travada.
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(21);
+select plan(20);
 
 insert into auth.users (id, email, email_confirmed_at, encrypted_password, raw_app_meta_data, recovery_token) values
   ('e7e00000-0000-4000-8000-0000000000a1', 'intruso@neutraliza.test', null,
@@ -71,21 +71,19 @@ select is((select (encrypted_password = extensions.crypt('trocada-no-meio', encr
              from auth.users where id = 'e7e00000-0000-4000-8000-0000000000a1'),
   'false/', 'senha trocada depois da neutralização: a próxima chamada neutraliza de novo');
 
--- marcar_definir_senha_interna: marca a conta nova, mas não depois de a
--- senha nova já ter sido gravada pela concluir-senha.
+-- conta_nao_confirmada_por_email_interna: a conta não confirmada do endereço
+-- (o cadastro que surgiu no meio do convite); nada para a confirmada.
 insert into auth.users (id, email, email_confirmed_at, raw_app_meta_data) values
   ('e7e00000-0000-4000-8000-0000000000a3', 'nova@neutraliza.test', null, '{}'),
-  ('e7e00000-0000-4000-8000-0000000000a4', 'jadefiniu@neutraliza.test', now(), '{"senha_comprovada": "h"}');
+  ('e7e00000-0000-4000-8000-0000000000a4', 'jadefiniu@neutraliza.test', now(), '{}');
 set local role service_role;
-select is(public.marcar_definir_senha_interna('e7e00000-0000-4000-8000-0000000000a3')::text || '/'
-          || public.marcar_definir_senha_interna('e7e00000-0000-4000-8000-0000000000a4')::text, 'marcada/ja_definida',
-  'marca a conta nova; a que já gravou a senha nova não é marcada');
+select is(public.conta_nao_confirmada_por_email_interna('  NOVA@neutraliza.test '), 'e7e00000-0000-4000-8000-0000000000a3'::uuid,
+  'acha a conta não confirmada pelo e-mail normalizado');
+select is(public.conta_nao_confirmada_por_email_interna('jadefiniu@neutraliza.test'), null::uuid,
+  'conta confirmada não é devolvida');
 reset role;
-select is((select string_agg(coalesce(raw_app_meta_data ->> 'definir_senha', '-'), ',' order by email)
-             from auth.users where id in ('e7e00000-0000-4000-8000-0000000000a3', 'e7e00000-0000-4000-8000-0000000000a4')),
-  '-,true', 'a marca só fica na conta que ainda não gravou a senha nova');
-select ok(not has_function_privilege('authenticated', 'public.marcar_definir_senha_interna(uuid)', 'EXECUTE'),
-  'marcar_definir_senha_interna só para service_role');
+select ok(not has_function_privilege('authenticated', 'public.conta_nao_confirmada_por_email_interna(text)', 'EXECUTE'),
+  'conta_nao_confirmada_por_email_interna só para service_role');
 
 -- Conta criada agora pelo convite do Auth (sem senha, com o link nos tokens):
 -- o convite de outra academia não apaga o link, só marca definir_senha.
@@ -101,14 +99,14 @@ select is((select (raw_app_meta_data ->> 'definir_senha') || '/' || (select coun
              from auth.users u where id = 'e7e00000-0000-4000-8000-0000000000a5'),
   'true/1', 'o link do convite da conta nova continua valendo, e ela fica marcada para definir senha');
 
--- Cadastro com senha que surgiu entre a leitura e o convite do Auth: a conta
--- reaproveitada é neutralizada (a senha cai) e a função pede um link novo.
+-- Cadastro com senha que surgiu no meio do convite: a neutralização derruba a
+-- senha antes do único link.
 insert into auth.users (id, email, email_confirmed_at, encrypted_password, raw_app_meta_data) values
   ('e7e00000-0000-4000-8000-0000000000a6', 'cadastro-no-meio@neutraliza.test', null,
    extensions.crypt('senha-do-cadastro', extensions.gen_salt('bf', 4)), '{}');
 set local role service_role;
-select is(public.marcar_definir_senha_interna('e7e00000-0000-4000-8000-0000000000a6'), 'neutralizada',
-  'conta reaproveitada com senha: neutralizada');
+select public.neutralizar_conta_nao_confirmada_interna(
+  public.conta_nao_confirmada_por_email_interna('cadastro-no-meio@neutraliza.test'));
 reset role;
 select is((select (encrypted_password = extensions.crypt('senha-do-cadastro', encrypted_password))::text
                   || '/' || (raw_app_meta_data ->> 'definir_senha')

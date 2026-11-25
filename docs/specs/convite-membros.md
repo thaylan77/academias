@@ -49,7 +49,7 @@ Fica de fora:
 | C2 | Validade | 7 dias. Reenviar renova a validade e manda o e-mail de novo. | Curto o bastante para um e-mail esquecido não virar porta aberta. |
 | C3 | Como o convite prova quem aceita | Pelo **e-mail confirmado do login**: aceita quem entrou com o mesmo e-mail do convite (`auth.users.email_confirmed_at` preenchido). O link não carrega token. Na implementação, o aceite também exige que a sessão tenha sido aberta por um link enviado ao e-mail (`amr` do JWT: link mágico, OTP, convite, recuperação ou confirmação de cadastro; `hint = convite_exige_link`), e a confirmação de e-mail fica ligada no Auth (`enable_confirmations`): o e-mail confirmado sozinho não prova a posse se o Auth estiver configurado sem confirmação. | Mesmo critério de `vincular_meu_cadastro_aluno`. Um link encaminhado não serve para outra pessoa, e não há segredo para guardar nem vazar. |
 | C4 | E-mail com conta confirmada | Recebe um link mágico para `/painel/convites`. Ao aceitar, o vínculo vai para a conta que já existe; nenhuma conta nova é criada. | Uma pessoa, um login, várias academias: é o modelo atual do painel. |
-| C5 | E-mail sem conta, ou com conta **não confirmada** | Sem conta: `auth.admin.inviteUserByEmail`. Conta não confirmada: a função troca a senha dela por uma aleatória que ninguém conhece e manda o link mágico. Nos dois casos, a conta é marcada para definir senha (4.4), e o painel pede a senha antes do aceite. | A conta não confirmada pode ter sido criada por outra pessoa, com uma senha que ela conhece (4.4, passo 2). |
+| C5 | E-mail sem conta, ou com conta **não confirmada** | Sem conta: a função cria a conta (sem senha) e segue como a não confirmada (implementação, 4.4). Conta não confirmada: a função troca a senha dela por uma aleatória que ninguém conhece e manda o link mágico. Nos dois casos, a conta é marcada para definir senha (4.4), e o painel pede a senha antes do aceite. | A conta não confirmada pode ter sido criada por outra pessoa, com uma senha que ela conhece (4.4, passo 2). |
 | C6 | Academia suspensa | Não convida, não reenvia, não cancela, não aceita e não recusa (`hint = academia_suspensa`). | "Suspensa lê, mas não altera", sem exceção nova. Um convite parado não abre acesso, porque o aceite também está bloqueado. |
 | C7 | Quem já é da academia | Membro ativo da equipe (papel diferente de `aluno`): o convite é recusado (`ja_membro`), no criar e no aceitar; troca de papel é na seção Equipe. Membro **inativo**: o aceite reativa com o papel do convite. Quem só tem o papel `aluno`: o aceite troca para o papel da equipe, e o acesso de aluno continua (vem de `alunos.user_id`, por `sou_o_aluno`). | A chave `(academia_id, user_id)` só cabe um papel. O de equipe prevalece, como já acontece em `vincular_meu_cadastro_aluno` (`on conflict do nothing`). Sem totem no convite, nenhum aluno vira totem e perde o catálogo. |
 | C8 | Último dono | Gatilho em `membros_academia`: recusa o update ou delete que deixe a academia sem **nenhum dono ativo** (`hint = ultimo_dono`). Vale também para o dono que altera a própria linha. Só passa o `service_role`, ou o delete em cascata de uma academia que está sendo apagada (4.5). | Uma academia sem dono fica sem ninguém que possa alterar outro dono. |
@@ -217,13 +217,12 @@ A entrada é `{ academia_id, email, papel }`, com o JWT de quem convida.
    `criar_convite_interna(user_id do JWT, academia_id, email, papel)`. Se der
    erro, devolve o `hint` ao front e não faz mais nada.
 2. Com `service_role`, segundo a `conta` devolvida:
-   - `nenhuma`: chama `auth.admin.inviteUserByEmail(email, { redirectTo })` e
-     marca `app_metadata.definir_senha = true` por
-     `marcar_definir_senha_interna`, com a conta travada e só se a pessoa
-     ainda não gravou a senha nova (o link sai antes da marca). Se alguém se
-     cadastrou com senha entre a leitura e o convite (o Auth reaproveita a
-     conta sem tocar na senha), a mesma função neutraliza a conta, e a
-     Edge Function manda um link novo;
+   - `nenhuma`: cria a conta com `auth.admin.createUser` (sem senha, e-mail
+     não confirmado, sem e-mail enviado) e segue como a `nao_confirmada`. Se
+     alguém se cadastrou com o endereço no meio-tempo, o Auth recusa a
+     criação e a função usa essa conta
+     (`conta_nao_confirmada_por_email_interna`). Assim a neutralização vem
+     sempre antes do único link (revisão do Codex no PR 84);
    - `nao_confirmada`: chama `neutralizar_conta_nao_confirmada_interna`,
      que, com a conta travada e só se o e-mail continuar não confirmado,
      troca a senha por uma aleatória que ninguém recebe, derruba as sessões

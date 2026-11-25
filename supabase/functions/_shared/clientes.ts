@@ -55,8 +55,8 @@ export function depsConvidar(c: Clientes, siteUrl: string): DepsConvidar {
   return {
     ...depsBase(c),
     siteUrl,
-    async convidarPorEmail(email, redirectTo) {
-      const { data, error } = await c.servico.auth.admin.inviteUserByEmail(email, { redirectTo });
+    async criarConta(email) {
+      const { data, error } = await c.servico.auth.admin.createUser({ email, email_confirm: false });
       return { userId: data?.user?.id ?? null, erro: erroAuth(error) };
     },
     emSegundoPlano(tarefa) {

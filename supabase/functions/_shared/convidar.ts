@@ -30,8 +30,8 @@ export interface DepsConvidar {
   usuarioDoToken(jwt: string): Promise<string | null>;
   /** RPC com service_role. */
   rpc: Rpc;
-  /** auth.admin.inviteUserByEmail. */
-  convidarPorEmail(email: string, redirectTo: string): Promise<{ userId: string | null; erro: ErroAuth | null }>;
+  /** auth.admin.createUser sem senha e sem e-mail (e-mail não confirmado). */
+  criarConta(email: string): Promise<{ userId: string | null; erro: ErroAuth | null }>;
   /** signInWithOtp com shouldCreateUser = false. */
   enviarLinkMagico(email: string, redirectTo: string): Promise<ErroAuth | null>;
   /**
@@ -182,48 +182,48 @@ async function processarEnvio(c: Criado, deps: DepsConvidar): Promise<void> {
     }
   }
 
-  // 2. Envio, segundo a conta. A conta que deixou de estar não confirmada
-  //    no meio do caminho recebe o link mágico como uma confirmada.
+  // 2. Endereço sem conta: a função cria a conta, sem senha e sem e-mail. Se
+  //    alguém se cadastrou com o endereço entre a leitura de
+  //    criar_convite_interna e aqui, o Auth recusa (e-mail já existe) e a
+  //    função usa essa conta. Nos dois casos ela passa pela neutralização no
+  //    banco antes do único link, como a conta não confirmada.
   let falha: ErroAuth | null = falhaAntes;
-  if (!falha) {
-    if (c.conta === "nenhuma") {
-      const r = await deps.convidarPorEmail(c.email, redirectTo);
-      falha = r.erro;
-      if (!falha && r.userId) {
-        // No banco, com a conta travada: marca definir_senha (não depois de a
-        // senha nova ter sido gravada) ou, se alguém se cadastrou com senha
-        // entre a leitura e o convite (o Auth reaproveita a conta sem tocar na
-        // senha), neutraliza a conta. Aí o link do convite caiu junto, e sai
-        // um link novo, já sem a senha do cadastro.
-        const m = await deps.rpc("marcar_definir_senha_interna", { p_user_id: r.userId });
-        if (m.error) {
-          deps.log(
-            `convidar-membro: convite enviado, mas a marca definir_senha falhou (código ${codigoDoErro(m.error)})`,
-          );
-        } else if (m.data === "neutralizada") {
-          // O convite já foi aceito pelo Auth: a reserva conta esse envio
-          // (confirmada abaixo), dê certo ou não o link novo.
-          deps.log("convidar-membro: conta reaproveitada com senha neutralizada; novo link");
-          const novo = await deps.enviarLinkMagico(c.email, redirectTo);
-          if (novo) {
-            deps.log(
-              `convidar-membro: o link novo da conta neutralizada não saiu (status ${novo.status ?? "?"}); reenvie`,
-            );
-          }
-        }
-      }
+  let contaNova: string | null = null;
+  if (!falha && c.conta === "nenhuma") {
+    const r = await deps.criarConta(c.email);
+    if (r.userId) {
+      contaNova = r.userId;
+    } else if (r.erro?.status === 422) {
+      const existente = await deps.rpc("conta_nao_confirmada_por_email_interna", { p_email: c.email });
+      if (existente.error) falha = { status: 500 };
+      else contaNova = typeof existente.data === "string" ? existente.data : null; // null: já confirmada
     } else {
-      falha = await deps.enviarLinkMagico(c.email, redirectTo);
+      falha = r.erro ?? { status: 500 };
+    }
+    if (!falha && contaNova) {
+      const n = await deps.rpc("neutralizar_conta_nao_confirmada_interna", { p_user_id: contaNova });
+      if (n.error) {
+        falha = { status: 500 };
+        deps.log(`convidar-membro: não neutralizou a conta nova (código ${codigoDoErro(n.error)})`);
+      }
     }
   }
+  // Até aqui nenhum e-mail saiu: uma falha libera a reserva.
+  const tentouEnviar = !falha;
 
-  // 3. A reserva do envio: confirmada se o Auth aceitou; liberada se recusou
+  // 3. Um único link por reserva, depois da neutralização. O link mágico do
+  //    Auth também limpa a senha de uma conta não confirmada ao ser emitido.
+  if (!falha) {
+    falha = await deps.enviarLinkMagico(c.email, redirectTo);
+  }
+
+  // 4. A reserva do envio: confirmada se o Auth aceitou; liberada se recusou
   //    de vez ou nem chegou a tentar. Falha de rede, 5xx ou 408 não diz se o
   //    e-mail saiu: a reserva fica até o expurgo (lado seguro contra spam).
   if (c.envio_id) {
     if (!falha) {
       await resolverReserva(deps, "confirmar_envio_convite_interna", c.envio_id);
-    } else if (falha === falhaAntes || recusaDefinitiva(falha)) {
+    } else if (!tentouEnviar || recusaDefinitiva(falha)) {
       await resolverReserva(deps, "liberar_envio_convite_interna", c.envio_id);
     }
   }

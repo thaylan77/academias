@@ -453,7 +453,8 @@ async function codigoTotp(segredo: string): Promise<string> {
 }
 
 Deno.test({
-  name: "cadastro com senha entre a reserva e o convite: a conta reaproveitada é neutralizada e sai um link novo",
+  name:
+    "cadastro com senha no meio do convite: um único link, aberto do e-mail, leva ao aceite sem a senha do cadastro",
   ignore: !ativo,
   async fn() {
     const a = await prepararDono("dono-cadastro-meio");
@@ -461,32 +462,55 @@ Deno.test({
     const base = depsConvidar(a.c, "http://127.0.0.1:3000");
     const deps = {
       ...base,
-      async convidarPorEmail(e: string, redirectTo: string) {
+      async criarConta(e: string) {
         // Alguém se cadastra com senha depois da leitura de criar_convite_interna
-        // e antes do convite do Auth, que reaproveita a conta não confirmada.
+        // e antes de a função criar a conta: o Auth recusa a criação.
         const cadastro = await a.c.servico.auth.admin.createUser({
           email: e,
           email_confirm: false,
           password: "senha-do-cadastro-1",
         });
         if (cadastro.error) throw cadastro.error;
-        return await base.convidarPorEmail(e, redirectTo);
+        return await base.criarConta(e);
       },
     };
     const r = await convidarMembro(
       pedido(a.token, { academia_id: a.academiaId, email: endereco, papel: "professor" }),
       deps,
     );
-    assertEquals(r.status, 200, await r.clone().text());
-    assertEquals((await emailsPara(endereco)).length >= 1, true, "o convite saiu");
+    const { convite_id } = await r.json();
+    assertEquals(r.status, 200);
 
-    // Depois de confirmar o e-mail, a senha do cadastro concorrente não vale.
-    const u = await usuarioPorEmail(a.c, endereco);
-    assertEquals(u?.app_metadata?.definir_senha, true);
-    const confirma = await a.c.servico.auth.admin.updateUserById(u!.id, { email_confirm: true });
-    if (confirma.error) throw confirma.error;
-    const entra = await novoAnon().auth.signInWithPassword({ email: endereco, password: "senha-do-cadastro-1" });
-    assert(entra.error, "a senha do cadastro concorrente foi invalidada");
+    // Um único e-mail, e o link dele abre a sessão.
+    const textos = await emailsPara(endereco);
+    await new Promise((ok) => setTimeout(ok, 1000));
+    assertEquals((await emailsPara(endereco)).length, 1, "um único envio para a reserva");
+    const achado = textos[0].replace(/&amp;/g, "&").match(/https?:\/\/[^\s"'<>]+\/auth\/v1\/verify\?[^\s"'<>]+/);
+    assert(achado, "o e-mail traz o link de verificação");
+    const abre = await fetch(achado[0], { redirect: "manual" });
+    await abre.body?.cancel();
+    const fragmento = new URLSearchParams((abre.headers.get("Location") ?? "").split("#")[1] ?? "");
+    const cliente = novoAnon();
+    const s = await cliente.auth.setSession({
+      access_token: fragmento.get("access_token") ?? "",
+      refresh_token: fragmento.get("refresh_token") ?? "",
+    });
+    if (s.error || !s.data.session) throw s.error ?? new Error("o link não abriu a sessão");
+
+    // Com o e-mail confirmado pelo link, a senha do cadastro não entra.
+    const intruso = await novoAnon().auth.signInWithPassword({ email: endereco, password: "senha-do-cadastro-1" });
+    assert(intruso.error, "a senha do cadastro concorrente foi invalidada antes do link");
+
+    // A pessoa define a senha e aceita o convite.
+    const senha = await concluirSenha(
+      pedido(s.data.session.access_token, { senha: "senha-da-convidada-1" }),
+      depsSenha(a.c),
+    );
+    assertEquals([senha.status, await senha.json()], [200, { ok: true }]);
+    const renovada = await cliente.auth.refreshSession();
+    if (renovada.error) throw renovada.error;
+    const aceite = await cliente.rpc("aceitar_convite", { p_convite_id: convite_id });
+    assertEquals(aceite.error, null, JSON.stringify(aceite.error));
   },
 });
 

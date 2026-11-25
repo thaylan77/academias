@@ -77,50 +77,28 @@ $$;
 revoke execute on function public.neutralizar_conta_nao_confirmada_interna(uuid) from public, anon, authenticated;
 grant execute on function public.neutralizar_conta_nao_confirmada_interna(uuid) to service_role;
 
--- Depois do convite do Auth para um endereço que não tinha conta. Com a conta
--- travada:
---   * se alguém se cadastrou com senha entre a leitura de criar_convite_interna
---     e o convite (o Auth reaproveita a conta não confirmada e manda o link
---     sem tocar na senha), neutraliza a conta como em
---     neutralizar_conta_nao_confirmada_interna e devolve 'neutralizada': o
---     link do convite caiu junto, e a função manda um link novo;
---   * se a pessoa já gravou a senha nova pela concluir-senha (o link sai antes
---     desta chamada), não mexe e devolve 'ja_definida';
---   * senão, marca definir_senha e devolve 'marcada'.
-create or replace function public.marcar_definir_senha_interna(p_user_id uuid)
-returns text
-language plpgsql
+-- Conta não confirmada com o e-mail do convite, para a convidar-membro: quando
+-- ela tenta criar a conta de um endereço que não tinha conta e o Auth recusa
+-- porque alguém se cadastrou nesse meio-tempo, usa esta conta (e a
+-- neutraliza antes do link). Null se a conta já foi confirmada ou não existe.
+create or replace function public.conta_nao_confirmada_por_email_interna(p_email text)
+returns uuid
+language sql
+stable
 security definer
 set search_path = ''
 as $$
-declare
-  v_confirmada timestamptz;
-  v_hash       text;
-  v_meta       jsonb;
-begin
-  select u.email_confirmed_at, u.encrypted_password, coalesce(u.raw_app_meta_data, '{}'::jsonb)
-    into v_confirmada, v_hash, v_meta
-    from auth.users u where u.id = p_user_id for update;
-  if not found then
-    return 'ja_definida';
-  end if;
-  if v_meta ? 'senha_comprovada' then
-    return 'ja_definida';
-  end if;
-  if v_confirmada is null and coalesce(v_hash, '') <> ''
-     and coalesce(v_meta ->> 'neutralizada', '') <> md5(v_hash) then
-    perform public.neutralizar_conta_nao_confirmada_interna(p_user_id);
-    return 'neutralizada';
-  end if;
-  update auth.users u
-     set raw_app_meta_data = v_meta || jsonb_build_object('definir_senha', true)
-   where u.id = p_user_id;
-  return 'marcada';
-end
+  select u.id
+    from auth.users u
+   where lower(btrim(u.email)) = lower(btrim(p_email))
+     and u.email_confirmed_at is null
+     and u.deleted_at is null
+   order by u.created_at
+   limit 1
 $$;
 
-revoke execute on function public.marcar_definir_senha_interna(uuid) from public, anon, authenticated;
-grant execute on function public.marcar_definir_senha_interna(uuid) to service_role;
+revoke execute on function public.conta_nao_confirmada_por_email_interna(text) from public, anon, authenticated;
+grant execute on function public.conta_nao_confirmada_por_email_interna(text) to service_role;
 
 -- definir_senha_comprovada_interna (do convite) passa a exigir o fluxo do
 -- convite: convite pendente e válido para o e-mail confirmado, ou vínculo já

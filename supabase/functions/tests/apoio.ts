@@ -42,7 +42,7 @@ export interface Simulado {
   token?: "valido" | "invalido" | "falha";
   /** Respostas por RPC; uma lista é consumida em ordem (a última se repete). */
   rpc?: Record<string, RespostaRpc | RespostaRpc[]>;
-  convidar?: { userId: string | null; erro: ErroAuth | null };
+  criar?: { userId: string | null; erro: ErroAuth | null };
   link?: ErroAuth | null;
   /** Guarda o trabalho em segundo plano sem esperar (padrão: espera). */
   adiar?: boolean;
@@ -77,9 +77,9 @@ export function depsSimuladas(s: Simulado = {}) {
       }
       return Promise.resolve({ data: r?.data ?? null, error: r?.error ?? null });
     },
-    convidarPorEmail(email, redirectTo) {
-      registra("convidarPorEmail", email, redirectTo);
-      return Promise.resolve(s.convidar ?? { userId: "44444444-4444-4444-8444-444444444444", erro: null });
+    criarConta(email) {
+      registra("criarConta", email);
+      return Promise.resolve(s.criar ?? { userId: "44444444-4444-4444-8444-444444444444", erro: null });
     },
     async enviarLinkMagico(email, redirectTo) {
       registra("enviarLinkMagico", email, redirectTo);
