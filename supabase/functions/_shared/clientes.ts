@@ -59,6 +59,15 @@ export function depsConvidar(c: Clientes, siteUrl: string): DepsConvidar {
       const { data, error } = await c.servico.auth.admin.inviteUserByEmail(email, { redirectTo });
       return { userId: data?.user?.id ?? null, erro: erroAuth(error) };
     },
+    emSegundoPlano(tarefa) {
+      // No runtime do Supabase, o trabalho continua depois da resposta.
+      const runtime = (globalThis as { EdgeRuntime?: { waitUntil(p: Promise<unknown>): void } }).EdgeRuntime;
+      if (runtime) {
+        runtime.waitUntil(tarefa());
+        return Promise.resolve();
+      }
+      return tarefa();
+    },
     async enviarLinkMagico(email, redirectTo) {
       const { error } = await c.publico.auth.signInWithOtp({
         email,

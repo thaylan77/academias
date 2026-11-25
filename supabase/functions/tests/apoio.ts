@@ -44,12 +44,17 @@ export interface Simulado {
   rpc?: Record<string, RespostaRpc | RespostaRpc[]>;
   convidar?: { userId: string | null; erro: ErroAuth | null };
   link?: ErroAuth | null;
+  /** Guarda o trabalho em segundo plano sem esperar (padrão: espera). */
+  adiar?: boolean;
+  /** Atraso do link mágico, para simular o Auth lento. */
+  atrasoLink?: Promise<void>;
 }
 
 export function depsSimuladas(s: Simulado = {}) {
   const chamadas: Chamada[] = [];
   const logs: string[] = [];
   const consumo: Record<string, number> = {};
+  const pendentes: Promise<void>[] = [];
   const registra = (nome: string, ...args: unknown[]) => chamadas.push({ nome, args });
   const deps: DepsConvidar & DepsSenha = {
     siteUrl: "https://painel.exemplo.test",
@@ -72,9 +77,19 @@ export function depsSimuladas(s: Simulado = {}) {
       registra("convidarPorEmail", email, redirectTo);
       return Promise.resolve(s.convidar ?? { userId: "44444444-4444-4444-8444-444444444444", erro: null });
     },
-    enviarLinkMagico(email, redirectTo) {
+    async enviarLinkMagico(email, redirectTo) {
       registra("enviarLinkMagico", email, redirectTo);
-      return Promise.resolve(s.link ?? null);
+      if (s.atrasoLink) await s.atrasoLink;
+      return s.link ?? null;
+    },
+    emSegundoPlano(tarefa) {
+      registra("emSegundoPlano");
+      const p = tarefa();
+      if (s.adiar) {
+        pendentes.push(p);
+        return Promise.resolve();
+      }
+      return p;
     },
     log(msg) {
       logs.push(msg);
@@ -82,7 +97,7 @@ export function depsSimuladas(s: Simulado = {}) {
   };
   const nomes = () => chamadas.map((c) => c.nome);
   const de = (nome: string) => chamadas.filter((c) => c.nome === nome);
-  return { deps, chamadas, logs, nomes, de };
+  return { deps, chamadas, logs, nomes, de, pendentes };
 }
 
 export const CONVITE = "55555555-5555-4555-8555-555555555555";

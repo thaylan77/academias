@@ -34,6 +34,12 @@ export interface DepsConvidar {
   convidarPorEmail(email: string, redirectTo: string): Promise<{ userId: string | null; erro: ErroAuth | null }>;
   /** signInWithOtp com shouldCreateUser = false. */
   enviarLinkMagico(email: string, redirectTo: string): Promise<ErroAuth | null>;
+  /**
+   * Roda o trabalho depois da resposta (EdgeRuntime.waitUntil no runtime):
+   * o tempo de resposta não depende da conta, da cota global nem do Auth.
+   * Fora do runtime (testes), espera o trabalho.
+   */
+  emSegundoPlano(tarefa: () => Promise<void>): Promise<void>;
   log(msg: string): void;
 }
 
@@ -122,6 +128,24 @@ async function tratar(req: Request, deps: DepsConvidar): Promise<Response> {
     return erro(500, "erro_interno");
   }
   const c = data as Criado;
+
+  // A resposta sai já, igual em todos os casos (envio, supressão, falha) e
+  // sem esperar nada que dependa da conta, da cota global ou do Auth: o
+  // conteúdo e o tempo dela não revelam a conta nem convites de outras
+  // academias. Neutralização, envio e reserva rodam depois; a falha fica no
+  // log. Se o trabalho cair no meio, a reserva sem resultado segura o
+  // endereço até o expurgo (lado seguro).
+  await deps.emSegundoPlano(async () => {
+    try {
+      await processarEnvio(c, deps);
+    } catch (e) {
+      deps.log(`convidar-membro: exceção no envio (${e instanceof Error ? e.name : "desconhecida"})`);
+    }
+  });
+  return json(200, { convite_id: c.convite_id });
+}
+
+async function processarEnvio(c: Criado, deps: DepsConvidar): Promise<void> {
   const redirectTo = deps.siteUrl + "/painel/convites";
 
   // Conta com o e-mail do convidado que nunca foi confirmada: quem a criou
@@ -140,7 +164,7 @@ async function tratar(req: Request, deps: DepsConvidar): Promise<Response> {
 
   // Limite por endereço estourado pelo histórico de outra academia: sem
   // e-mail.
-  if (!c.enviar) return json(200, { convite_id: c.convite_id });
+  if (!c.enviar) return;
 
   // 2. Envio, segundo a conta. A conta que deixou de estar não confirmada
   //    no meio do caminho recebe o link mágico como uma confirmada.
@@ -177,8 +201,4 @@ async function tratar(req: Request, deps: DepsConvidar): Promise<Response> {
   if (falha) {
     deps.log(`convidar-membro: e-mail não saiu para ${emailMascarado(c.email)} (status ${falha.status ?? "?"})`);
   }
-  // A resposta é a mesma em todos os casos (envio, supressão, falha): o
-  // resultado do Auth revelaria a conta ou convites de outras academias. A
-  // falha fica no log, e a reserva já foi tratada acima.
-  return json(200, { convite_id: c.convite_id });
 }

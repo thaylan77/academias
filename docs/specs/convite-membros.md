@@ -295,6 +295,11 @@ A função não grava em tabela de negócio fora de `criar_convite_interna`. O
 
 **Contrato implementado** (`supabase/functions/`, PR 2):
 
+- A resposta sai logo depois de `criar_convite_interna`: a neutralização da
+  conta, o envio e a resolução da reserva rodam depois dela
+  (`EdgeRuntime.waitUntil`), para o tempo de resposta também não revelar a
+  conta nem a cota usada por outra academia. Se o trabalho cair no meio, a
+  reserva sem resultado segura o endereço até o expurgo.
 - Resposta de sucesso da `convidar-membro`: `{ convite_id }`, igual para o
   envio que saiu, o suprimido (`enviar = false`) e o que falhou no Auth. O
   resultado do Auth revelaria se a conta existe e se outra academia convidou

@@ -268,3 +268,33 @@ Deno.test("a resposta não distingue envio real recusado (429) de envio suprimid
   assertEquals(saiu.texto, suprimido.texto);
   assertEquals([recusado.status, suprimido.status, saiu.status], [200, 200, 200]);
 });
+
+Deno.test("a resposta não espera o envio: com o Auth lento, ela sai antes e o envio termina depois", async () => {
+  let soltar!: () => void;
+  const atrasoLink = new Promise<void>((ok) => (soltar = ok));
+  const s = depsSimuladas({ rpc: { criar_convite_interna: criado("confirmada") }, adiar: true, atrasoLink });
+  const r = await convidarMembro(pedido(CORPO), s.deps);
+  assertEquals([r.status, await r.json()], [200, { convite_id: CONVITE }]);
+  assertEquals(s.de("rpc:confirmar_envio_convite_interna").length, 0, "o envio ainda não terminou");
+  soltar();
+  await Promise.all(s.pendentes);
+  assertEquals(s.de("rpc:confirmar_envio_convite_interna").length, 1, "o envio terminou depois da resposta");
+});
+
+Deno.test("conta não confirmada: a neutralização também roda depois da resposta", async () => {
+  const s = depsSimuladas({
+    rpc: { criar_convite_interna: criado("nao_confirmada", { enviar: false, envio_id: null }) },
+    adiar: true,
+  });
+  await convidarMembro(pedido(CORPO), s.deps);
+  assert(s.nomes().indexOf("emSegundoPlano") < s.nomes().indexOf("rpc:neutralizar_conta_nao_confirmada_interna"));
+  await Promise.all(s.pendentes);
+});
+
+Deno.test("exceção no envio em segundo plano fica no log, sem derrubar a resposta", async () => {
+  const s = depsSimuladas({ rpc: { criar_convite_interna: criado("confirmada") } });
+  s.deps.enviarLinkMagico = () => Promise.reject(new TypeError("rede"));
+  const r = await convidarMembro(pedido(CORPO), s.deps);
+  assertEquals(r.status, 200);
+  assert(s.logs.some((l) => l.includes("exceção no envio (TypeError)")));
+});
