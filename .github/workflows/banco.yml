@@ -37,6 +37,49 @@ jobs:
             exit 1
           fi
 
+  # Edge Functions: formatação, lint, tipos e testes com o Auth simulado.
+  # Deno em versão fixa, a mesma dos agentes (ver AGENTS.md).
+  funcoes:
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: supabase/functions
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+
+      - uses: denoland/setup-deno@e95548e56dfa95d4e1a28d6f422fafe75c4c26fb # v2.0.3
+        with:
+          deno-version: 2.5.6
+
+      - run: deno fmt --check
+      - run: deno lint
+      - run: deno check --frozen convidar-membro/index.ts concluir-senha/index.ts tests/integracao/auth_test.ts
+      - run: deno test --frozen --no-prompt tests/convidar_test.ts tests/senha_test.ts
+
+  # Integração das Edge Functions com o Auth real: banco, Auth, API e
+  # Mailpit locais (supabase start sem os serviços que não entram no teste).
+  integracao:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+
+      - uses: supabase/setup-cli@afb1b15109756ea5cf9d8985a359d9095235ca2b # v2.1.2
+        with:
+          version: 2.119.0
+
+      - uses: denoland/setup-deno@e95548e56dfa95d4e1a28d6f422fafe75c4c26fb # v2.0.3
+        with:
+          deno-version: 2.5.6
+
+      - run: supabase start -x realtime,storage-api,imgproxy,postgres-meta,studio,edge-runtime,logflare,vector,supavisor
+
+      - name: Testes de integração com o Auth local
+        working-directory: supabase/functions
+        run: |
+          eval "$(supabase status -o env)"
+          SUPABASE_URL="$API_URL" SUPABASE_ANON_KEY="$ANON_KEY" SUPABASE_SERVICE_ROLE_KEY="$SERVICE_ROLE_KEY" INTEGRACAO=1 \
+            deno test --frozen --no-prompt --allow-env --allow-net tests/integracao/
+
   # Front: mesma sequência do checklist do AGENTS.md. Node em versão fixa,
   # a mesma dos agentes, lida do .nvmrc (o "engines" do package.json repete
   # o número); as dependências vêm do package-lock.json (npm ci).
