@@ -342,8 +342,9 @@ A função não grava em tabela de negócio fora de `criar_convite_interna`. O
   Só grava para conta com convite pendente e válido para o e-mail
   confirmado ou com vínculo já aceito por convite (refazer a prova); fora
   disso, `convite_invalido`. Conta comum troca a senha pelo Auth. Conta com
-  fator MFA verificado só grava numa sessão aal2, como a troca de senha do
-  Auth; senão, `mfa_necessario`.
+  fator MFA verificado só grava com o token apresentado em aal2 (o `aal` do
+  JWT vai para o banco) e a sessão viva também em aal2, como a troca de
+  senha do Auth; senão, `mfa_necessario`.
   Sucesso: `{ ok: true }`, e o front renova a sessão.
 
 **Dependência de ambiente:** o SMTP padrão do Supabase só entrega para os

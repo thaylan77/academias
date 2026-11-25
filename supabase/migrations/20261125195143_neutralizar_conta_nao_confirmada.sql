@@ -126,7 +126,14 @@ grant execute on function public.marcar_definir_senha_interna(uuid) to service_r
 -- convite: convite pendente e válido para o e-mail confirmado, ou vínculo já
 -- aceito por convite. Antes, qualquer conta com sessão aberta por link podia
 -- trocar a senha por aqui, sem as regras do Auth (revisão do Codex, PR 84).
-create or replace function public.definir_senha_comprovada_interna(p_user_id uuid, p_sessao uuid, p_senha text)
+--
+-- Recebe também o aal do JWT que a Edge Function conferiu: com MFA, o token
+-- apresentado e a sessão viva precisam estar em aal2. A versão de 3
+-- parâmetros sai (não pode sobrar um caminho sem o aal do token).
+drop function public.definir_senha_comprovada_interna(uuid, uuid, text);
+
+create or replace function public.definir_senha_comprovada_interna(p_user_id uuid, p_sessao uuid, p_senha text,
+                                                                   p_aal text default null)
 returns void
 language plpgsql
 security definer
@@ -154,9 +161,10 @@ begin
   end if;
 
   -- Como a troca de senha do Auth: conta com fator MFA verificado só troca a
-  -- senha numa sessão que passou pelo segundo fator (aal2).
+  -- senha com um token aal2, de uma sessão que continua em aal2. Um token aal1
+  -- anterior da mesma sessão, ainda válido, não serve.
   if exists (select 1 from auth.mfa_factors f where f.user_id = p_user_id and f.status = 'verified')
-     and coalesce(v_aal, 'aal1') = 'aal1' then
+     and (coalesce(v_aal, 'aal1') <> 'aal2' or coalesce(p_aal, 'aal1') <> 'aal2') then
     raise exception 'Confirme o segundo fator de autenticação para definir a senha.'
       using hint = 'mfa_necessario';
   end if;
@@ -227,8 +235,8 @@ begin
 end
 $$;
 
-revoke execute on function public.definir_senha_comprovada_interna(uuid, uuid, text) from public, anon, authenticated;
-grant execute on function public.definir_senha_comprovada_interna(uuid, uuid, text) to service_role;
+revoke execute on function public.definir_senha_comprovada_interna(uuid, uuid, text, text) from public, anon, authenticated;
+grant execute on function public.definir_senha_comprovada_interna(uuid, uuid, text, text) to service_role;
 
 -- Reserva de envio abandonada (revisão do Codex, PR 84): a convidar-membro
 -- responde antes de enviar (EdgeRuntime.waitUntil). Se o worker cair entre a

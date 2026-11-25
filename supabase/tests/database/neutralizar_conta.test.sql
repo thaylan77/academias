@@ -2,7 +2,7 @@
 -- 4.4): só age em conta com o e-mail não confirmado, com a conta travada.
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(20);
+select plan(21);
 
 insert into auth.users (id, email, email_confirmed_at, encrypted_password, raw_app_meta_data, recovery_token) values
   ('e7e00000-0000-4000-8000-0000000000a1', 'intruso@neutraliza.test', null,
@@ -134,9 +134,13 @@ select throws_ok($$select public.definir_senha_comprovada_interna('e7e00000-0000
 reset role;
 update auth.sessions set aal = 'aal2' where id = 'e7e00000-0000-4000-8000-0000000006a7';
 set local role service_role;
+select throws_ok($$select public.definir_senha_comprovada_interna('e7e00000-0000-4000-8000-0000000000a7',
+    'e7e00000-0000-4000-8000-0000000006a7', 'senha-nova-com-mfa', 'aal1')$$, 'P0001',
+  'Confirme o segundo fator de autenticação para definir a senha.',
+  'sessão elevada a aal2, mas com um token aal1 anterior: recusa');
 select lives_ok($$select public.definir_senha_comprovada_interna('e7e00000-0000-4000-8000-0000000000a7',
-    'e7e00000-0000-4000-8000-0000000006a7', 'senha-nova-com-mfa')$$,
-  'depois do segundo fator (aal2), a senha é definida');
+    'e7e00000-0000-4000-8000-0000000006a7', 'senha-nova-com-mfa', 'aal2')$$,
+  'token e sessão em aal2: a senha é definida');
 reset role;
 
 select * from finish();

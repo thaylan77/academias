@@ -59,6 +59,7 @@ Deno.test("sessão do link: grava senha e prova com o usuário e a sessão do to
     p_user_id: USUARIO,
     p_sessao: SESSAO,
     p_senha: "senha-nova-123",
+    p_aal: null,
   });
 });
 
@@ -91,4 +92,16 @@ Deno.test("erro sem hint: 500, e o log leva o código, nunca a senha", async () 
   assert(r.logs.length > 0);
   assert(r.logs.some((l) => l.includes("XX000")));
   for (const l of r.logs) assert(!l.includes("senha-secreta-xyz"));
+});
+
+Deno.test("passa ao banco o aal do token conferido (o banco exige aal2 com MFA)", async () => {
+  const token = jwtFalso({ sub: USUARIO, iat: 1, session_id: SESSAO, aal: "aal2", amr: [{ method: "otp" }] });
+  const r = await chama({}, SENHA, token);
+  assertEquals(r.status, 200);
+  assertEquals((r.de("rpc:definir_senha_comprovada_interna")[0].args[0] as { p_aal: string }).p_aal, "aal2");
+});
+
+Deno.test("mfa_necessario do banco repassado como 400", async () => {
+  const r = await chama({ rpc: { definir_senha_comprovada_interna: { error: { hint: "mfa_necessario" } } } });
+  assertEquals([r.status, r.corpo], [400, { erro: "mfa_necessario" }]);
 });

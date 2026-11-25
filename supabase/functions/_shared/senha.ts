@@ -54,6 +54,8 @@ async function tratar(req: Request, deps: DepsSenha): Promise<Response> {
     p_user_id: userId,
     p_sessao: claims.sessao,
     p_senha: senha,
+    // Com MFA, o banco exige aal2 no token apresentado e na sessão viva.
+    p_aal: claims.aal,
   });
   if (error) {
     const hint = hintDoErro(error);

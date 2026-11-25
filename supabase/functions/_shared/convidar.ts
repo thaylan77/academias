@@ -201,8 +201,15 @@ async function processarEnvio(c: Criado, deps: DepsConvidar): Promise<void> {
             `convidar-membro: convite enviado, mas a marca definir_senha falhou (código ${codigoDoErro(m.error)})`,
           );
         } else if (m.data === "neutralizada") {
+          // O convite já foi aceito pelo Auth: a reserva conta esse envio
+          // (confirmada abaixo), dê certo ou não o link novo.
           deps.log("convidar-membro: conta reaproveitada com senha neutralizada; novo link");
-          falha = await deps.enviarLinkMagico(c.email, redirectTo);
+          const novo = await deps.enviarLinkMagico(c.email, redirectTo);
+          if (novo) {
+            deps.log(
+              `convidar-membro: o link novo da conta neutralizada não saiu (status ${novo.status ?? "?"}); reenvie`,
+            );
+          }
         }
       }
     } else {

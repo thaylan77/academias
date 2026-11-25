@@ -29,6 +29,7 @@ export function tokenDoPedido(req: Request): string | null {
 export interface Claims {
   iat: number | null;
   sessao: string | null;
+  aal: string | null;
   amr: { method: string; timestamp?: number }[];
 }
 
@@ -38,7 +39,7 @@ export interface Claims {
  */
 export function claimsDoToken(jwt: string): Claims {
   const partes = jwt.split(".");
-  if (partes.length !== 3) return { iat: null, sessao: null, amr: [] };
+  if (partes.length !== 3) return { iat: null, sessao: null, aal: null, amr: [] };
   try {
     const b64 = partes[1].replace(/-/g, "+").replace(/_/g, "/");
     const preenchido = b64 + "=".repeat((4 - (b64.length % 4)) % 4);
@@ -46,10 +47,11 @@ export function claimsDoToken(jwt: string): Claims {
     return {
       iat: typeof p.iat === "number" ? Math.floor(p.iat) : null,
       sessao: typeof p.session_id === "string" ? p.session_id : null,
+      aal: typeof p.aal === "string" ? p.aal : null,
       amr: Array.isArray(p.amr) ? p.amr : [],
     };
   } catch {
-    return { iat: null, sessao: null, amr: [] };
+    return { iat: null, sessao: null, aal: null, amr: [] };
   }
 }
 

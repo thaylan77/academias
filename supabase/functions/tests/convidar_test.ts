@@ -337,11 +337,12 @@ Deno.test("conta nova marcada normalmente: só o convite, sem link extra", async
   assertEquals(r.de("enviarLinkMagico").length, 0);
 });
 
-Deno.test("link novo depois da neutralização recusado (4xx): libera a reserva", async () => {
+Deno.test("convite aceito e link novo recusado (429): a reserva conta o envio aceito, não é liberada", async () => {
   const r = await chama({
     rpc: { criar_convite_interna: criado("nenhuma"), marcar_definir_senha_interna: { data: "neutralizada" } },
-    link: { status: 422 },
+    link: { status: 429 },
   });
-  assertEquals(r.de("rpc:liberar_envio_convite_interna").length, 1);
-  assertEquals(r.de("rpc:confirmar_envio_convite_interna").length, 0);
+  assertEquals(r.de("rpc:confirmar_envio_convite_interna").map((c) => c.args[0]), [RESERVA]);
+  assertEquals(r.de("rpc:liberar_envio_convite_interna").length, 0);
+  assert(r.logs.some((l) => l.includes("link novo da conta neutralizada não saiu")));
 });

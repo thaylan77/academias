@@ -23,10 +23,11 @@ Deno.test("claims do token: iat inteiro, session_id e amr; token estranho não q
   assertEquals(claimsDoToken(jwtFalso({ iat: 10.7, session_id: "s", amr: [{ method: "otp" }] })), {
     iat: 10,
     sessao: "s",
+    aal: null,
     amr: [{ method: "otp" }],
   });
-  assertEquals(claimsDoToken("abc"), { iat: null, sessao: null, amr: [] });
-  assertEquals(claimsDoToken("a.%%%.c"), { iat: null, sessao: null, amr: [] });
+  assertEquals(claimsDoToken("abc"), { iat: null, sessao: null, aal: null, amr: [] });
+  assertEquals(claimsDoToken("a.%%%.c"), { iat: null, sessao: null, aal: null, amr: [] });
 });
 
 Deno.test("token do pedido só no formato Bearer", () => {

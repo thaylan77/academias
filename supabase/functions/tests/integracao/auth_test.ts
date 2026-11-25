@@ -531,6 +531,9 @@ Deno.test({
       code: await codigoTotp(fator.data.totp.secret),
     });
     if (segundo.error) throw segundo.error;
+    // O token aal1 anterior, ainda válido, da mesma sessão (agora aal2) não serve.
+    const antigo = await concluirSenha(pedido(sessao.access_token, { senha: "senha-nova-mfa-1" }), depsSenha(dono.c));
+    assertEquals([antigo.status, await antigo.json()], [400, { erro: "mfa_necessario" }]);
     const { data: atual } = await cliente.auth.getSession();
     const aal2 = await concluirSenha(
       pedido(atual.session!.access_token, { senha: "senha-nova-mfa-1" }),
