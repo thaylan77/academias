@@ -4,7 +4,7 @@
 -- Academias A e B (ativas) e S (suspensa).
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(142);
+select plan(143);
 
 -- ---------------------------------------------------------------------
 -- Auxiliares
@@ -549,6 +549,12 @@ select is((select coalesce(email, '(sem e-mail)') || ':' || papel
              from public.equipe_da_academia('e7c00000-0000-4000-8000-00000000000a')
             where user_id = 'e7c00000-0000-4000-8000-0000000000b1'),
   '(sem e-mail):professor', 'vínculo anterior ao convite, sem o aceite da conta, não revela o e-mail');
+reset role;
+set local role service_role;
+select public.__como_servico();
+select is(public.__passa_e_desfaz($$select public.__cc('e7c00000-0000-4000-8000-0000000000a2', 'e7c00000-0000-4000-8000-00000000000a', 'dono-b@conv.test', 'professor')$$)
+          || '/' || public.__passa_e_desfaz($$select public.__cc('e7c00000-0000-4000-8000-0000000000a2', 'e7c00000-0000-4000-8000-00000000000a', 'ninguem-ainda@conv.test', 'professor')$$),
+  'passou/passou', 'convidar o e-mail de um vínculo anterior ao convite responde como para um e-mail sem vínculo');
 reset role;
 select public.__sem_jwt();
 delete from public.membros_academia

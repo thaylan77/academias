@@ -507,7 +507,10 @@ begin
       using hint = 'sem_permissao';
   end if;
 
-  -- 4. O e-mail já está na academia? (contas apagadas no Auth não contam)
+  -- 4. O e-mail já está na academia? (contas apagadas no Auth não contam).
+  -- Só vínculo verificado: um vínculo gravado sem o aceite da conta não pode
+  -- confirmar o e-mail dela (a listagem também o esconde). O aceite trata o
+  -- vínculo antigo com as mesmas regras de papel.
   if exists (
     select 1
     from public.membros_academia m
@@ -515,6 +518,7 @@ begin
     where m.academia_id = p_academia_id
       and lower(btrim(u.email)) = v_email
       and u.deleted_at is null
+      and m.verificado
       and (m.papel = 'totem' or (m.ativo and m.papel <> 'aluno'))
   ) then
     raise exception 'Este e-mail já faz parte da academia.'
@@ -527,6 +531,7 @@ begin
     where m.academia_id = p_academia_id
       and lower(btrim(u.email)) = v_email
       and u.deleted_at is null
+      and m.verificado
       and m.papel = 'dono'
   ) then
     raise exception 'Só o dono convida de volta um dono inativo.'
@@ -1036,8 +1041,9 @@ begin
 
     if v_membro.user_id is not null then
       -- 7. Já está na academia como equipe (inclusive reativado depois do
-      --    convite) ou como totem.
-      if v_membro.papel = 'totem' or (v_membro.ativo and v_membro.papel <> 'aluno') then
+      --    convite) ou como totem. Um vínculo ativo da equipe ainda não
+      --    verificado (anterior ao convite) é confirmado por este aceite.
+      if v_membro.papel = 'totem' or (v_membro.ativo and v_membro.papel <> 'aluno' and v_membro.verificado) then
         raise exception 'Você já faz parte desta academia.'
           using hint = 'ja_membro';
       end if;
