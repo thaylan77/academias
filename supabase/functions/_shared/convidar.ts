@@ -148,59 +148,36 @@ async function tratar(req: Request, deps: DepsConvidar): Promise<Response> {
 async function processarEnvio(c: Criado, deps: DepsConvidar): Promise<void> {
   const redirectTo = deps.siteUrl + "/painel/convites";
 
-  // Conta com o e-mail do convidado que nunca foi confirmada: quem a criou
-  // pode não ser o dono do e-mail. O banco derruba a senha, as sessões e os
-  // tokens dela, com a conta travada e só se o e-mail continuar não
-  // confirmado (quem confirmou nesse meio-tempo não perde a senha). Vale
-  // mesmo sem envio.
-  let falhaAntes: ErroAuth | null = null;
-  if (c.conta === "nao_confirmada" && c.user_id) {
-    const n = await deps.rpc("neutralizar_conta_nao_confirmada_interna", { p_user_id: c.user_id });
-    if (n.error) {
-      falhaAntes = { status: 500 };
-      deps.log(`convidar-membro: não neutralizou a conta não confirmada (código ${codigoDoErro(n.error)})`);
-    }
-  }
-
   // Limite por endereço estourado pelo histórico de outra academia: sem
-  // e-mail.
+  // e-mail, e nada da conta é tocado (a conta é de todas as academias; um
+  // convite que não entrega nada não mexe na credencial de ninguém).
   if (!c.enviar) return;
 
-  // 2. Endereço sem conta: a função cria a conta, sem senha e sem e-mail. Se
-  //    alguém se cadastrou com o endereço entre a leitura de
-  //    criar_convite_interna e aqui, o Auth recusa (e-mail já existe) e a
-  //    função usa essa conta. Nos dois casos ela passa pela neutralização no
-  //    banco antes do único link, como a conta não confirmada.
-  let falha: ErroAuth | null = falhaAntes;
-  let contaNova: string | null = null;
-  if (!falha && c.conta === "nenhuma") {
+  // 1. A conta que vai receber o link. Endereço sem conta: a função cria a
+  //    conta, sem senha e sem e-mail. Se alguém se cadastrou com o endereço
+  //    entre a leitura de criar_convite_interna e aqui, o Auth recusa (e-mail
+  //    já existe) e a função usa essa conta.
+  let falha: ErroAuth | null = null;
+  let conta: string | null = c.conta === "nao_confirmada" ? c.user_id : null;
+  if (c.conta === "nenhuma") {
     const r = await deps.criarConta(c.email);
     if (r.userId) {
-      contaNova = r.userId;
+      conta = r.userId;
     } else if (r.erro?.status === 422) {
       const existente = await deps.rpc("conta_nao_confirmada_por_email_interna", { p_email: c.email });
       if (existente.error) falha = { status: 500 };
-      else contaNova = typeof existente.data === "string" ? existente.data : null; // null: já confirmada
+      else conta = typeof existente.data === "string" ? existente.data : null; // null: já confirmada
     } else {
       falha = r.erro ?? { status: 500 };
-    }
-    if (!falha && contaNova) {
-      const n = await deps.rpc("neutralizar_conta_nao_confirmada_interna", { p_user_id: contaNova });
-      if (n.error) {
-        falha = { status: 500 };
-        deps.log(`convidar-membro: não neutralizou a conta nova (código ${codigoDoErro(n.error)})`);
-      }
     }
   }
   // Até aqui nenhum e-mail saiu: uma falha libera a reserva.
   const tentouEnviar = !falha;
 
-  // 3. Um único link por reserva, depois da neutralização. O link mágico do
-  //    Auth também limpa a senha de uma conta não confirmada ao ser emitido.
-  //    Logo antes dele, o worker assume a reserva (marca durável): até aqui,
-  //    uma queda deixa a reserva sem tentativa, e o job a libera em 2 minutos;
-  //    depois, o e-mail pode ter saído, e a reserva fica. Se ela já foi
-  //    liberada (este worker atrasou), não envia.
+  // 2. Logo antes do link, o worker assume a reserva (marca durável): até
+  //    aqui, uma queda deixa a reserva sem tentativa, e o job a libera em 2
+  //    minutos; depois, o e-mail pode ter saído, e a reserva fica. Se ela já
+  //    foi liberada (este worker atrasou), não envia nem mexe na conta.
   if (!falha && c.envio_id) {
     const assumida = await deps.rpc("assumir_envio_convite_interna", { p_envio_id: c.envio_id });
     if (assumida.error || assumida.data !== true) {
@@ -212,8 +189,20 @@ async function processarEnvio(c: Criado, deps: DepsConvidar): Promise<void> {
       return;
     }
   }
+
+  // 3. Um único link por reserva. Ao emiti-lo para uma conta não confirmada,
+  //    o próprio Auth limpa a senha dela. Só com o link aceito pelo Auth o
+  //    banco neutraliza o resto (sessões, tokens sensíveis, marca de definir
+  //    senha), com a conta travada e preservando o link de confirmação: um
+  //    convite que não entrega e-mail não mexe na credencial de ninguém.
   if (!falha) {
     falha = await deps.enviarLinkMagico(c.email, redirectTo);
+  }
+  if (!falha && conta) {
+    const n = await deps.rpc("neutralizar_conta_nao_confirmada_interna", { p_user_id: conta });
+    if (n.error) {
+      deps.log(`convidar-membro: link enviado, mas a neutralização da conta falhou (código ${codigoDoErro(n.error)})`);
+    }
   }
 
   // 4. A reserva do envio: confirmada se o Auth aceitou; liberada se recusou

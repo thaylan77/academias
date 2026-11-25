@@ -107,7 +107,7 @@ Deno.test("mfa_necessario do banco repassado como 400", async () => {
 });
 
 Deno.test("limite de tentativas: 429 limite_tentativas, sem chegar ao bcrypt", async () => {
-  const r = await chama({ rpc: { registrar_tentativa_senha_interna: { data: false } } });
+  const r = await chama({ rpc: { registrar_tentativa_senha_interna: { data: "limite" } } });
   assertEquals([r.status, r.corpo], [429, { erro: "limite_tentativas" }]);
   assertEquals(r.de("rpc:definir_senha_comprovada_interna").length, 0);
 });
@@ -118,7 +118,7 @@ Deno.test("chamadas concorrentes: as que passam do limite não chegam ao bcrypt"
   const original = s.deps.rpc;
   s.deps.rpc = (nome, args) => {
     if (nome === "registrar_tentativa_senha_interna") {
-      return Promise.resolve({ data: restantes-- > 0, error: null });
+      return Promise.resolve({ data: restantes-- > 0 ? "ok" : "limite", error: null });
     }
     return original(nome, args);
   };
@@ -134,4 +134,27 @@ Deno.test("falha ao registrar a tentativa: 500, sem gravar a senha", async () =>
   const r = await chama({ rpc: { registrar_tentativa_senha_interna: { error: { code: "57014" } } } });
   assertEquals([r.status, r.corpo], [500, { erro: "erro_interno" }]);
   assertEquals(r.de("rpc:definir_senha_comprovada_interna").length, 0);
+});
+
+Deno.test("o registro recusa por MFA ou sessão: a resposta segue o motivo, sem chegar ao bcrypt", async () => {
+  for (
+    const [motivo, esperado] of [["mfa_necessario", [400, "mfa_necessario"]], ["convite_exige_link", [
+      403,
+      "convite_exige_link",
+    ]]] as const
+  ) {
+    const r = await chama({ rpc: { registrar_tentativa_senha_interna: { data: motivo } } });
+    assertEquals([r.status, r.corpo.erro], [...esperado]);
+    assertEquals(r.de("rpc:definir_senha_comprovada_interna").length, 0);
+  }
+});
+
+Deno.test("o registro recebe a sessão e o aal do token", async () => {
+  const token = jwtFalso({ sub: USUARIO, iat: 1, session_id: SESSAO, aal: "aal2", amr: [{ method: "otp" }] });
+  const r = await chama({}, SENHA, token);
+  assertEquals(r.de("rpc:registrar_tentativa_senha_interna")[0].args[0], {
+    p_user_id: USUARIO,
+    p_sessao: SESSAO,
+    p_aal: "aal2",
+  });
 });

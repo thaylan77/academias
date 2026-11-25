@@ -315,13 +315,28 @@ create index convites_senha_tentativas_user_idx on public.convites_senha_tentati
 alter table public.convites_senha_tentativas enable row level security;
 revoke all on public.convites_senha_tentativas from anon, authenticated;
 
-create or replace function public.registrar_tentativa_senha_interna(p_user_id uuid)
-returns boolean
+-- Antes de debitar, confere o que não custa bcrypt: a sessão do token é
+-- deste usuário e, com MFA, o token e a sessão estão em aal2. Um token aal1
+-- antigo não gasta a cota de quem concluiu o segundo fator. Devolve 'ok',
+-- 'limite', 'mfa_necessario' ou 'convite_exige_link'.
+create or replace function public.registrar_tentativa_senha_interna(p_user_id uuid, p_sessao uuid, p_aal text)
+returns text
 language plpgsql
 security definer
 set search_path = ''
 as $$
+declare
+  v_aal text;
 begin
+  select s.aal::text into v_aal from auth.sessions s where s.id = p_sessao and s.user_id = p_user_id;
+  if not found then
+    return 'convite_exige_link';
+  end if;
+  if exists (select 1 from auth.mfa_factors f where f.user_id = p_user_id and f.status = 'verified')
+     and (coalesce(v_aal, 'aal1') <> 'aal2' or coalesce(p_aal, 'aal1') <> 'aal2') then
+    return 'mfa_necessario';
+  end if;
+
   -- Uma trava curta por conta (sem bcrypt): tentativas concorrentes entram
   -- em fila aqui e são contadas uma a uma.
   perform pg_advisory_xact_lock(hashtextextended('senha_tentativa:' || p_user_id::text, 0));
@@ -329,12 +344,12 @@ begin
    where t.user_id = p_user_id and t.tentado_em < clock_timestamp() - interval '1 day';
   if (select count(*) from public.convites_senha_tentativas t
        where t.user_id = p_user_id and t.tentado_em > clock_timestamp() - interval '15 minutes') >= 5 then
-    return false;
+    return 'limite';
   end if;
   insert into public.convites_senha_tentativas (user_id) values (p_user_id);
-  return true;
+  return 'ok';
 end
 $$;
 
-revoke execute on function public.registrar_tentativa_senha_interna(uuid) from public, anon, authenticated;
-grant execute on function public.registrar_tentativa_senha_interna(uuid) to service_role;
+revoke execute on function public.registrar_tentativa_senha_interna(uuid, uuid, text) from public, anon, authenticated;
+grant execute on function public.registrar_tentativa_senha_interna(uuid, uuid, text) to service_role;

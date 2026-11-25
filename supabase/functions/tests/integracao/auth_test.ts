@@ -556,8 +556,11 @@ Deno.test({
     });
     if (segundo.error) throw segundo.error;
     // O token aal1 anterior, ainda válido, da mesma sessão (agora aal2) não serve.
-    const antigo = await concluirSenha(pedido(sessao.access_token, { senha: "senha-nova-mfa-1" }), depsSenha(dono.c));
-    assertEquals([antigo.status, await antigo.json()], [400, { erro: "mfa_necessario" }]);
+    // Cinco recusas dele não gastam a cota de quem concluiu o segundo fator.
+    for (let i = 0; i < 5; i++) {
+      const antigo = await concluirSenha(pedido(sessao.access_token, { senha: "senha-nova-mfa-1" }), depsSenha(dono.c));
+      assertEquals([antigo.status, await antigo.json()], [400, { erro: "mfa_necessario" }]);
+    }
     const { data: atual } = await cliente.auth.getSession();
     const aal2 = await concluirSenha(
       pedido(atual.session!.access_token, { senha: "senha-nova-mfa-1" }),
@@ -575,12 +578,11 @@ Deno.test({
     const b = await prepararDono("prepara-b");
     const endereco = email("prepara");
     const base = depsConvidar(a.c, "http://127.0.0.1:3000");
-    // A conta é criada, e o worker cai ao neutralizá-la (antes de assumir a
-    // reserva e de chamar o link).
+    // A conta é criada, e o worker cai ao assumir a reserva (antes do link).
     const depsCaiu = {
       ...base,
       rpc(nome: string, args: Record<string, unknown>) {
-        if (nome === "neutralizar_conta_nao_confirmada_interna") return Promise.reject(new Error("worker caiu"));
+        if (nome === "assumir_envio_convite_interna") return Promise.reject(new Error("worker caiu"));
         return base.rpc(nome, args);
       },
     };
@@ -610,8 +612,7 @@ Deno.test({
 });
 
 Deno.test({
-  name:
-    "cadastro recente com link de confirmação entregue e convite com envio recusado: o link original confirma, sem a senha",
+  name: "cadastro legítimo e convite sem envio (Auth recusou ou reserva liberada): a conta não é tocada",
   ignore: !ativo,
   async fn() {
     const a = await prepararDono("recente-dono");
@@ -627,25 +628,41 @@ Deno.test({
     const original = await emailsPara(endereco);
     assertEquals(original.length, 1, "o link de confirmação do cadastro chegou");
 
-    // O convite neutraliza a conta, e o Auth recusa o envio do link novo.
-    const deps = {
+    // Dois convites que não entregam e-mail: o Auth recusa o link; e outra
+    // academia cuja reserva foi liberada (worker atrasado).
+    const recusa = {
       ...depsConvidar(a.c, "http://127.0.0.1:3000"),
       enviarLinkMagico: () => Promise.resolve({ status: 429, message: "limite" }),
     };
-    const r = await convidarMembro(
+    const r1 = await convidarMembro(
       pedido(a.token, { academia_id: a.academiaId, email: endereco, papel: "professor" }),
-      deps,
+      recusa,
     );
-    assertEquals(r.status, 200);
+    assertEquals(r1.status, 200);
+    const b = await prepararDono("recente-dono-b");
+    const baseB = depsConvidar(b.c, "http://127.0.0.1:3000");
+    const liberada = {
+      ...baseB,
+      rpc(nome: string, args: Record<string, unknown>) {
+        if (nome === "assumir_envio_convite_interna") return Promise.resolve({ data: false, error: null });
+        return baseB.rpc(nome, args);
+      },
+    };
+    const r2 = await convidarMembro(
+      pedido(b.token, { academia_id: b.academiaId, email: endereco, papel: "professor" }),
+      liberada,
+    );
+    assertEquals(r2.status, 200);
 
-    // O link original ainda confirma o endereço, e a senha do cadastro não entra.
+    // O link do cadastro confirma o endereço, e a senha escolhida no cadastro
+    // continua valendo: nenhum convite que não entregou e-mail mexeu nela.
     const achado = original[0].replace(/&amp;/g, "&").match(/https?:\/\/[^\s"'<>]+\/auth\/v1\/verify\?[^\s"'<>]+/);
     assert(achado, "o e-mail do cadastro traz o link de confirmação");
     const abre = await fetch(achado[0], { redirect: "manual" });
     await abre.body?.cancel();
-    assert((abre.headers.get("Location") ?? "").includes("access_token="), "o link original ainda confirma");
+    assert((abre.headers.get("Location") ?? "").includes("access_token="), "o link do cadastro confirma");
     const entra = await novoAnon().auth.signInWithPassword({ email: endereco, password: "senha-do-cadastro-3" });
-    assert(entra.error, "a senha do cadastro continua inválida depois da confirmação");
+    assertEquals(entra.error, null, "a senha do cadastro legítimo continua valendo");
   },
 });
 

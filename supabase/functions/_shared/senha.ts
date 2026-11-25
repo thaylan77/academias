@@ -52,12 +52,20 @@ async function tratar(req: Request, deps: DepsSenha): Promise<Response> {
 
   // Limite por conta antes do bcrypt (5 em 15 minutos), registrado numa
   // transação própria: a recusa da senha não desfaz a tentativa.
-  const tentativa = await deps.rpc("registrar_tentativa_senha_interna", { p_user_id: userId });
+  // Antes de debitar, o banco confere a sessão e, com MFA, o aal do token e
+  // da sessão: um token aal1 antigo não gasta a cota.
+  const tentativa = await deps.rpc("registrar_tentativa_senha_interna", {
+    p_user_id: userId,
+    p_sessao: claims.sessao,
+    p_aal: claims.aal,
+  });
   if (tentativa.error) {
     deps.log(`concluir-senha: erro ao registrar a tentativa (código ${codigoDoErro(tentativa.error)})`);
     return erro(500, "erro_interno");
   }
-  if (tentativa.data !== true) return erro(429, "limite_tentativas");
+  if (tentativa.data === "limite") return erro(429, "limite_tentativas");
+  if (tentativa.data === "mfa_necessario") return erro(400, "mfa_necessario");
+  if (tentativa.data !== "ok") return erro(403, "convite_exige_link");
 
   const { error } = await deps.rpc("definir_senha_comprovada_interna", {
     p_user_id: userId,

@@ -67,7 +67,7 @@ export function depsSimuladas(s: Simulado = {}) {
       registra("rpc:" + nome, args);
       // Padrão: a tentativa de senha cabe no limite.
       if (nome === "registrar_tentativa_senha_interna" && !s.rpc?.[nome]) {
-        return Promise.resolve({ data: true, error: null });
+        return Promise.resolve({ data: "ok", error: null });
       }
       // Padrão: a reserva é assumida (o worker pode chamar o Auth).
       if (nome === "assumir_envio_convite_interna" && !s.rpc?.[nome]) {
