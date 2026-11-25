@@ -88,7 +88,9 @@ deno test --frozen --no-prompt tests/*_test.ts   # Auth simulado
   `convidar-membro` precisa do segredo `SITE_URL` (a URL pública do painel,
   base do link do convite): `npx supabase@2.119.0 secrets set SITE_URL=...`.
   `SUPABASE_URL`, `SUPABASE_ANON_KEY` e `SUPABASE_SERVICE_ROLE_KEY` o projeto
-  já fornece.
+  já fornece. Inclua `SITE_URL/painel/convites` nas Redirect URLs do Auth
+  do projeto: fora da lista, o Auth manda o convidado para o `site_url` sem
+  avisar.
 - O front de dev aponta para o `honorteam-dev` só com a URL e a chave
   `anon`/publishable. A `service_role` desse projeto não vai para `.env`
   de front nem para o repositório.
