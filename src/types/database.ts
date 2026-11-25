@@ -693,6 +693,9 @@ isOneToOne: false
 "liberar_envio_convite_interna":
 { Args: { "p_envio_id": string }; Returns: undefined
                            },
+"marcar_senha_comprovada_interna":
+{ Args: { "p_sessao": string,"p_user_id": string }; Returns: undefined
+                           },
 "matricula_online":
 { Args: { "p_dados": Json,"p_slug": string }; Returns: string
                            },
