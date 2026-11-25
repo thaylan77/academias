@@ -748,7 +748,7 @@ isOneToOne: false
 { Args: { "p_academia_id": string,"p_dados": Json }; Returns: string
                            },
 "registrar_tentativa_senha_interna":
-{ Args: { "p_user_id": string }; Returns: boolean
+{ Args: { "p_aal": string,"p_sessao": string,"p_user_id": string }; Returns: string
                            },
 "reservar_emissao_interna":
 { Args: { "p_cobranca_id": string,"p_gateway_conta_id": string,"p_tentativa_conferida"?: string,"p_user_id": string }; Returns: Json
