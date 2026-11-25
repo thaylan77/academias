@@ -703,7 +703,7 @@ isOneToOne: false
 { Args: { "p_idade"?: string }; Returns: number
                            },
 "marcar_definir_senha_interna":
-{ Args: { "p_user_id": string }; Returns: boolean
+{ Args: { "p_user_id": string }; Returns: string
                            },
 "matricula_online":
 { Args: { "p_dados": Json,"p_slug": string }; Returns: string

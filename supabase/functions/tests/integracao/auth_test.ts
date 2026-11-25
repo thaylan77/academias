@@ -456,7 +456,7 @@ Deno.test({
   name: "cadastro com senha entre a reserva e o convite: a conta reaproveitada é neutralizada e sai um link novo",
   ignore: !ativo,
   async fn() {
-    const a = await prepararDono("cadastro-meio");
+    const a = await prepararDono("dono-cadastro-meio");
     const endereco = email("cadastro-meio");
     const base = depsConvidar(a.c, "http://127.0.0.1:3000");
     const deps = {
