@@ -749,18 +749,18 @@ select is((select count(*) from public.convites_equipe where email = 'zeta@conco
   0::bigint, 'Z: sem convite nem reserva');
 
 -- ---------------------------------------------------------------------
--- AA. bd (dono de O) entrou por convite; s1 troca a senha dele sem
---     confirmar; bc sai em s2; s1 confirma.
+-- AA. bc (dono de O, desativado em U) volta ativo, como vínculo aceito por
+--     convite; s1 troca a senha dele sem confirmar; bd sai em s2; s1 confirma.
 -- ---------------------------------------------------------------------
-select extensions.dblink_exec('prep', $$update public.membros_academia set vale_a_partir = now() - interval '1 hour'
-  where academia_id = 'e7d00000-0000-4000-8000-00000000000e' and user_id = 'e7d00000-0000-4000-8000-0000000000bd'$$);
-select pg_temp.como('s2', 'e7d00000-0000-4000-8000-0000000000bc');
+select extensions.dblink_exec('prep', $$update public.membros_academia set ativo = true, vale_a_partir = now() - interval '1 hour'
+  where academia_id = 'e7d00000-0000-4000-8000-00000000000e' and user_id = 'e7d00000-0000-4000-8000-0000000000bc'$$);
+select pg_temp.como('s2', 'e7d00000-0000-4000-8000-0000000000bd');
 select extensions.dblink_exec('s1', 'begin');
 select extensions.dblink_exec('s1', $$update auth.users set encrypted_password = 'trocada-fora-do-fluxo'
-  where id = 'e7d00000-0000-4000-8000-0000000000bd'$$);
+  where id = 'e7d00000-0000-4000-8000-0000000000bc'$$);
 select is(extensions.dblink_send_query('s2', $$delete from public.membros_academia
-  where academia_id = 'e7d00000-0000-4000-8000-00000000000e' and user_id = 'e7d00000-0000-4000-8000-0000000000bc'$$),
-  1, 'AA: s2 envia a saída de bc');
+  where academia_id = 'e7d00000-0000-4000-8000-00000000000e' and user_id = 'e7d00000-0000-4000-8000-0000000000bd'$$),
+  1, 'AA: s2 envia a saída de bd');
 select ok(pg_temp.s2_espera_s1(), 'AA: a saída espera a troca de senha do outro dono');
 select extensions.dblink_exec('s1', 'commit');
 select matches(pg_temp.resultado_s2(), 'HINT: +ultimo_dono', 'AA: com a prova do outro dono invalidada, a saída é recusada');
