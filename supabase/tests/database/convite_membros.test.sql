@@ -4,7 +4,7 @@
 -- Academias A e B (ativas) e S (suspensa).
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(144);
+select plan(148);
 
 -- ---------------------------------------------------------------------
 -- Auxiliares
@@ -566,6 +566,24 @@ reset role;
 update auth.users set email = 'dono-b@conv.test' where id = 'e7c00000-0000-4000-8000-0000000000b1';
 set local role authenticated;
 select public.__como('e7c00000-0000-4000-8000-0000000000a2');
+-- O dono do vínculo antigo recebe um convite, vê o convite na lista e, ao
+-- aceitar, confirma o vínculo.
+reset role;
+set local role service_role;
+select public.__como_servico();
+select ok((public.__cc('e7c00000-0000-4000-8000-0000000000a2', 'e7c00000-0000-4000-8000-00000000000a', 'dono-b@conv.test', 'recepcao') ->> 'convite_id') is not null,
+  'convite para o e-mail de um vínculo anterior ao convite é criado');
+set local role authenticated;
+select public.__como('e7c00000-0000-4000-8000-0000000000b1');
+select is((select count(*) from public.meus_convites() where academia_id = 'e7c00000-0000-4000-8000-00000000000a'), 1::bigint,
+  'quem tem um vínculo anterior ao convite vê o convite para confirmá-lo');
+select public.aceitar_convite((select id from public.meus_convites() where academia_id = 'e7c00000-0000-4000-8000-00000000000a'));
+reset role;
+select is((select papel || '/' || verificado::text from public.membros_academia
+            where academia_id = 'e7c00000-0000-4000-8000-00000000000a' and user_id = 'e7c00000-0000-4000-8000-0000000000b1'),
+  'recepcao/true', 'o aceite troca o papel do vínculo antigo e o confirma');
+set local role authenticated;
+select public.__como('e7c00000-0000-4000-8000-0000000000a2');
 reset role;
 set local role service_role;
 select public.__como_servico();
@@ -1039,6 +1057,9 @@ set local role authenticated;
 select public.__como('e7c00000-0000-4000-8000-0000000000e5');
 select is(public.__hint_de(format('select public.aceitar_convite(%L)', (public.__conv('e7c00000-0000-4000-8000-00000000000a', 'convidadodele@conv.test')).id)),
   'convite_invalido', 'convite de um autor sem a prova de senha válida não é aceito');
+select is(public.__hint_de(format('select public.recusar_convite(%L)', (public.__conv('e7c00000-0000-4000-8000-00000000000a', 'convidadodele@conv.test')).id))
+          || '/' || (public.__conv('e7c00000-0000-4000-8000-00000000000a', 'convidadodele@conv.test')).status,
+  'convite_invalido/pendente', 'convite de um autor sem a prova de senha válida também não é recusado');
 reset role;
 update auth.users set raw_app_meta_data = raw_app_meta_data || jsonb_build_object('senha_comprovada', md5('hash-novo'))
  where id = 'e7c00000-0000-4000-8000-0000000000e4';

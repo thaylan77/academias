@@ -859,7 +859,7 @@ as $$
       select 1 from public.membros_academia m
       where m.academia_id = c.academia_id
         and m.user_id = auth.uid()
-        and (m.papel = 'totem' or (m.ativo and m.papel <> 'aluno'))
+        and (m.papel = 'totem' or (m.ativo and m.papel <> 'aluno' and m.verificado))
     )
   order by c.created_at
 $$;
@@ -1121,6 +1121,14 @@ declare
   v_conv public.convites_equipe;
 begin
   v_conv := public.convite_do_login_travado(p_convite_id, false);
+
+  -- Como no aceite: a conta de quem convidou travada e o convite ainda
+  -- válido do lado dele (um autor que perdeu o acesso não tem convite vivo).
+  perform 1 from auth.users u where u.id = v_conv.convidado_por for share;
+  if not public.convite_de_quem_pode(v_conv) then
+    raise exception 'Convite não encontrado, vencido ou já respondido.'
+      using hint = 'convite_invalido';
+  end if;
 
   if not public.academia_ativa_agora(v_conv.academia_id) then
     raise exception 'A assinatura da academia está suspensa: o convite não pode ser respondido agora.'
