@@ -339,13 +339,13 @@ isOneToOne: false
                   ]
                 },"membros_academia": {
                   Row: {
-                    "academia_id": string,"ativo": boolean,"created_at": string,"papel": string,"user_id": string,"vale_a_partir": string | null
+                    "academia_id": string,"ativo": boolean,"created_at": string,"papel": string,"sessao_do_aceite": string | null,"user_id": string,"vale_a_partir": string | null
                   }
                   Insert: {
-                    "academia_id": string,"ativo"?: boolean,"created_at"?: string,"papel": string,"user_id": string,"vale_a_partir"?: string | null
+                    "academia_id": string,"ativo"?: boolean,"created_at"?: string,"papel": string,"sessao_do_aceite"?: string | null,"user_id": string,"vale_a_partir"?: string | null
                   }
                   Update: {
-                    "academia_id"?: string,"ativo"?: boolean,"created_at"?: string,"papel"?: string,"user_id"?: string,"vale_a_partir"?: string | null
+                    "academia_id"?: string,"ativo"?: boolean,"created_at"?: string,"papel"?: string,"sessao_do_aceite"?: string | null,"user_id"?: string,"vale_a_partir"?: string | null
                   }
                   Relationships: [
                     {
@@ -727,6 +727,9 @@ isOneToOne: false
                            },
 "salvar_turma":
 { Args: { "p_academia_id": string,"p_dados": Json,"p_turma_id"?: string }; Returns: string
+                           },
+"sessao_elegivel":
+{ Args: { "p_iat": number,"p_sessao": string,"p_sessao_aceite": string,"p_user_id": string,"p_vale": string }; Returns: boolean
                            },
 "sessao_valida":
 { Args: { "p_sessao": string,"p_user_id": string }; Returns: boolean
