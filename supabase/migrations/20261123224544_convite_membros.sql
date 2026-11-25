@@ -183,10 +183,41 @@ as $$
       or (coalesce(p_iat, 0) >= extract(epoch from p_vale)
           and exists (select 1 from auth.sessions s
                        where s.id = p_sessao and s.user_id = p_user_id
-                         and (s.id = p_sessao_aceite or s.created_at >= p_vale)))
+                         and (s.id = p_sessao_aceite or s.created_at >= p_vale))
+          -- A senha atual é a comprovada (marcar_senha_comprovada_interna):
+          -- uma troca fora desse fluxo, inclusive uma autorizada por uma
+          -- sessão antiga e gravada depois do aceite, suspende o vínculo até
+          -- uma nova prova.
+          and exists (select 1 from auth.users u
+                       where u.id = p_user_id
+                         and u.raw_app_meta_data ->> 'senha_comprovada' = md5(coalesce(u.encrypted_password, ''))))
 $$;
 
 revoke execute on function public.sessao_elegivel(uuid, uuid, bigint, timestamptz, uuid) from public, anon, authenticated;
+
+-- Chamada pela Edge Function concluir-senha logo depois de a pessoa trocar a
+-- senha na sessão aberta pelo link: grava em app_metadata a prova (horário,
+-- sessão e o hash da senha atual, calculado aqui). Só service_role.
+create or replace function public.marcar_senha_comprovada_interna(p_user_id uuid, p_sessao uuid)
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  perform 1 from auth.users u where u.id = p_user_id for update;
+  update auth.users u
+     set raw_app_meta_data = coalesce(u.raw_app_meta_data, '{}'::jsonb)
+           || jsonb_build_object('senha_redefinida_em', floor(extract(epoch from clock_timestamp()))::bigint,
+                                 'senha_redefinida_sessao', p_sessao::text,
+                                 'senha_comprovada', md5(coalesce(u.encrypted_password, '')))
+           - 'definir_senha'
+   where u.id = p_user_id;
+end
+$$;
+
+revoke execute on function public.marcar_senha_comprovada_interna(uuid, uuid) from public, anon, authenticated;
+grant execute on function public.marcar_senha_comprovada_interna(uuid, uuid) to service_role;
 
 create or replace function public.tem_papel(p_academia_id uuid, p_papeis text[] default null)
 returns boolean
@@ -807,6 +838,7 @@ begin
       where u.id = auth.uid()
         and (u.raw_app_meta_data ->> 'senha_redefinida_em')::bigint >= v_link_em
         and u.raw_app_meta_data ->> 'senha_redefinida_sessao' = public.jwt_sessao()::text
+        and u.raw_app_meta_data ->> 'senha_comprovada' = md5(coalesce(u.encrypted_password, ''))
     ) then
       raise exception 'Defina uma senha nova antes de aceitar o convite.'
         using hint = 'senha_pendente';
@@ -854,6 +886,7 @@ begin
       where u.id = auth.uid()
         and (u.raw_app_meta_data ->> 'senha_redefinida_em')::bigint >= v_link_em
         and u.raw_app_meta_data ->> 'senha_redefinida_sessao' = public.jwt_sessao()::text
+        and u.raw_app_meta_data ->> 'senha_comprovada' = md5(coalesce(u.encrypted_password, ''))
     ) then
       raise exception 'Defina uma senha nova antes de aceitar o convite.'
         using hint = 'senha_pendente';

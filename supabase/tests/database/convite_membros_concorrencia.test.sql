@@ -194,7 +194,8 @@ select extensions.dblink_exec('prep', $f$
   -- Cada usuário com uma sessão (id = o próprio id do usuário, como o
   -- session_id que pg_temp.como põe no JWT) e a senha nova definida nela.
   update auth.users set raw_app_meta_data = coalesce(raw_app_meta_data, '{}'::jsonb)
-         || jsonb_build_object('senha_redefinida_em', 1, 'senha_redefinida_sessao', id::text)
+         || jsonb_build_object('senha_redefinida_em', 1, 'senha_redefinida_sessao', id::text,
+                               'senha_comprovada', md5(coalesce(encrypted_password, '')))
    where email like '%@concorre.test';
   insert into auth.sessions (id, user_id, created_at) select id, id, now() from auth.users where email like '%@concorre.test';
   insert into auth.sessions (id, user_id) values ('e7d00000-0000-4000-8000-0000000006e0', 'e7d00000-0000-4000-8000-0000000000e0');

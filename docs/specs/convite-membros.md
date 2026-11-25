@@ -264,7 +264,11 @@ conta, e o vínculo só vale para tokens emitidos depois dele
 comparado com o `iat` inteiro do JWT): o front renova a sessão a partir desse
 segundo e, se o token novo ainda vier com `iat` menor, renova de novo.
 Isso protege contas criadas enquanto a confirmação de e-mail estava
-desligada (a senha antiga pode estar com outra pessoa). A
+desligada (a senha antiga pode estar com outra pessoa). A `concluir-senha` grava a
+prova chamando `marcar_senha_comprovada_interna(user_id, session_id)`, que
+guarda também o hash da senha comprovada: o vínculo aceito por convite só
+vale enquanto a senha atual for essa, e uma troca fora desse fluxo suspende o
+acesso da equipe até uma nova prova. A
 `criar_convite_interna` recebe o `iat` do token que a Edge Function conferiu.
 
 `app_metadata` só é gravado com `service_role`, então o usuário não

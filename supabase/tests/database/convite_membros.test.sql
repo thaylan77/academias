@@ -4,7 +4,7 @@
 -- Academias A e B (ativas) e S (suspensa).
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(124);
+select plan(127);
 
 -- ---------------------------------------------------------------------
 -- Auxiliares
@@ -159,13 +159,17 @@ insert into auth.users (id, email, email_confirmed_at, raw_app_meta_data) values
   ('e7c00000-0000-4000-8000-0000000000dd', 'semsenha@conv.test',   now(), '{}'),
   ('e7c00000-0000-4000-8000-0000000000de', 'outrasessao@conv.test', now(), '{}'),
   ('e7c00000-0000-4000-8000-0000000000df', 'semsessao@conv.test',  now(), '{}'),
+  ('e7c00000-0000-4000-8000-0000000000e2', 'trocou@conv.test',     now(), '{}'),
   ('e7c00000-0000-4000-8000-0000000000e1', 'totem-a@conv.test',    now(), '{}');
 
 -- Senha nova já definida pela Edge Function concluir-senha (o aceite exige),
 -- menos para semsenha.
 update auth.users set raw_app_meta_data = raw_app_meta_data
-       || jsonb_build_object('senha_redefinida_em', 1, 'senha_redefinida_sessao', id::text)
+       || jsonb_build_object('senha_redefinida_em', 1, 'senha_redefinida_sessao', id::text,
+                             'senha_comprovada', md5(coalesce(encrypted_password, '')))
  where email like '%@conv.test' and email <> 'semsenha@conv.test';
+-- trocou mudou a senha depois da prova, fora do fluxo do convite.
+update auth.users set encrypted_password = 'senha-trocada-fora-do-fluxo' where email = 'trocou@conv.test';
 -- A troca de senha de outrasessao foi feita em outra sessão.
 update auth.users set raw_app_meta_data = raw_app_meta_data
        || '{"senha_redefinida_sessao": "e7c00000-0000-4000-8000-0000000005ff"}'
@@ -507,6 +511,7 @@ select public.__cc('e7c00000-0000-4000-8000-0000000000a1', 'e7c00000-0000-4000-8
 select public.__cc('e7c00000-0000-4000-8000-0000000000a1', 'e7c00000-0000-4000-8000-00000000000a', 'semsenha@conv.test', 'professor');
 select public.__cc('e7c00000-0000-4000-8000-0000000000a1', 'e7c00000-0000-4000-8000-00000000000a', 'outrasessao@conv.test', 'professor');
 select public.__cc('e7c00000-0000-4000-8000-0000000000a1', 'e7c00000-0000-4000-8000-00000000000a', 'semsessao@conv.test', 'professor');
+select public.__cc('e7c00000-0000-4000-8000-0000000000a1', 'e7c00000-0000-4000-8000-00000000000a', 'trocou@conv.test', 'professor');
 select public.__cc('e7c00000-0000-4000-8000-0000000000a2', 'e7c00000-0000-4000-8000-00000000000a', 'inativo-a@conv.test','professor');
 select public.__cc('e7c00000-0000-4000-8000-0000000000a2', 'e7c00000-0000-4000-8000-00000000000a', 'inativo2-a@conv.test','recepcao');
 select public.__cc('e7c00000-0000-4000-8000-0000000000a1', 'e7c00000-0000-4000-8000-00000000000a', 'vencido@conv.test',  'professor');
@@ -595,6 +600,9 @@ select is(public.__hint_de(format('select public.aceitar_convite(%L)', (public._
 select public.__como('e7c00000-0000-4000-8000-0000000000df');
 select is(public.__hint_de(format('select public.aceitar_convite(%L)', (public.__conv('e7c00000-0000-4000-8000-00000000000a', 'semsessao@conv.test')).id)),
   'convite_exige_link', 'token de sessão revogada não aceita');
+select public.__como('e7c00000-0000-4000-8000-0000000000e2');
+select is(public.__hint_de(format('select public.aceitar_convite(%L)', (public.__conv('e7c00000-0000-4000-8000-00000000000a', 'trocou@conv.test')).id)),
+  'senha_pendente', 'senha trocada depois da prova, fora do fluxo, não serve para aceitar');
 select is((select count(*) from public.meus_convites()), 0::bigint, 'token de sessão revogada não lista convites');
 select is(public.__hint_de(format('select public.recusar_convite(%L)', (public.__conv('e7c00000-0000-4000-8000-00000000000a', 'semsessao@conv.test')).id)),
   'convite_exige_link', 'token de sessão revogada não recusa');
@@ -650,6 +658,24 @@ select public.__como_token('e7c00000-0000-4000-8000-0000000000d1',
   'e7c00000-0000-4000-8000-0000000005a4');
 select ok((select count(*) from public.equipe_da_academia('e7c00000-0000-4000-8000-00000000000a')) > 0,
   'sessão criada a partir do marco usa o vínculo');
+-- Uma troca de senha fora do fluxo do convite (por exemplo, autorizada por
+-- uma sessão antiga e gravada depois do aceite) suspende o vínculo até uma
+-- nova prova (marcar_senha_comprovada_interna, chamada pela concluir-senha).
+reset role;
+update auth.users set encrypted_password = 'senha-de-outra-pessoa' where id = 'e7c00000-0000-4000-8000-0000000000d1';
+set local role authenticated;
+select public.__como('e7c00000-0000-4000-8000-0000000000d1');
+select is(public.__hint_de($$select * from public.equipe_da_academia('e7c00000-0000-4000-8000-00000000000a')$$),
+  'sem_permissao', 'senha trocada fora do fluxo suspende o vínculo aceito');
+reset role;
+set local role service_role;
+select public.__como_servico();
+select public.marcar_senha_comprovada_interna('e7c00000-0000-4000-8000-0000000000d1', 'e7c00000-0000-4000-8000-0000000000d1');
+reset role;
+set local role authenticated;
+select public.__como('e7c00000-0000-4000-8000-0000000000d1');
+select ok((select count(*) from public.equipe_da_academia('e7c00000-0000-4000-8000-00000000000a')) > 0,
+  'depois de uma nova prova da senha, o vínculo volta');
 select public.__como('e7c00000-0000-4000-8000-0000000000d1');
 select ok((select count(*) from public.equipe_da_academia('e7c00000-0000-4000-8000-00000000000a')) > 0,
   'token novo, depois do aceite, usa o vínculo');
