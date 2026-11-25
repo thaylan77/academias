@@ -674,8 +674,8 @@ select public.__como_servico();
 reset role;
 update auth.users set recovery_token = 'token-de-recuperacao-antigo', email_change_token_new = 'token-troca-antigo'
  where id = 'e7c00000-0000-4000-8000-0000000000d1';
-insert into auth.one_time_tokens (user_id, token_type, token_hash, relates_to)
-  values ('e7c00000-0000-4000-8000-0000000000d1', 'recovery_token', 'hash-antigo-de-recuperacao', 'conf@conv.test');
+insert into auth.one_time_tokens (id, user_id, token_type, token_hash, relates_to)
+  values (gen_random_uuid(), 'e7c00000-0000-4000-8000-0000000000d1', 'recovery_token', 'hash-antigo-de-recuperacao', 'conf@conv.test');
 set local role service_role;
 select public.__como_servico();
 select public.definir_senha_comprovada_interna('e7c00000-0000-4000-8000-0000000000d1', 'e7c00000-0000-4000-8000-0000000000d1', 'senha-nova-do-convite');
