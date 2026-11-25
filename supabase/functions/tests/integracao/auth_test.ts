@@ -274,3 +274,47 @@ Deno.test({
     assertEquals(login.error, null, "a senha definida pela concluir-senha vale no login");
   },
 });
+
+Deno.test({
+  name: "duas academias convidam a mesma conta não confirmada: o segundo envio é suprimido e o primeiro link vale",
+  ignore: !ativo,
+  async fn() {
+    const a = await prepararDono("acad-a");
+    const b = await prepararDono("acad-b");
+    const deps = depsConvidar(a.c, "http://127.0.0.1:3000");
+    const ocupado = email("disputado");
+    const squat = await a.c.servico.auth.admin.createUser({
+      email: ocupado,
+      email_confirm: false,
+      password: "senha-do-intruso-2",
+    });
+    if (squat.error) throw squat.error;
+
+    async function convidar(token: string, academiaId: string) {
+      const r = await convidarMembro(
+        pedido(token, { academia_id: academiaId, email: ocupado, papel: "professor" }),
+        deps,
+      );
+      return await r.json();
+    }
+    const r1 = await convidar(a.token, a.academiaId);
+    assertEquals(r1.email_enviado, true, JSON.stringify(r1));
+    const primeiro = await emailsPara(ocupado);
+    assertEquals(primeiro.length, 1);
+
+    // Dentro do intervalo de 60 s do endereço: a segunda academia grava o
+    // convite sem envio, e a resposta é a mesma de um envio.
+    const r2 = await convidar(b.token, b.academiaId);
+    assertEquals(r2.email_enviado, true, JSON.stringify(r2));
+    await new Promise((ok) => setTimeout(ok, 1000));
+    assertEquals((await emailsPara(ocupado)).length, 1, "o segundo envio foi suprimido");
+
+    // O link do primeiro e-mail, aberto depois do segundo pedido, ainda vale.
+    const achado = primeiro[0].replace(/&amp;/g, "&").match(/https?:\/\/[^\s"'<>]+\/auth\/v1\/verify\?[^\s"'<>]+/);
+    assert(achado, "o e-mail traz o link de verificação");
+    const abre = await fetch(achado[0], { redirect: "manual" });
+    await abre.body?.cancel();
+    const destino = abre.headers.get("Location") ?? "";
+    assert(destino.includes("access_token="), `o primeiro link abre a sessão (${destino.replace(/#.*/, "#...")})`);
+  },
+});

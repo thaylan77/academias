@@ -32,8 +32,13 @@ begin
     return false;
   end if;
 
-  -- Já neutralizada e intacta: nada a fazer.
-  if v_meta ->> 'neutralizada' = md5(coalesce(v_hash, '')) then
+  -- Já neutralizada e intacta: nada a fazer. "Intacta" inclui a senha
+  -- vazia: o Auth limpa a senha de uma conta não confirmada ao emitir o link
+  -- de confirmação, e esse link (de uma academia) não pode cair por causa do
+  -- convite de outra. Uma senha diferente (alguém definiu outra) neutraliza
+  -- de novo.
+  if v_meta ? 'neutralizada'
+     and (coalesce(v_hash, '') = '' or v_meta ->> 'neutralizada' = md5(v_hash)) then
     return true;
   end if;
 
