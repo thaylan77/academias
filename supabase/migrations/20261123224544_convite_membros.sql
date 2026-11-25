@@ -214,6 +214,11 @@ begin
     raise exception 'A senha precisa ter de 8 a 72 caracteres.'
       using hint = 'dados_invalidos';
   end if;
+  -- Os vínculos aceitos por convite antes da conta, na mesma ordem do aceite
+  -- (vínculo, academia, conta).
+  perform 1 from public.membros_academia m
+   where m.user_id = p_user_id and m.vale_a_partir is not null
+     for update;
   select u.encrypted_password into v_atual from auth.users u where u.id = p_user_id for update;
   perform 1 from auth.sessions s where s.id = p_sessao and s.user_id = p_user_id for share;
   if not found then
@@ -916,6 +921,14 @@ begin
   where c.id = p_convite_id and c.email = v_email and c.status = 'pendente';
 
   if v_academia is not null then
+    -- No aceite, o vínculo que já existe é travado antes da academia: é a
+    -- ordem de um update direto do vínculo (o gatilho trava a academia depois
+    -- da linha), e as duas transações não se travam em ordem inversa.
+    if p_exige_senha then
+      perform 1 from public.membros_academia m
+       where m.academia_id = v_academia and m.user_id = auth.uid()
+         for update;
+    end if;
     perform 1 from public.academias a where a.id = v_academia for no key update;
     select c.* into v_conv from public.convites_equipe c where c.id = p_convite_id for update;
     -- Trava a própria conta (uma troca de e-mail no Auth espera o aceite) e

@@ -45,6 +45,9 @@
 --   AA. o outro dono, que entrou por convite, troca a senha fora do fluxo
 --      enquanto um dono sai: a saída espera a troca, relê a prova e é
 --      recusada (ultimo_dono).
+--   AB. o aceite de quem já tem um vínculo inativo e uma edição direta desse
+--      vínculo pela secretaria, com a academia travada por uma terceira
+--      transação: as duas terminam, sem deadlock.
 -- A espera é provada pelo pid: s2 está bloqueada e s1 está entre os que a
 -- bloqueiam. As fixtures são gravadas e confirmadas por uma conexão própria,
 -- apagadas antes (se uma execução anterior parou no meio) e depois, pela
@@ -52,7 +55,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 create extension if not exists dblink with schema extensions;
-select plan(104);
+select plan(108);
 
 create function pg_temp.conexao(p_nome text) returns text language sql as $$
   select format('host=%s port=%s dbname=%s user=postgres password=postgres application_name=%s',
@@ -147,6 +150,7 @@ begin
       'e7d00000-0000-4000-8000-0000000000dd', 'e7d00000-0000-4000-8000-0000000000de',
       'e7d00000-0000-4000-8000-0000000000df', 'e7d00000-0000-4000-8000-0000000000e0',
       'e7d00000-0000-4000-8000-0000000000e1', 'e7d00000-0000-4000-8000-0000000000be',
+      'e7d00000-0000-4000-8000-0000000000e2',
       'e7d00000-0000-4000-8000-0000000000d1', 'e7d00000-0000-4000-8000-0000000000d2');
   $f$);
 end
@@ -192,7 +196,8 @@ select extensions.dblink_exec('prep', $f$
     ('e7d00000-0000-4000-8000-0000000000df', 'u14@concorre.test',   now()),
     ('e7d00000-0000-4000-8000-0000000000e0', 'u15@concorre.test',   now()),
     ('e7d00000-0000-4000-8000-0000000000e1', 'u16@concorre.test',   now()),
-    ('e7d00000-0000-4000-8000-0000000000be', 'admin14@concorre.test', now());
+    ('e7d00000-0000-4000-8000-0000000000be', 'admin14@concorre.test', now()),
+    ('e7d00000-0000-4000-8000-0000000000e2', 'u17@concorre.test',   now());
   -- Senha nova já definida (concluir-senha), como pede o aceite.
   -- Cada usuário com uma sessão (id = o próprio id do usuário, como o
   -- session_id que pg_temp.como põe no JWT) e a senha nova definida nela.
@@ -225,7 +230,8 @@ select extensions.dblink_exec('prep', $f$
     ('e7d00000-0000-4000-8000-00000000000e', 'e7d00000-0000-4000-8000-0000000000bc', 'dono'),
     ('e7d00000-0000-4000-8000-00000000000e', 'e7d00000-0000-4000-8000-0000000000bd', 'dono'),
     ('e7d00000-0000-4000-8000-00000000000e', 'e7d00000-0000-4000-8000-0000000000dd', 'professor'),
-    ('e7d00000-0000-4000-8000-00000000000e', 'e7d00000-0000-4000-8000-0000000000be', 'admin');
+    ('e7d00000-0000-4000-8000-00000000000e', 'e7d00000-0000-4000-8000-0000000000be', 'admin'),
+    ('e7d00000-0000-4000-8000-00000000000e', 'e7d00000-0000-4000-8000-0000000000e2', 'professor');
   insert into public.convites_equipe (id, academia_id, email, papel, convidado_por, expira_em) values
     ('e7d00000-0000-4000-8000-0000000002c1', 'e7d00000-0000-4000-8000-00000000000a', 'u1@concorre.test', 'professor',
      'e7d00000-0000-4000-8000-0000000000a1', now() + interval '7 days'),
@@ -266,6 +272,8 @@ select extensions.dblink_exec('prep', $f$
     ('e7d00000-0000-4000-8000-0000000002d1', 'e7d00000-0000-4000-8000-00000000000e', 'u15@concorre.test', 'professor',
      'e7d00000-0000-4000-8000-0000000000bd', now() + interval '7 days'),
     ('e7d00000-0000-4000-8000-0000000002d2', 'e7d00000-0000-4000-8000-00000000000e', 'u16@concorre.test', 'professor',
+     'e7d00000-0000-4000-8000-0000000000bd', now() + interval '7 days'),
+    ('e7d00000-0000-4000-8000-0000000002d3', 'e7d00000-0000-4000-8000-00000000000e', 'u17@concorre.test', 'admin',
      'e7d00000-0000-4000-8000-0000000000bd', now() + interval '7 days');
 $f$);
 
@@ -764,6 +772,46 @@ select is(extensions.dblink_send_query('s2', $$delete from public.membros_academ
 select ok(pg_temp.s2_espera_s1(), 'AA: a saída espera a troca de senha do outro dono');
 select extensions.dblink_exec('s1', 'commit');
 select matches(pg_temp.resultado_s2(), 'HINT: +ultimo_dono', 'AA: com a prova do outro dono invalidada, a saída é recusada');
+
+-- ---------------------------------------------------------------------
+-- AB. u17 tem um vínculo inativo em O e um convite de admin. x3 trava a
+--     academia; u17 aceita em s2; bd reativa o vínculo dele em s1; x3
+--     confirma. Nenhuma das duas sai com deadlock.
+-- ---------------------------------------------------------------------
+select extensions.dblink_exec('prep', $$update public.membros_academia set ativo = false
+  where academia_id = 'e7d00000-0000-4000-8000-00000000000e' and user_id = 'e7d00000-0000-4000-8000-0000000000e2'$$);
+select extensions.dblink_connect('x3', pg_temp.conexao('teste_convite_x3'));
+create function pg_temp.espera_lock(p_pid int) returns boolean language plpgsql as $$
+begin
+  for i in 1..100 loop
+    perform pg_stat_clear_snapshot();
+    if exists (select 1 from pg_stat_activity
+               where pid = p_pid and state = 'active' and wait_event_type = 'Lock') then
+      return true;
+    end if;
+    perform pg_sleep(0.1);
+  end loop;
+  return false;
+end
+$$;
+select pg_temp.como('s2', 'e7d00000-0000-4000-8000-0000000000e2');
+select pg_temp.como('s1', 'e7d00000-0000-4000-8000-0000000000bd');
+select extensions.dblink_exec('x3', 'begin');
+select extensions.dblink_exec('x3', $$update public.academias set updated_at = updated_at where id = 'e7d00000-0000-4000-8000-00000000000e'$$);
+select extensions.dblink_send_query('s2', $$select public.aceitar_convite('e7d00000-0000-4000-8000-0000000002d3')$$);
+select ok(pg_temp.espera_lock((select s2 from pids)), 'AB: o aceite espera a academia');
+select extensions.dblink_exec('s1', 'begin');
+select extensions.dblink_send_query('s1', $$update public.membros_academia set ativo = true
+  where academia_id = 'e7d00000-0000-4000-8000-00000000000e' and user_id = 'e7d00000-0000-4000-8000-0000000000e2'$$);
+select ok(pg_temp.espera_lock((select s1 from pids)), 'AB: a edição direta espera');
+select extensions.dblink_exec('x3', 'commit');
+select is(pg_temp.resultado('s2') || '/' || pg_temp.resultado('s1'), 'ok/ok', 'AB: aceite e edição terminam, sem deadlock');
+select extensions.dblink_exec('s1', 'commit');
+select extensions.dblink_disconnect('x3');
+select is((select papel || '/' || ativo::text from public.membros_academia
+           where academia_id = 'e7d00000-0000-4000-8000-00000000000e' and user_id = 'e7d00000-0000-4000-8000-0000000000e2')
+          || '/' || (select status from public.convites_equipe where id = 'e7d00000-0000-4000-8000-0000000002d3'),
+  'admin/true/aceito', 'AB: o convite foi aceito e o vínculo ficou admin ativo');
 
 -- ---------------------------------------------------------------------
 -- Limpeza.
