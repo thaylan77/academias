@@ -811,30 +811,6 @@ select is((select status from public.convites_equipe where id = 'e7d00000-0000-4
   'pendente', 'AD: o convite vencido continua pendente, sem resposta gravada');
 
 -- ---------------------------------------------------------------------
--- AE. bc (dono de O por convite) com a prova de senha válida; s1 troca a
---     senha dele sem confirmar; bc altera o professor u12 em s2;
---     s1 confirma.
--- ---------------------------------------------------------------------
-select extensions.dblink_exec('prep', $$update auth.users
-   set raw_app_meta_data = raw_app_meta_data || jsonb_build_object('senha_comprovada', md5(coalesce(encrypted_password, '')))
- where id = 'e7d00000-0000-4000-8000-0000000000bc'$$);
-select pg_temp.como('s2', 'e7d00000-0000-4000-8000-0000000000bc');
-select extensions.dblink_exec('s1', 'reset role');
-select extensions.dblink_exec('s1', $q$set request.jwt.claim.sub = ''; set request.jwt.claim.role = ''; set request.jwt.claims = ''$q$);
-select extensions.dblink_exec('s1', 'begin');
-select extensions.dblink_exec('s1', $$update auth.users set encrypted_password = 'trocada-de-novo'
-  where id = 'e7d00000-0000-4000-8000-0000000000bc'$$);
-select is(extensions.dblink_send_query('s2', $$update public.membros_academia set papel = 'recepcao'
-  where academia_id = 'e7d00000-0000-4000-8000-00000000000e' and user_id = 'e7d00000-0000-4000-8000-0000000000dd'$$),
-  1, 'AE: s2 envia a alteração do professor');
-select ok(pg_temp.s2_espera_s1(), 'AE: a alteração espera a troca de senha do autor');
-select extensions.dblink_exec('s1', 'commit');
-select matches(pg_temp.resultado_s2(), 'HINT: +sem_permissao', 'AE: com a prova do autor invalidada, a alteração é recusada');
-select is((select papel from public.membros_academia
-            where academia_id = 'e7d00000-0000-4000-8000-00000000000e' and user_id = 'e7d00000-0000-4000-8000-0000000000dd'),
-  'professor', 'AE: o professor continua professor');
-
--- ---------------------------------------------------------------------
 -- AA. bc (dono de O, desativado em U) volta ativo, como vínculo aceito por
 --     convite; s1 troca a senha dele sem confirmar; bd sai em s2; s1 confirma.
 -- ---------------------------------------------------------------------
@@ -890,6 +866,30 @@ select is((select papel || '/' || ativo::text from public.membros_academia
            where academia_id = 'e7d00000-0000-4000-8000-00000000000e' and user_id = 'e7d00000-0000-4000-8000-0000000000e2')
           || '/' || (select status from public.convites_equipe where id = 'e7d00000-0000-4000-8000-0000000002d3'),
   'admin/true/aceito', 'AB: o convite foi aceito e o vínculo ficou admin ativo');
+
+-- ---------------------------------------------------------------------
+-- AE. bc (dono de O por convite) com a prova de senha válida; s1 troca a
+--     senha dele sem confirmar; bc altera o professor u12 em s2;
+--     s1 confirma.
+-- ---------------------------------------------------------------------
+select extensions.dblink_exec('prep', $$update auth.users
+   set raw_app_meta_data = raw_app_meta_data || jsonb_build_object('senha_comprovada', md5(coalesce(encrypted_password, '')))
+ where id = 'e7d00000-0000-4000-8000-0000000000bc'$$);
+select pg_temp.como('s2', 'e7d00000-0000-4000-8000-0000000000bc');
+select extensions.dblink_exec('s1', 'reset role');
+select extensions.dblink_exec('s1', $q$set request.jwt.claim.sub = ''; set request.jwt.claim.role = ''; set request.jwt.claims = ''$q$);
+select extensions.dblink_exec('s1', 'begin');
+select extensions.dblink_exec('s1', $$update auth.users set encrypted_password = 'trocada-de-novo'
+  where id = 'e7d00000-0000-4000-8000-0000000000bc'$$);
+select is(extensions.dblink_send_query('s2', $$update public.membros_academia set papel = 'recepcao'
+  where academia_id = 'e7d00000-0000-4000-8000-00000000000e' and user_id = 'e7d00000-0000-4000-8000-0000000000dd'$$),
+  1, 'AE: s2 envia a alteração do professor');
+select ok(pg_temp.s2_espera_s1(), 'AE: a alteração espera a troca de senha do autor');
+select extensions.dblink_exec('s1', 'commit');
+select matches(pg_temp.resultado_s2(), 'HINT: +sem_permissao', 'AE: com a prova do autor invalidada, a alteração é recusada');
+select is((select papel from public.membros_academia
+            where academia_id = 'e7d00000-0000-4000-8000-00000000000e' and user_id = 'e7d00000-0000-4000-8000-0000000000dd'),
+  'professor', 'AE: o professor continua professor');
 
 -- ---------------------------------------------------------------------
 -- Limpeza.
