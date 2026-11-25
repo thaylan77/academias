@@ -241,14 +241,22 @@ begin
 
   -- Custo 10, o mesmo do Auth (o padrão do gen_salt('bf') é 6).
   v_hash := extensions.crypt(p_senha, extensions.gen_salt('bf', 10));
+  -- Como a troca de senha do Auth: tokens de uso único emitidos antes
+  -- (recuperação, troca de e-mail, reautenticação) deixam de valer.
   update auth.users u
      set encrypted_password = v_hash,
+         recovery_token = '',
+         recovery_sent_at = null,
+         reauthentication_token = '',
+         email_change_token_new = '',
+         email_change_token_current = '',
          raw_app_meta_data = (coalesce(u.raw_app_meta_data, '{}'::jsonb)
            || jsonb_build_object('senha_redefinida_em', floor(extract(epoch from clock_timestamp()))::bigint,
                                  'senha_redefinida_sessao', p_sessao::text,
                                  'senha_comprovada', md5(v_hash)))
            - 'definir_senha'
    where u.id = p_user_id;
+  delete from auth.one_time_tokens o where o.user_id = p_user_id;
 end
 $$;
 
