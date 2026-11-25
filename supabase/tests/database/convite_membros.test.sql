@@ -4,7 +4,7 @@
 -- Academias A e B (ativas) e S (suspensa).
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(150);
+select plan(151);
 
 -- ---------------------------------------------------------------------
 -- Auxiliares
@@ -1070,6 +1070,11 @@ set local role authenticated;
 select public.__como('e7c00000-0000-4000-8000-0000000000df');
 select is(public.__hint_de(format('select public.cancelar_convite(%L)', (public.__conv('e7c00000-0000-4000-8000-00000000000a', 'convidadodele@conv.test')).id)),
   'convite_invalido', 'token de sessão revogada não cancela convite, mesmo com vínculo anterior ao convite');
+select is(public.__hint_de($$update public.membros_academia set ativo = false
+                             where academia_id = 'e7c00000-0000-4000-8000-00000000000a' and user_id = 'e7c00000-0000-4000-8000-0000000000a3'$$)
+          || '/' || public.__hint_de($$delete from public.membros_academia
+                             where academia_id = 'e7c00000-0000-4000-8000-00000000000a' and user_id = 'e7c00000-0000-4000-8000-0000000000a3'$$),
+  'sem_permissao/sem_permissao', 'token de sessão revogada não altera nem remove membros, mesmo com vínculo anterior ao convite');
 reset role;
 set local role service_role;
 select public.__como_servico();

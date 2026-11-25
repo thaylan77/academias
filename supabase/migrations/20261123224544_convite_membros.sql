@@ -1438,6 +1438,14 @@ begin
       using errcode = '42501', hint = 'sem_permissao';
   end if;
   perform 1 from public.academias a where a.id = p_academia_id for no key update;
+  -- A sessão do token, viva, travada até o fim, para todo vínculo (inclusive
+  -- os anteriores ao convite): uma sessão apagada no Auth não altera a equipe,
+  -- e uma revogação concorrente espera esta alteração.
+  perform 1 from auth.sessions s where s.id = public.jwt_sessao() and s.user_id = auth.uid() for share;
+  if not found then
+    raise exception 'Você não tem mais permissão para alterar esta equipe.'
+      using errcode = '42501', hint = 'sem_permissao';
+  end if;
   v_papel := public.convite_papel_ativo_sessao(p_academia_id);
   if v_papel is null
      or ((p_papel_antes = 'dono' or p_papel_depois = 'dono') and v_papel <> 'dono') then
