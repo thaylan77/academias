@@ -4,7 +4,7 @@
 -- Academias A e B (ativas) e S (suspensa).
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(143);
+select plan(144);
 
 -- ---------------------------------------------------------------------
 -- Auxiliares
@@ -542,13 +542,30 @@ select is((select string_agg(email || ':' || papel || case when ativo then '' el
 -- outra academia: aparece, mas sem o e-mail.
 reset role;
 insert into public.membros_academia (academia_id, user_id, papel, verificado) values
-  ('e7c00000-0000-4000-8000-00000000000a', 'e7c00000-0000-4000-8000-0000000000b1', 'professor', false);
+  ('e7c00000-0000-4000-8000-00000000000a', 'e7c00000-0000-4000-8000-0000000000b1', 'professor', false),
+  ('e7c00000-0000-4000-8000-00000000000a', 'e7c00000-0000-4000-8000-0000000000b2', 'professor', false);
 set local role authenticated;
 select public.__como('e7c00000-0000-4000-8000-0000000000a2');
 select is((select coalesce(email, '(sem e-mail)') || ':' || papel
              from public.equipe_da_academia('e7c00000-0000-4000-8000-00000000000a')
             where user_id = 'e7c00000-0000-4000-8000-0000000000b1'),
   '(sem e-mail):professor', 'vínculo anterior ao convite, sem o aceite da conta, não revela o e-mail');
+create temp table __ordem_antes on commit drop as
+  select string_agg(user_id::text, ',' order by ord) as o
+    from (select user_id, row_number() over () as ord
+            from public.equipe_da_academia('e7c00000-0000-4000-8000-00000000000a')) q;
+reset role;
+update auth.users set email = 'aaaa-trocado@conv.test' where id = 'e7c00000-0000-4000-8000-0000000000b1';
+set local role authenticated;
+select public.__como('e7c00000-0000-4000-8000-0000000000a2');
+select is((select string_agg(user_id::text, ',' order by ord)
+             from (select user_id, row_number() over () as ord
+                     from public.equipe_da_academia('e7c00000-0000-4000-8000-00000000000a')) q),
+  (select o from __ordem_antes), 'a ordem da listagem não muda com o e-mail oculto de um vínculo não verificado');
+reset role;
+update auth.users set email = 'dono-b@conv.test' where id = 'e7c00000-0000-4000-8000-0000000000b1';
+set local role authenticated;
+select public.__como('e7c00000-0000-4000-8000-0000000000a2');
 reset role;
 set local role service_role;
 select public.__como_servico();
@@ -558,7 +575,8 @@ select is(public.__passa_e_desfaz($$select public.__cc('e7c00000-0000-4000-8000-
 reset role;
 select public.__sem_jwt();
 delete from public.membros_academia
- where academia_id = 'e7c00000-0000-4000-8000-00000000000a' and user_id = 'e7c00000-0000-4000-8000-0000000000b1';
+ where academia_id = 'e7c00000-0000-4000-8000-00000000000a'
+   and user_id in ('e7c00000-0000-4000-8000-0000000000b1', 'e7c00000-0000-4000-8000-0000000000b2');
 set local role authenticated;
 select public.__como('e7c00000-0000-4000-8000-0000000000a2');
 select is(public.__hint_de($$select * from public.equipe_da_academia('e7c00000-0000-4000-8000-00000000000b')$$),

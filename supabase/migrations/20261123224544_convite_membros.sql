@@ -1169,7 +1169,11 @@ begin
   join auth.users u on u.id = m.user_id
   where m.academia_id = p_academia_id
     and m.papel in ('dono', 'admin', 'professor', 'recepcao', 'totem')
-  order by m.ativo desc, m.papel, m.verificado desc, u.email;
+  -- Ordena pelo mesmo e-mail que devolve (o oculto fica nulo) e desempata
+  -- pelo user_id: a ordem não revela o endereço de um vínculo não verificado.
+  order by m.ativo desc, m.papel, m.verificado desc,
+           case when m.verificado or m.user_id = auth.uid() then u.email::text end nulls last,
+           m.user_id;
 end
 $$;
 
