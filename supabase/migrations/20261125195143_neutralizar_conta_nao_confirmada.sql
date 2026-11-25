@@ -32,13 +32,27 @@ begin
     return false;
   end if;
 
-  -- Já neutralizada e intacta: nada a fazer. "Intacta" inclui a senha
-  -- vazia: o Auth limpa a senha de uma conta não confirmada ao emitir o link
-  -- de confirmação, e esse link (de uma academia) não pode cair por causa do
-  -- convite de outra. Uma senha diferente (alguém definiu outra) neutraliza
-  -- de novo.
-  if v_meta ? 'neutralizada'
-     and (coalesce(v_hash, '') = '' or v_meta ->> 'neutralizada' = md5(v_hash)) then
+  -- Sem senha, não há credencial de quem criou a conta para derrubar: é a
+  -- conta criada agora pelo convite do Auth (o link do convite está nos
+  -- tokens dela) ou uma cuja senha o Auth limpou ao emitir o link de
+  -- confirmação. Os tokens são o link já entregue por alguma academia e não
+  -- podem cair pelo convite de outra: só marca definir_senha (se a senha
+  -- nova ainda não foi gravada).
+  if coalesce(v_hash, '') = '' then
+    update auth.users u
+       set raw_app_meta_data = coalesce(u.raw_app_meta_data, '{}'::jsonb) || jsonb_build_object('definir_senha', true)
+     where u.id = p_user_id
+       and not (coalesce(u.raw_app_meta_data, '{}'::jsonb) ? 'senha_comprovada');
+    -- Sessões não fazem parte do link; uma conta não confirmada não deveria
+    -- ter nenhuma, e se tiver, cai.
+    delete from auth.sessions s where s.user_id = p_user_id;
+    return true;
+  end if;
+
+  -- Já neutralizada e intacta (ninguém trocou a senha aleatória): nada a
+  -- fazer, e o link emitido depois continua valendo. Uma senha diferente
+  -- neutraliza de novo.
+  if v_meta ->> 'neutralizada' = md5(v_hash) then
     return true;
   end if;
 

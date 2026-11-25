@@ -2,7 +2,7 @@
 -- 4.4): só age em conta com o e-mail não confirmado, com a conta travada.
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(14);
+select plan(16);
 
 insert into auth.users (id, email, email_confirmed_at, encrypted_password, raw_app_meta_data, recovery_token) values
   ('e7e00000-0000-4000-8000-0000000000a1', 'intruso@neutraliza.test', null,
@@ -86,6 +86,20 @@ select is((select string_agg(coalesce(raw_app_meta_data ->> 'definir_senha', '-'
   '-,true', 'a marca só fica na conta que ainda não gravou a senha nova');
 select ok(not has_function_privilege('authenticated', 'public.marcar_definir_senha_interna(uuid)', 'EXECUTE'),
   'marcar_definir_senha_interna só para service_role');
+
+-- Conta criada agora pelo convite do Auth (sem senha, com o link nos tokens):
+-- o convite de outra academia não apaga o link, só marca definir_senha.
+insert into auth.users (id, email, email_confirmed_at, encrypted_password, raw_app_meta_data, recovery_token) values
+  ('e7e00000-0000-4000-8000-0000000000a5', 'convidada@neutraliza.test', null, '', '{}', '');
+insert into auth.one_time_tokens (id, user_id, token_type, token_hash, relates_to) values
+  (gen_random_uuid(), 'e7e00000-0000-4000-8000-0000000000a5', 'confirmation_token', 'link-do-convite', 'convidada@neutraliza.test');
+set local role service_role;
+select is(public.neutralizar_conta_nao_confirmada_interna('e7e00000-0000-4000-8000-0000000000a5'), true,
+  'conta sem senha criada pelo convite: devolve true');
+reset role;
+select is((select (raw_app_meta_data ->> 'definir_senha') || '/' || (select count(*) from auth.one_time_tokens o where o.user_id = u.id)::text
+             from auth.users u where id = 'e7e00000-0000-4000-8000-0000000000a5'),
+  'true/1', 'o link do convite da conta nova continua valendo, e ela fica marcada para definir senha');
 
 select * from finish();
 rollback;

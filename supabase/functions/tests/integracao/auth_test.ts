@@ -355,3 +355,41 @@ Deno.test({
     assert(destino.includes("access_token="), `o primeiro link abre a sessão (${destino.replace(/#.*/, "#...")})`);
   },
 });
+
+Deno.test({
+  name: "endereço sem conta: o convite da segunda academia, suprimido, não invalida o link do primeiro",
+  ignore: !ativo,
+  async fn() {
+    const a = await prepararDono("nova-a");
+    const b = await prepararDono("nova-b");
+    const novo = email("sem-conta");
+    async function convidar(d: Awaited<ReturnType<typeof prepararDono>>) {
+      const r = await convidarMembro(
+        pedido(d.token, { academia_id: d.academiaId, email: novo, papel: "professor" }),
+        depsConvidar(d.c, "http://127.0.0.1:3000"),
+      );
+      return { status: r.status, corpo: await r.json() };
+    }
+
+    // A primeira academia cria a conta pelo convite do Auth e manda o link.
+    const r1 = await convidar(a);
+    assertEquals(r1.status, 200, JSON.stringify(r1));
+    const primeiro = await emailsPara(novo);
+    assertEquals(primeiro.length, 1);
+
+    // A segunda, dentro do intervalo do endereço: a conta aparece como não
+    // confirmada, o envio é suprimido e a neutralização roda.
+    const r2 = await convidar(b);
+    assertEquals(r2.status, 200, JSON.stringify(r2));
+    await new Promise((ok) => setTimeout(ok, 1000));
+    assertEquals((await emailsPara(novo)).length, 1, "o segundo envio foi suprimido");
+
+    // O link do convite da primeira academia ainda abre a sessão.
+    const achado = primeiro[0].replace(/&amp;/g, "&").match(/https?:\/\/[^\s"'<>]+\/auth\/v1\/verify\?[^\s"'<>]+/);
+    assert(achado, "o e-mail traz o link de verificação");
+    const abre = await fetch(achado[0], { redirect: "manual" });
+    await abre.body?.cancel();
+    const destino = abre.headers.get("Location") ?? "";
+    assert(destino.includes("access_token="), `o link do primeiro convite vale (${destino.replace(/#.*/, "#...")})`);
+  },
+});
