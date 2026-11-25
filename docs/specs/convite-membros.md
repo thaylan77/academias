@@ -49,7 +49,7 @@ Fica de fora:
 | C2 | Validade | 7 dias. Reenviar renova a validade e manda o e-mail de novo. | Curto o bastante para um e-mail esquecido não virar porta aberta. |
 | C3 | Como o convite prova quem aceita | Pelo **e-mail confirmado do login**: aceita quem entrou com o mesmo e-mail do convite (`auth.users.email_confirmed_at` preenchido). O link não carrega token. Na implementação, o aceite também exige que a sessão tenha sido aberta por um link enviado ao e-mail (`amr` do JWT: link mágico, OTP, convite, recuperação ou confirmação de cadastro; `hint = convite_exige_link`), e a confirmação de e-mail fica ligada no Auth (`enable_confirmations`): o e-mail confirmado sozinho não prova a posse se o Auth estiver configurado sem confirmação. | Mesmo critério de `vincular_meu_cadastro_aluno`. Um link encaminhado não serve para outra pessoa, e não há segredo para guardar nem vazar. |
 | C4 | E-mail com conta confirmada | Recebe um link mágico para `/painel/convites`. Ao aceitar, o vínculo vai para a conta que já existe; nenhuma conta nova é criada. | Uma pessoa, um login, várias academias: é o modelo atual do painel. |
-| C5 | E-mail sem conta, ou com conta **não confirmada** | Sem conta: `auth.admin.inviteUserByEmail`. Conta não confirmada: a função troca a senha dela por uma aleatória que ninguém conhece e manda o link mágico. Nos dois casos, a conta é marcada para definir senha (4.4), e o painel pede a senha antes do aceite. | A conta não confirmada pode ter sido criada por outra pessoa, com uma senha que ela conhece (4.4, passo 2). |
+| C5 | E-mail sem conta, ou com conta **não confirmada** | Sem conta: a função cria a conta (sem senha) e segue como a não confirmada (implementação, 4.4). Conta não confirmada: a função troca a senha dela por uma aleatória que ninguém conhece e manda o link mágico. Nos dois casos, a conta é marcada para definir senha (4.4), e o painel pede a senha antes do aceite. | A conta não confirmada pode ter sido criada por outra pessoa, com uma senha que ela conhece (4.4, passo 2). |
 | C6 | Academia suspensa | Não convida, não reenvia, não cancela, não aceita e não recusa (`hint = academia_suspensa`). | "Suspensa lê, mas não altera", sem exceção nova. Um convite parado não abre acesso, porque o aceite também está bloqueado. |
 | C7 | Quem já é da academia | Membro ativo da equipe (papel diferente de `aluno`): o convite é recusado (`ja_membro`), no criar e no aceitar; troca de papel é na seção Equipe. Membro **inativo**: o aceite reativa com o papel do convite. Quem só tem o papel `aluno`: o aceite troca para o papel da equipe, e o acesso de aluno continua (vem de `alunos.user_id`, por `sou_o_aluno`). | A chave `(academia_id, user_id)` só cabe um papel. O de equipe prevalece, como já acontece em `vincular_meu_cadastro_aluno` (`on conflict do nothing`). Sem totem no convite, nenhum aluno vira totem e perde o catálogo. |
 | C8 | Último dono | Gatilho em `membros_academia`: recusa o update ou delete que deixe a academia sem **nenhum dono ativo** (`hint = ultimo_dono`). Vale também para o dono que altera a própria linha. Só passa o `service_role`, ou o delete em cascata de uma academia que está sendo apagada (4.5). | Uma academia sem dono fica sem ninguém que possa alterar outro dono. |
@@ -217,13 +217,24 @@ A entrada é `{ academia_id, email, papel }`, com o JWT de quem convida.
    `criar_convite_interna(user_id do JWT, academia_id, email, papel)`. Se der
    erro, devolve o `hint` ao front e não faz mais nada.
 2. Com `service_role`, segundo a `conta` devolvida:
-   - `nenhuma`: chama `auth.admin.inviteUserByEmail(email, { redirectTo })` e
-     marca `app_metadata.definir_senha = true`;
-   - `nao_confirmada`: chama `auth.admin.updateUserById` com uma senha
-     aleatória de 32 bytes, que ninguém recebe, e marca
-     `app_metadata.definir_senha = true`. Depois manda o link mágico. Isso
-     derruba a senha de quem tenha criado a conta com o e-mail de outra
-     pessoa;
+   - `nenhuma`: cria a conta com `auth.admin.createUser` (sem senha, e-mail
+     não confirmado, sem e-mail enviado) e segue como a `nao_confirmada`. Se
+     alguém se cadastrou com o endereço no meio-tempo, o Auth recusa a
+     criação e a função usa essa conta
+     (`conta_nao_confirmada_por_email_interna`);
+   - `nao_confirmada`: manda o link mágico (`signInWithOtp`), que o próprio
+     Auth emite limpando a senha da conta não confirmada. **Só com o link
+     aceito pelo Auth**, chama `neutralizar_conta_nao_confirmada_interna`,
+     que, com a conta travada e só se o e-mail continuar não confirmado,
+     troca a senha por uma aleatória que ninguém recebe, derruba as sessões
+     e os tokens de uso único (menos o de confirmação do cadastro, que foi
+     para o próprio endereço) e marca `app_metadata.definir_senha = true`.
+     Um convite que não entrega e-mail (envio suprimido, reserva liberada,
+     recusa do Auth) não mexe na conta, que é de todas as academias: a senha
+     de um cadastro legítimo fica (revisão do Codex no PR 84). A
+     neutralização é idempotente (guarda em `app_metadata.neutralizada` o
+     hash da senha que gravou) e, numa conta sem senha, só marca
+     `definir_senha`;
    - `confirmada`: manda o link mágico (`signInWithOtp`,
      `shouldCreateUser: false`).
 
@@ -235,8 +246,10 @@ A entrada é `{ academia_id, email, papel }`, com o JWT de quem convida.
    O `redirectTo` é `SITE_URL + "/painel/convites"`, com `SITE_URL` vindo de
    variável de ambiente da função, nunca do pedido. O e-mail usado é o
    **normalizado**, devolvido pela função interna.
-3. Se o e-mail não sair, o convite fica pendente e a tela mostra "Convite
-   criado, mas o e-mail não saiu. Tente reenviar em um minuto."
+3. Se o e-mail não sair, o convite fica pendente e a falha fica no log da
+   função. A resposta não diz se o e-mail saiu (revisão do Codex no PR 84):
+   a tela mostra "Convite criado. Se o e-mail não chegar em alguns minutos,
+   reenvie."
    Para cada envio liberado (`enviar = true`), o `envio_id` devolvido é
    uma reserva: com o provedor aceitando, a função chama
    `confirmar_envio_convite_interna(envio_id)`, e o intervalo de
@@ -283,6 +296,58 @@ Function, `concluir-senha`: o painel manda a senha nova para ela (não usa
 
 A função não grava em tabela de negócio fora de `criar_convite_interna`. O
 `service_role` serve só para o Auth. O log não leva o e-mail completo.
+
+**Contrato implementado** (`supabase/functions/`, PR 2):
+
+- A resposta sai logo depois de `criar_convite_interna`: a neutralização da
+  conta, o envio e a resolução da reserva rodam depois dela
+  (`EdgeRuntime.waitUntil`), para o tempo de resposta também não revelar a
+  conta nem a cota usada por outra academia. Depois de preparar a conta e
+  logo antes de pedir o link ao Auth, o worker assume a reserva (`assumir_envio_convite_interna`, que grava
+  `convites_envios.tentativa_em`); se ela já foi liberada, não envia. Uma
+  reserva que nenhum worker assumiu em 2 minutos (o worker caiu antes do
+  Auth) é liberada pelo job `liberar-reservas-convite-abandonadas`, a cada
+  minuto. A assumida e sem resultado segura o endereço até o expurgo, porque
+  o e-mail pode ter saído.
+- Resposta de sucesso da `convidar-membro`: `{ convite_id }`, igual para o
+  envio que saiu, o suprimido (`enviar = false`) e o que falhou no Auth. O
+  resultado do Auth revelaria se a conta existe e se outra academia convidou
+  o mesmo endereço; ele fica só no log e no tratamento da reserva. Em todos
+  os casos o convite fica pendente e pode ser reenviado.
+- Erro: `{ erro: <hint> }`, só o código estável, nunca o texto do banco.
+  Status 401 para `sem_sessao`, 403 para `sem_permissao`, 429 para
+  `limite_convites` e `convite_reenvio_cedo`, 400 para os demais e 500 para
+  `erro_interno`.
+- Reserva de envio: confirmada quando o Auth aceita o envio; liberada quando
+  ele recusa com 4xx (menos 408) ou quando o envio nem chega a ser tentado
+  (falha ao criar a conta nova); mantida (até o expurgo)
+  quando a falha é 5xx, 408 ou de rede, porque aí não se sabe se o e-mail
+  saiu. As RPCs da reserva têm uma nova tentativa e, se falharem de novo,
+  ficam no log com o id da reserva e o código do erro.
+- Sem envio (`enviar = false`, reserva liberada ou Auth recusando), a conta
+  não é tocada.
+- Token recusado pelo Auth (4xx) dá `sem_sessao`; falha do próprio Auth
+  (5xx, rede) dá `erro_interno`, para o front não encerrar a sessão por
+  isso. `SITE_URL` é validada na subida da função (http ou https, sem query
+  nem fragmento).
+- O link mágico das contas existentes sai pelo endpoint público do Auth
+  (`signInWithOtp`), sujeito ao limite por IP do projeto (`sign_in_sign_ups`
+  e `max_frequency`): com muitos convites ao mesmo tempo, o envio pode ser
+  recusado com 429; o convite fica pendente e a falha, no log. Com SMTP próprio,
+  dimensione esses limites no painel do Auth; mandar o link por um provedor
+  transacional próprio fica para depois.
+- A `concluir-senha` recebe `{ senha }` e só aceita token de sessão aberta
+  por link (`amr` com `otp`, `magiclink`, `invite`, `recovery`,
+  `email/signup` ou `email_change`, a mesma lista do aceite) e com `session_id`; senão, `convite_exige_link`.
+  Só grava para conta com convite pendente e válido para o e-mail
+  confirmado ou com vínculo já aceito por convite (refazer a prova); fora
+  disso, `convite_invalido`. Conta comum troca a senha pelo Auth. Conta com
+  fator MFA verificado só grava com o token apresentado em aal2 (o `aal` do
+  JWT vai para o banco) e a sessão viva também em aal2, como a troca de
+  senha do Auth; senão, `mfa_necessario`. Antes do bcrypt, cada tentativa é registrada numa
+  transação própria (`registrar_tentativa_senha_interna`): no máximo 5 por
+  conta em 15 minutos; a partir daí, 429 `limite_tentativas`.
+  Sucesso: `{ ok: true }`, e o front renova a sessão.
 
 **Dependência de ambiente:** o SMTP padrão do Supabase só entrega para os
 e-mails da equipe do projeto e tem limite baixo por hora. Para convidar

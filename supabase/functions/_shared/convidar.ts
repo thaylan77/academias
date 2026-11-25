@@ -1,0 +1,221 @@
+// Lógica da Edge Function convidar-membro (docs/specs/convite-membros.md,
+// 4.4). As dependências chegam por parâmetro: o index.ts liga o Auth e o
+// banco de verdade; os testes, versões simuladas.
+
+import {
+  claimsDoToken,
+  codigoDoErro,
+  CORS,
+  emailMascarado,
+  erro,
+  hintDoErro,
+  json,
+  type Rpc,
+  tokenDoPedido,
+} from "./http.ts";
+
+/** Erro do Auth: só o status interessa. */
+export interface ErroAuth {
+  status?: number;
+  message?: string;
+}
+
+export interface DepsConvidar {
+  /** SITE_URL da variável de ambiente da função (nunca do pedido). */
+  siteUrl: string;
+  /**
+   * Valida o token no Auth: o id do usuário, ou null se o Auth recusou o
+   * token. Falha do próprio Auth (5xx, rede) lança exceção.
+   */
+  usuarioDoToken(jwt: string): Promise<string | null>;
+  /** RPC com service_role. */
+  rpc: Rpc;
+  /** auth.admin.createUser sem senha e sem e-mail (e-mail não confirmado). */
+  criarConta(email: string): Promise<{ userId: string | null; erro: ErroAuth | null }>;
+  /** signInWithOtp com shouldCreateUser = false. */
+  enviarLinkMagico(email: string, redirectTo: string): Promise<ErroAuth | null>;
+  /**
+   * Roda o trabalho depois da resposta (EdgeRuntime.waitUntil no runtime):
+   * o tempo de resposta não depende da conta, da cota global nem do Auth.
+   * Fora do runtime (testes), espera o trabalho.
+   */
+  emSegundoPlano(tarefa: () => Promise<void>): Promise<void>;
+  log(msg: string): void;
+}
+
+interface Criado {
+  convite_id: string;
+  email: string;
+  conta: "nenhuma" | "nao_confirmada" | "confirmada";
+  user_id: string | null;
+  enviar: boolean;
+  envio_id: string | null;
+}
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** Status HTTP por hint (o front decide pelo hint, não pelo status). */
+export function statusDoHint(hint: string): number {
+  if (hint === "sem_permissao") return 403;
+  if (hint === "limite_convites" || hint === "convite_reenvio_cedo") return 429;
+  return 400;
+}
+
+/**
+ * O Auth recusou o envio com certeza de que o e-mail não saiu (4xx, menos
+ * 408, que é tempo esgotado e não diz nada).
+ */
+export function recusaDefinitiva(f: ErroAuth): boolean {
+  return f.status !== undefined && f.status >= 400 && f.status < 500 && f.status !== 408;
+}
+
+/** RPC das reservas: idempotente no banco; uma nova tentativa e, se falhar, log. */
+async function resolverReserva(deps: DepsConvidar, nome: string, envioId: string): Promise<void> {
+  for (let tentativa = 1; tentativa <= 2; tentativa++) {
+    const { error } = await deps.rpc(nome, { p_envio_id: envioId });
+    if (!error) return;
+    if (tentativa === 2) {
+      deps.log(`convidar-membro: ${nome} falhou para a reserva ${envioId} (código ${codigoDoErro(error)})`);
+    }
+  }
+}
+
+export async function convidarMembro(req: Request, deps: DepsConvidar): Promise<Response> {
+  try {
+    return await tratar(req, deps);
+  } catch (e) {
+    deps.log(`convidar-membro: exceção (${e instanceof Error ? e.name : "desconhecida"})`);
+    return erro(500, "erro_interno");
+  }
+}
+
+async function tratar(req: Request, deps: DepsConvidar): Promise<Response> {
+  if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: CORS });
+  if (req.method !== "POST") return erro(405, "metodo_invalido");
+
+  const jwt = tokenDoPedido(req);
+  const userId = jwt ? await deps.usuarioDoToken(jwt) : null;
+  if (!jwt || !userId) return erro(401, "sem_sessao");
+
+  let corpo: Record<string, unknown>;
+  try {
+    corpo = await req.json();
+  } catch {
+    return erro(400, "dados_invalidos");
+  }
+  const { academia_id, email, papel } = corpo ?? {};
+  if (
+    typeof academia_id !== "string" || !UUID.test(academia_id) ||
+    typeof email !== "string" || typeof papel !== "string"
+  ) {
+    return erro(400, "dados_invalidos");
+  }
+
+  // 1. O banco decide tudo (papel, limites, conta); a função só executa.
+  const claims = claimsDoToken(jwt);
+  const { data, error } = await deps.rpc("criar_convite_interna", {
+    p_user_id: userId,
+    p_academia_id: academia_id,
+    p_email: email,
+    p_papel: papel,
+    p_iat: claims.iat,
+    p_sessao: claims.sessao,
+  });
+  if (error) {
+    const hint = hintDoErro(error);
+    if (hint) return erro(statusDoHint(hint), hint);
+    deps.log(`convidar-membro: erro inesperado em criar_convite_interna (código ${codigoDoErro(error)})`);
+    return erro(500, "erro_interno");
+  }
+  const c = data as Criado;
+
+  // A resposta sai já, igual em todos os casos (envio, supressão, falha) e
+  // sem esperar nada que dependa da conta, da cota global ou do Auth: o
+  // conteúdo e o tempo dela não revelam a conta nem convites de outras
+  // academias. Neutralização, envio e reserva rodam depois; a falha fica no
+  // log. Se o trabalho cair no meio, a reserva sem resultado segura o
+  // endereço até o expurgo (lado seguro).
+  await deps.emSegundoPlano(async () => {
+    try {
+      await processarEnvio(c, deps);
+    } catch (e) {
+      deps.log(`convidar-membro: exceção no envio (${e instanceof Error ? e.name : "desconhecida"})`);
+    }
+  });
+  return json(200, { convite_id: c.convite_id });
+}
+
+async function processarEnvio(c: Criado, deps: DepsConvidar): Promise<void> {
+  const redirectTo = deps.siteUrl + "/painel/convites";
+
+  // Limite por endereço estourado pelo histórico de outra academia: sem
+  // e-mail, e nada da conta é tocado (a conta é de todas as academias; um
+  // convite que não entrega nada não mexe na credencial de ninguém).
+  if (!c.enviar) return;
+
+  // 1. A conta que vai receber o link. Endereço sem conta: a função cria a
+  //    conta, sem senha e sem e-mail. Se alguém se cadastrou com o endereço
+  //    entre a leitura de criar_convite_interna e aqui, o Auth recusa (e-mail
+  //    já existe) e a função usa essa conta.
+  let falha: ErroAuth | null = null;
+  let conta: string | null = c.conta === "nao_confirmada" ? c.user_id : null;
+  if (c.conta === "nenhuma") {
+    const r = await deps.criarConta(c.email);
+    if (r.userId) {
+      conta = r.userId;
+    } else if (r.erro?.status === 422) {
+      const existente = await deps.rpc("conta_nao_confirmada_por_email_interna", { p_email: c.email });
+      if (existente.error) falha = { status: 500 };
+      else conta = typeof existente.data === "string" ? existente.data : null; // null: já confirmada
+    } else {
+      falha = r.erro ?? { status: 500 };
+    }
+  }
+  // Até aqui nenhum e-mail saiu: uma falha libera a reserva.
+  const tentouEnviar = !falha;
+
+  // 2. Logo antes do link, o worker assume a reserva (marca durável): até
+  //    aqui, uma queda deixa a reserva sem tentativa, e o job a libera em 2
+  //    minutos; depois, o e-mail pode ter saído, e a reserva fica. Se ela já
+  //    foi liberada (este worker atrasou), não envia nem mexe na conta.
+  if (!falha && c.envio_id) {
+    const assumida = await deps.rpc("assumir_envio_convite_interna", { p_envio_id: c.envio_id });
+    if (assumida.error || assumida.data !== true) {
+      deps.log(
+        `convidar-membro: reserva ${c.envio_id} não assumida (código ${
+          assumida.error ? codigoDoErro(assumida.error) : "liberada"
+        }); sem envio`,
+      );
+      return;
+    }
+  }
+
+  // 3. Um único link por reserva. Ao emiti-lo para uma conta não confirmada,
+  //    o próprio Auth limpa a senha dela. Só com o link aceito pelo Auth o
+  //    banco neutraliza o resto (sessões, tokens sensíveis, marca de definir
+  //    senha), com a conta travada e preservando o link de confirmação: um
+  //    convite que não entrega e-mail não mexe na credencial de ninguém.
+  if (!falha) {
+    falha = await deps.enviarLinkMagico(c.email, redirectTo);
+  }
+  if (!falha && conta) {
+    const n = await deps.rpc("neutralizar_conta_nao_confirmada_interna", { p_user_id: conta });
+    if (n.error) {
+      deps.log(`convidar-membro: link enviado, mas a neutralização da conta falhou (código ${codigoDoErro(n.error)})`);
+    }
+  }
+
+  // 4. A reserva do envio: confirmada se o Auth aceitou; liberada se recusou
+  //    de vez ou nem chegou a tentar. Falha de rede, 5xx ou 408 não diz se o
+  //    e-mail saiu: a reserva fica até o expurgo (lado seguro contra spam).
+  if (c.envio_id) {
+    if (!falha) {
+      await resolverReserva(deps, "confirmar_envio_convite_interna", c.envio_id);
+    } else if (!tentouEnviar || recusaDefinitiva(falha)) {
+      await resolverReserva(deps, "liberar_envio_convite_interna", c.envio_id);
+    }
+  }
+  if (falha) {
+    deps.log(`convidar-membro: e-mail não saiu para ${emailMascarado(c.email)} (status ${falha.status ?? "?"})`);
+  }
+}

@@ -261,10 +261,13 @@ select extensions.dblink_exec('prep', $f$
     ('e7d00000-0000-4000-8000-0000000002cb', 'e7d00000-0000-4000-8000-00000000000b', 'liberar@concorre.test', 'professor',
      'e7d00000-0000-4000-8000-0000000000b2', now() + interval '7 days',
      '2026-11-23 10:00:00+00', array['2026-11-23 10:00:00+00'::timestamptz]);
-  insert into public.convites_envios (id, email, convite_id, reservado_em) values
+  -- Reservas já assumidas pelo worker (tentativa_em): o job que libera as
+  -- abandonadas, a cada minuto, não mexe nelas durante o teste.
+  insert into public.convites_envios (id, email, convite_id, reservado_em, tentativa_em) values
     ('e7d00000-0000-4000-8000-0000000003cb', 'liberar@concorre.test', 'e7d00000-0000-4000-8000-0000000002cb',
-     '2026-11-23 10:00:00+00'),
-    ('e7d00000-0000-4000-8000-0000000003cc', 'expurgo@concorre.test', null, now() - interval '4 days');
+     '2026-11-23 10:00:00+00', '2026-11-23 10:00:01+00'),
+    ('e7d00000-0000-4000-8000-0000000003cc', 'expurgo@concorre.test', null, now() - interval '4 days',
+     now() - interval '4 days');
   insert into public.convites_equipe (id, academia_id, email, papel, convidado_por, expira_em) values
     ('e7d00000-0000-4000-8000-0000000002cc', 'e7d00000-0000-4000-8000-00000000000b', 'u9@concorre.test', 'recepcao',
      'e7d00000-0000-4000-8000-0000000000b2', now() + interval '7 days'),

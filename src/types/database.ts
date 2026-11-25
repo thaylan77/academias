@@ -132,13 +132,13 @@ isOneToOne: false
                   ]
                 },"convites_envios": {
                   Row: {
-                    "convite_id": string | null,"email": string,"enviado_em": string | null,"id": string,"liberado_em": string | null,"reservado_em": string
+                    "convite_id": string | null,"email": string,"enviado_em": string | null,"id": string,"liberado_em": string | null,"reservado_em": string,"tentativa_em": string | null
                   }
                   Insert: {
-                    "convite_id"?: string | null,"email": string,"enviado_em"?: string | null,"id"?: string,"liberado_em"?: string | null,"reservado_em": string
+                    "convite_id"?: string | null,"email": string,"enviado_em"?: string | null,"id"?: string,"liberado_em"?: string | null,"reservado_em": string,"tentativa_em"?: string | null
                   }
                   Update: {
-                    "convite_id"?: string | null,"email"?: string,"enviado_em"?: string | null,"id"?: string,"liberado_em"?: string | null,"reservado_em"?: string
+                    "convite_id"?: string | null,"email"?: string,"enviado_em"?: string | null,"id"?: string,"liberado_em"?: string | null,"reservado_em"?: string,"tentativa_em"?: string | null
                   }
                   Relationships: [
                     {
@@ -167,6 +167,19 @@ isOneToOne: false
       referencedRelation: "academias"
       referencedColumns: ["id"]
     }
+                  ]
+                },"convites_senha_tentativas": {
+                  Row: {
+                    "id": number,"tentado_em": string,"user_id": string
+                  }
+                  Insert: {
+                    "id"?: never,"tentado_em"?: string,"user_id": string
+                  }
+                  Update: {
+                    "id"?: never,"tentado_em"?: string,"user_id"?: string
+                  }
+                  Relationships: [
+                    
                   ]
                 },"faixas": {
                   Row: {
@@ -560,6 +573,9 @@ isOneToOne: false
 "aprovar_matricula":
 { Args: { "p_dia_vencimento"?: number,"p_matricula_id": string }; Returns: undefined
                            },
+"assumir_envio_convite_interna":
+{ Args: { "p_envio_id": string }; Returns: boolean
+                           },
 "baixar_cobranca_interna":
 { Args: { "p_cobranca_id": string,"p_forma"?: string,"p_pago_em"?: string,"p_user_id": string,"p_valor_pago"?: number }; Returns: undefined
                            },
@@ -591,6 +607,9 @@ isOneToOne: false
                            },
 "confirmar_envio_convite_interna":
 { Args: { "p_envio_id": string }; Returns: undefined
+                           },
+"conta_nao_confirmada_por_email_interna":
+{ Args: { "p_email": string }; Returns: string
                            },
 "convite_de_quem_pode":
 { Args: { "p_convite": Database["public"]['Tables']["convites_equipe"]['Row'] }; Returns: boolean
@@ -644,7 +663,7 @@ isOneToOne: false
 { Args: { "p_academia_id": string,"p_dados": Json }; Returns: string
                            },
 "definir_senha_comprovada_interna":
-{ Args: { "p_senha": string,"p_sessao": string,"p_user_id": string }; Returns: undefined
+{ Args: { "p_aal"?: string,"p_senha": string,"p_sessao": string,"p_user_id": string }; Returns: undefined
                            },
 "destrancar_matricula":
 { Args: { "p_matricula_id": string }; Returns: undefined
@@ -696,6 +715,9 @@ isOneToOne: false
 "liberar_envio_convite_interna":
 { Args: { "p_envio_id": string }; Returns: undefined
                            },
+"liberar_reservas_abandonadas_interna":
+{ Args: { "p_idade"?: string }; Returns: number
+                           },
 "matricula_online":
 { Args: { "p_dados": Json,"p_slug": string }; Returns: string
                            },
@@ -710,6 +732,9 @@ isOneToOne: false
               "academia_id": string,"academia_nome": string,"convite_id": string,"expira_em": string,"papel": string
             }[]
                            },
+"neutralizar_conta_nao_confirmada_interna":
+{ Args: { "p_user_id": string }; Returns: boolean
+                           },
 "pode_gerir":
 { Args: { "p_academia_id": string,"p_papeis": (string)[] }; Returns: boolean
                            },
@@ -721,6 +746,9 @@ isOneToOne: false
                            },
 "registrar_graduacao":
 { Args: { "p_academia_id": string,"p_dados": Json }; Returns: string
+                           },
+"registrar_tentativa_senha_interna":
+{ Args: { "p_aal": string,"p_sessao": string,"p_user_id": string }; Returns: string
                            },
 "reservar_emissao_interna":
 { Args: { "p_cobranca_id": string,"p_gateway_conta_id": string,"p_tentativa_conferida"?: string,"p_user_id": string }; Returns: Json

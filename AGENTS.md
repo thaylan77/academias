@@ -36,12 +36,26 @@ supabase db reset                   # recria o banco local (migrations + seed)
 supabase test db                    # roda os testes pgTAP no banco local
 ```
 
+Edge Functions (`supabase/functions/`, Deno na versão fixa do CI, 2.5.6; imports
+fixados em `supabase/functions/deno.json` e no `deno.lock`):
+
+```bash
+cd supabase/functions
+deno fmt --check && deno lint
+deno test --frozen --no-prompt tests/*_test.ts   # Auth simulado
+# A integração (tests/integracao/, com INTEGRACAO=1) só roda contra o Supabase
+# local do CI; nunca contra o honorteam-dev.
+```
+
 ## Ambientes de banco
 
 - **CI é o "verde" oficial.** O workflow `Banco` (`.github/workflows/banco.yml`)
-  tem dois jobs a cada push e pull request: `testes` aplica todas as
-  migrations do zero, confere os tipos e roda os testes pgTAP; `front` roda
-  `npm ci`, lint, testes e build. Validação feita de outro jeito (PGlite, Postgres temporário)
+  tem quatro jobs a cada push e pull request: `testes` aplica todas as
+  migrations do zero, confere os tipos e roda os testes pgTAP; `funcoes`
+  formata, faz o lint, confere os tipos e testa as Edge Functions com o Auth
+  simulado; `integracao` sobe o Supabase local (banco, Auth, API e Mailpit) e
+  testa as funções contra o Auth real; `front` roda `npm ci`, lint, testes e
+  build. Validação feita de outro jeito (PGlite, Postgres temporário)
   ajuda a desenvolver, mas não conta como verde: diga no PR o que rodou onde.
 - **Não há Supabase local na máquina principal** (sem Docker). Não tente
   `supabase start`, `supabase db reset` nem `supabase test db` nela.
@@ -56,7 +70,11 @@ supabase test db                    # roda os testes pgTAP no banco local
 - A configuração do Auth (`supabase/config.toml`, por exemplo a confirmação
   de e-mail) não vai com o `db push`: depois do merge que a mudar, rode também
   `npx supabase@2.119.0 config push` na mesma pasta e confira no painel do
-  Auth do projeto que "Confirm email" está ligado. O convite da equipe e o
+  Auth do projeto que "Confirm email" está ligado. **Veja o diff antes**
+  (`echo n | npx supabase@2.119.0 config push` mostra e recusa): o
+  `config.toml` é o do ambiente local e sobrescreveria `site_url`, MFA e
+  outros ajustes do projeto. Aplique só o que o PR mudou, pelo painel se for
+  preciso. O convite da equipe e o
   vínculo do portal do aluno dependem disso. Um cadastro novo de teste só pode
   ficar confirmado depois de abrir o link.
 - O convite da equipe também depende do Auth do projeto na **v2.198.0 ou
@@ -65,6 +83,14 @@ supabase test db                    # roda os testes pgTAP no banco local
   Antes do `db push` que trouxer o convite, confira a versão em
   `GET /auth/v1/health` (com a chave publishable). Versão mais antiga: não
   aplique e avise o dono do projeto.
+- Edge Functions: depois do merge que as mudar, na mesma pasta,
+  `npx supabase@2.119.0 functions deploy convidar-membro concluir-senha`. A
+  `convidar-membro` precisa do segredo `SITE_URL` (a URL pública do painel,
+  base do link do convite): `npx supabase@2.119.0 secrets set SITE_URL=...`.
+  `SUPABASE_URL`, `SUPABASE_ANON_KEY` e `SUPABASE_SERVICE_ROLE_KEY` o projeto
+  já fornece. Inclua `SITE_URL/painel/convites` nas Redirect URLs do Auth
+  do projeto: fora da lista, o Auth manda o convidado para o `site_url` sem
+  avisar.
 - O front de dev aponta para o `honorteam-dev` só com a URL e a chave
   `anon`/publishable. A `service_role` desse projeto não vai para `.env`
   de front nem para o repositório.
@@ -192,6 +218,10 @@ Plano, status e slug da academia só mudam via `service_role` (billing do SaaS).
 | `criar_convite_interna(user_id, academia_id, email, papel)` | Edge Function `convidar-membro` (service_role) | convite da equipe por e-mail (dono convida até dono; admin, até admin), um pendente por e-mail e academia, 7 dias; devolve o estado da conta só para a função; limite de reenvio e diário |
 | `confirmar_envio_convite_interna(envio_id)` / `liberar_envio_convite_interna(envio_id)` | Edge Function `convidar-membro` (service_role) | confirma a reserva de envio quando o provedor aceita (o intervalo conta dali) ou a tira da cota quando ele recusa de vez |
 | `definir_senha_comprovada_interna(user_id, sessao, senha)` | Edge Function `concluir-senha` (service_role) | grava a senha nova (bcrypt) e a prova (horário, sessão e hash dessa senha) na mesma operação, com a conta travada; o aceite e o vínculo por convite exigem a prova |
+| `neutralizar_conta_nao_confirmada_interna(user_id)` | Edge Function `convidar-membro` (service_role) | conta com o e-mail do convidado ainda não confirmada: com a conta travada, derruba a senha, as sessões e os tokens de uso único e marca `definir_senha`; conta já confirmada não é tocada (devolve false) |
+| `conta_nao_confirmada_por_email_interna(email)` | Edge Function `convidar-membro` (service_role) | id da conta não confirmada do endereço (o cadastro que surgiu no meio do convite), ou null |
+| `registrar_tentativa_senha_interna(user_id, sessao, aal)` | Edge Function `concluir-senha` (service_role) | registra a tentativa de definir a senha (transação própria, antes do bcrypt); confere antes a sessão e, com MFA, o aal (sem debitar); `limite` a partir da sexta em 15 minutos |
+| `assumir_envio_convite_interna(envio_id)` / `liberar_reservas_abandonadas_interna(idade?)` | Edge Function `convidar-membro` / job pg_cron a cada minuto (service_role) | o worker assume a reserva logo antes de chamar o Auth (`tentativa_em`); o job libera a reserva que ninguém assumiu em 2 minutos |
 | `expurgar_convites_envios(lote?)` | job pg_cron (06:30 UTC) | apaga de `convites_envios` os registros fora das janelas da C10 (mais de 3 dias), em lotes |
 | `cancelar_convite(convite_id)` | dono, admin | cancela convite pendente (admin não cancela o de dono) |
 | `meus_convites()` / `aceitar_convite(convite_id)` / `recusar_convite(convite_id)` | logado | convites pendentes do e-mail confirmado do login; o aceite grava em `membros_academia` (novo, reativação ou troca do papel `aluno`) |
@@ -337,7 +367,8 @@ Conta como **código que roda**:
 
 - Matrícula online atrás de Edge Function com captcha (Cloudflare Turnstile);
   depois revogar `matricula_online` de `anon`.
-- Convite de membros da equipe por e-mail (Edge Function com auth admin).
+- Convite de membros: telas Equipe e `/painel/convites` (banco e Edge
+  Functions prontos).
 - Financeiro: Edge Functions do gateway e do webhook e emissão automática
   das cobranças geradas pelo job diário (spec em `docs/specs/financeiro-gateway-webhook.md`;
   funções `*_interna` e `gateway_*` são só para `service_role`).
