@@ -166,22 +166,6 @@ async function processarEnvio(c: Criado, deps: DepsConvidar): Promise<void> {
   // e-mail.
   if (!c.enviar) return;
 
-  // Assume a reserva logo antes de chamar o Auth (marca durável): uma reserva
-  // que nenhum worker assumiu em 2 minutos é liberada pelo job; a assumida
-  // fica, porque o e-mail pode ter saído. Se ela já foi liberada (este worker
-  // atrasou), não envia.
-  if (c.envio_id) {
-    const assumida = await deps.rpc("assumir_envio_convite_interna", { p_envio_id: c.envio_id });
-    if (assumida.error || assumida.data !== true) {
-      deps.log(
-        `convidar-membro: reserva ${c.envio_id} não assumida (código ${
-          assumida.error ? codigoDoErro(assumida.error) : "liberada"
-        }); sem envio`,
-      );
-      return;
-    }
-  }
-
   // 2. Endereço sem conta: a função cria a conta, sem senha e sem e-mail. Se
   //    alguém se cadastrou com o endereço entre a leitura de
   //    criar_convite_interna e aqui, o Auth recusa (e-mail já existe) e a
@@ -213,6 +197,21 @@ async function processarEnvio(c: Criado, deps: DepsConvidar): Promise<void> {
 
   // 3. Um único link por reserva, depois da neutralização. O link mágico do
   //    Auth também limpa a senha de uma conta não confirmada ao ser emitido.
+  //    Logo antes dele, o worker assume a reserva (marca durável): até aqui,
+  //    uma queda deixa a reserva sem tentativa, e o job a libera em 2 minutos;
+  //    depois, o e-mail pode ter saído, e a reserva fica. Se ela já foi
+  //    liberada (este worker atrasou), não envia.
+  if (!falha && c.envio_id) {
+    const assumida = await deps.rpc("assumir_envio_convite_interna", { p_envio_id: c.envio_id });
+    if (assumida.error || assumida.data !== true) {
+      deps.log(
+        `convidar-membro: reserva ${c.envio_id} não assumida (código ${
+          assumida.error ? codigoDoErro(assumida.error) : "liberada"
+        }); sem envio`,
+      );
+      return;
+    }
+  }
   if (!falha) {
     falha = await deps.enviarLinkMagico(c.email, redirectTo);
   }

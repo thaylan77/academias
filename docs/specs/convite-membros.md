@@ -302,8 +302,8 @@ A função não grava em tabela de negócio fora de `criar_convite_interna`. O
 - A resposta sai logo depois de `criar_convite_interna`: a neutralização da
   conta, o envio e a resolução da reserva rodam depois dela
   (`EdgeRuntime.waitUntil`), para o tempo de resposta também não revelar a
-  conta nem a cota usada por outra academia. Logo antes de chamar o Auth, o
-  worker assume a reserva (`assumir_envio_convite_interna`, que grava
+  conta nem a cota usada por outra academia. Depois de preparar a conta e
+  logo antes de pedir o link ao Auth, o worker assume a reserva (`assumir_envio_convite_interna`, que grava
   `convites_envios.tentativa_em`); se ela já foi liberada, não envia. Uma
   reserva que nenhum worker assumiu em 2 minutos (o worker caiu antes do
   Auth) é liberada pelo job `liberar-reservas-convite-abandonadas`, a cada

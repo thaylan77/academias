@@ -344,3 +344,20 @@ Deno.test("reserva já liberada como abandonada (worker atrasado): não envia ne
     assert(r.logs.some((l) => l.includes("não assumida")));
   }
 });
+
+Deno.test("conta nova: assume a reserva só depois de preparar a conta, logo antes do link", async () => {
+  const r = await chama({ rpc: { criar_convite_interna: criado("nenhuma") } });
+  const n = r.nomes();
+  assert(n.indexOf("criarConta") < n.indexOf("rpc:assumir_envio_convite_interna"));
+  assert(n.indexOf("rpc:neutralizar_conta_nao_confirmada_interna") < n.indexOf("rpc:assumir_envio_convite_interna"));
+  assertEquals(n.indexOf("rpc:assumir_envio_convite_interna") + 1, n.indexOf("enviarLinkMagico"));
+});
+
+Deno.test("falha na preparação da conta: libera a reserva sem assumir", async () => {
+  const r = await chama({
+    rpc: { criar_convite_interna: criado("nenhuma") },
+    criar: { userId: null, erro: { status: 500 } },
+  });
+  assertEquals(r.de("rpc:assumir_envio_convite_interna").length, 0);
+  assertEquals(r.de("rpc:liberar_envio_convite_interna").length, 1);
+});

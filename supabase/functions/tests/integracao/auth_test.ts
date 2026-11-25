@@ -566,3 +566,45 @@ Deno.test({
     assertEquals([aal2.status, await aal2.json()], [200, { ok: true }]);
   },
 });
+
+Deno.test({
+  name: "worker que cai durante a preparação da conta: a reserva não assumida é liberada e outra academia envia",
+  ignore: !ativo,
+  async fn() {
+    const a = await prepararDono("prepara-a");
+    const b = await prepararDono("prepara-b");
+    const endereco = email("prepara");
+    const base = depsConvidar(a.c, "http://127.0.0.1:3000");
+    // A conta é criada, e o worker cai ao neutralizá-la (antes de assumir a
+    // reserva e de chamar o link).
+    const depsCaiu = {
+      ...base,
+      rpc(nome: string, args: Record<string, unknown>) {
+        if (nome === "neutralizar_conta_nao_confirmada_interna") return Promise.reject(new Error("worker caiu"));
+        return base.rpc(nome, args);
+      },
+    };
+    const r1 = await convidarMembro(
+      pedido(a.token, { academia_id: a.academiaId, email: endereco, papel: "professor" }),
+      depsCaiu,
+    );
+    const { convite_id } = await r1.json();
+    const reserva = await a.c.servico.from("convites_envios").select("id, tentativa_em").eq("convite_id", convite_id);
+    assertEquals(reserva.data?.length, 1);
+    assertEquals(reserva.data![0].tentativa_em, null, "a reserva não foi assumida: nenhum link chegou a ser pedido");
+    assertEquals((await emailsPara(endereco)).length, 0);
+
+    const envelhece = await a.c.servico.from("convites_envios")
+      .update({ reservado_em: new Date(Date.now() - 5 * 60_000).toISOString() }).eq("id", reserva.data![0].id);
+    if (envelhece.error) throw envelhece.error;
+    const job = await a.c.servico.rpc("liberar_reservas_abandonadas_interna");
+    assertEquals([job.error, job.data], [null, 1]);
+
+    const r2 = await convidarMembro(
+      pedido(b.token, { academia_id: b.academiaId, email: endereco, papel: "professor" }),
+      depsConvidar(b.c, "http://127.0.0.1:3000"),
+    );
+    assertEquals(r2.status, 200, await r2.clone().text());
+    assertEquals((await emailsPara(endereco)).length, 1, "a outra academia enviou depois da limpeza");
+  },
+});
