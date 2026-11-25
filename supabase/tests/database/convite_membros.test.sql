@@ -600,12 +600,12 @@ select is(public.__hint_de(format('select public.aceitar_convite(%L)', (public._
 select public.__como('e7c00000-0000-4000-8000-0000000000df');
 select is(public.__hint_de(format('select public.aceitar_convite(%L)', (public.__conv('e7c00000-0000-4000-8000-00000000000a', 'semsessao@conv.test')).id)),
   'convite_exige_link', 'token de sessão revogada não aceita');
-select public.__como('e7c00000-0000-4000-8000-0000000000e2');
-select is(public.__hint_de(format('select public.aceitar_convite(%L)', (public.__conv('e7c00000-0000-4000-8000-00000000000a', 'trocou@conv.test')).id)),
-  'senha_pendente', 'senha trocada depois da prova, fora do fluxo, não serve para aceitar');
 select is((select count(*) from public.meus_convites()), 0::bigint, 'token de sessão revogada não lista convites');
 select is(public.__hint_de(format('select public.recusar_convite(%L)', (public.__conv('e7c00000-0000-4000-8000-00000000000a', 'semsessao@conv.test')).id)),
   'convite_exige_link', 'token de sessão revogada não recusa');
+select public.__como('e7c00000-0000-4000-8000-0000000000e2');
+select is(public.__hint_de(format('select public.aceitar_convite(%L)', (public.__conv('e7c00000-0000-4000-8000-00000000000a', 'trocou@conv.test')).id)),
+  'senha_pendente', 'senha trocada depois da prova, fora do fluxo, não serve para aceitar');
 reset role;
 insert into auth.sessions (id, user_id) values
   ('e7c00000-0000-4000-8000-0000000005a1', 'e7c00000-0000-4000-8000-0000000000d1'),
