@@ -199,8 +199,6 @@ select extensions.dblink_exec('prep', $f$
   insert into auth.sessions (id, user_id) select id, id from auth.users where email like '%@concorre.test';
   insert into auth.sessions (id, user_id) values ('e7d00000-0000-4000-8000-0000000006e0', 'e7d00000-0000-4000-8000-0000000000e0');
   insert into auth.sessions (id, user_id) values ('e7d00000-0000-4000-8000-0000000006e1', 'e7d00000-0000-4000-8000-0000000000e1');
-  update public.membros_academia set vale_a_partir = now() - interval '1 hour'
-   where user_id = 'e7d00000-0000-4000-8000-0000000000be';
   insert into public.academias (id, nome, slug, status) values
     ('e7d00000-0000-4000-8000-00000000000a', 'Concorre K', 'convite-concorre-k', 'ativa'),
     ('e7d00000-0000-4000-8000-00000000000b', 'Concorre L', 'convite-concorre-l', 'ativa'),
@@ -729,6 +727,9 @@ select is((select (select count(*) from public.membros_academia
 -- Z. s1 (administrativa) apaga, sem confirmar, a sessão de admin14; s2, como
 --    a Edge Function, cria um convite com o token dessa sessão; s1 confirma.
 -- ---------------------------------------------------------------------
+-- O vínculo de admin14 veio por convite (vale_a_partir).
+select extensions.dblink_exec('prep', $$update public.membros_academia set vale_a_partir = now() - interval '1 hour'
+  where user_id = 'e7d00000-0000-4000-8000-0000000000be'$$);
 select pg_temp.como('s2', 'service_role');
 select extensions.dblink_exec('s1', 'begin');
 select extensions.dblink_exec('s1', $$delete from auth.sessions where id = 'e7d00000-0000-4000-8000-0000000000be'$$);
