@@ -339,13 +339,13 @@ isOneToOne: false
                   ]
                 },"membros_academia": {
                   Row: {
-                    "academia_id": string,"ativo": boolean,"created_at": string,"papel": string,"sessao_do_aceite": string | null,"user_id": string,"vale_a_partir": string | null
+                    "academia_id": string,"ativo": boolean,"created_at": string,"papel": string,"sessao_do_aceite": string | null,"user_id": string,"vale_a_partir": string | null,"verificado": boolean
                   }
                   Insert: {
-                    "academia_id": string,"ativo"?: boolean,"created_at"?: string,"papel": string,"sessao_do_aceite"?: string | null,"user_id": string,"vale_a_partir"?: string | null
+                    "academia_id": string,"ativo"?: boolean,"created_at"?: string,"papel": string,"sessao_do_aceite"?: string | null,"user_id": string,"vale_a_partir"?: string | null,"verificado"?: boolean
                   }
                   Update: {
-                    "academia_id"?: string,"ativo"?: boolean,"created_at"?: string,"papel"?: string,"sessao_do_aceite"?: string | null,"user_id"?: string,"vale_a_partir"?: string | null
+                    "academia_id"?: string,"ativo"?: boolean,"created_at"?: string,"papel"?: string,"sessao_do_aceite"?: string | null,"user_id"?: string,"vale_a_partir"?: string | null,"verificado"?: boolean
                   }
                   Relationships: [
                     {
