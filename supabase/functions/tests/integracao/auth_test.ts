@@ -73,7 +73,7 @@ Deno.test({
     assertEquals(intacta.error, null, "sem convite, a senha da conta não muda");
 
     // Com um convite pendente para o e-mail, a mesma sessão define a senha.
-    const dono = await prepararDono("senha");
+    const dono = await prepararDono("dono-senha");
     const convite = await convidarMembro(
       pedido(dono.token, { academia_id: dono.academiaId, email: endereco, papel: "professor" }),
       depsConvidar(dono.c, "http://127.0.0.1:3000"),
