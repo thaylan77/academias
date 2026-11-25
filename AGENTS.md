@@ -42,7 +42,7 @@ fixados em `supabase/functions/deno.json` e no `deno.lock`):
 ```bash
 cd supabase/functions
 deno fmt --check && deno lint
-deno test --frozen --no-prompt tests/convidar_test.ts tests/senha_test.ts   # Auth simulado
+deno test --frozen --no-prompt tests/*_test.ts   # Auth simulado
 # A integração (tests/integracao/, com INTEGRACAO=1) só roda contra o Supabase
 # local do CI; nunca contra o honorteam-dev.
 ```
@@ -216,6 +216,7 @@ Plano, status e slug da academia só mudam via `service_role` (billing do SaaS).
 | `criar_convite_interna(user_id, academia_id, email, papel)` | Edge Function `convidar-membro` (service_role) | convite da equipe por e-mail (dono convida até dono; admin, até admin), um pendente por e-mail e academia, 7 dias; devolve o estado da conta só para a função; limite de reenvio e diário |
 | `confirmar_envio_convite_interna(envio_id)` / `liberar_envio_convite_interna(envio_id)` | Edge Function `convidar-membro` (service_role) | confirma a reserva de envio quando o provedor aceita (o intervalo conta dali) ou a tira da cota quando ele recusa de vez |
 | `definir_senha_comprovada_interna(user_id, sessao, senha)` | Edge Function `concluir-senha` (service_role) | grava a senha nova (bcrypt) e a prova (horário, sessão e hash dessa senha) na mesma operação, com a conta travada; o aceite e o vínculo por convite exigem a prova |
+| `neutralizar_conta_nao_confirmada_interna(user_id)` | Edge Function `convidar-membro` (service_role) | conta com o e-mail do convidado ainda não confirmada: com a conta travada, derruba a senha, as sessões e os tokens de uso único e marca `definir_senha`; conta já confirmada não é tocada (devolve false) |
 | `expurgar_convites_envios(lote?)` | job pg_cron (06:30 UTC) | apaga de `convites_envios` os registros fora das janelas da C10 (mais de 3 dias), em lotes |
 | `cancelar_convite(convite_id)` | dono, admin | cancela convite pendente (admin não cancela o de dono) |
 | `meus_convites()` / `aceitar_convite(convite_id)` / `recusar_convite(convite_id)` | logado | convites pendentes do e-mail confirmado do login; o aceite grava em `membros_academia` (novo, reativação ou troca do papel `aluno`) |

@@ -385,8 +385,10 @@ inspector_port = 8083
 # The Deno major version to use.
 deno_version = 2
 
-# [edge_runtime.secrets]
-# secret_key = "env(SECRET_VALUE)"
+# Só para o Supabase local (CI e desenvolvimento): no projeto, o segredo
+# vem de `supabase secrets set SITE_URL=...` (ver AGENTS.md).
+[edge_runtime.secrets]
+SITE_URL = "http://127.0.0.1:3000"
 
 [analytics]
 enabled = true

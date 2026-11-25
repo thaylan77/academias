@@ -2,9 +2,19 @@
 // 4.4). As dependências chegam por parâmetro: o index.ts liga o Auth e o
 // banco de verdade; os testes, versões simuladas.
 
-import { claimsDoToken, CORS, emailMascarado, erro, hintDoErro, json, tokenDoPedido } from "./http.ts";
+import {
+  claimsDoToken,
+  codigoDoErro,
+  CORS,
+  emailMascarado,
+  erro,
+  hintDoErro,
+  json,
+  type Rpc,
+  tokenDoPedido,
+} from "./http.ts";
 
-/** Erro do Auth: só o status interessa (4xx = recusa definitiva). */
+/** Erro do Auth: só o status interessa. */
 export interface ErroAuth {
   status?: number;
   message?: string;
@@ -13,14 +23,17 @@ export interface ErroAuth {
 export interface DepsConvidar {
   /** SITE_URL da variável de ambiente da função (nunca do pedido). */
   siteUrl: string;
-  /** Valida o token no Auth; devolve o id do usuário ou null. */
+  /**
+   * Valida o token no Auth: o id do usuário, ou null se o Auth recusou o
+   * token. Falha do próprio Auth (5xx, rede) lança exceção.
+   */
   usuarioDoToken(jwt: string): Promise<string | null>;
   /** RPC com service_role. */
-  rpc(nome: string, args: Record<string, unknown>): Promise<{ data: unknown; error: unknown }>;
+  rpc: Rpc;
   /** auth.admin.inviteUserByEmail. */
   convidarPorEmail(email: string, redirectTo: string): Promise<{ userId: string | null; erro: ErroAuth | null }>;
-  /** auth.admin.updateUserById: marca definir_senha e, se vier, troca a senha. */
-  marcarDefinirSenha(userId: string, novaSenha?: string): Promise<ErroAuth | null>;
+  /** auth.admin.updateUserById com app_metadata.definir_senha = true. */
+  marcarDefinirSenha(userId: string): Promise<ErroAuth | null>;
   /** signInWithOtp com shouldCreateUser = false. */
   enviarLinkMagico(email: string, redirectTo: string): Promise<ErroAuth | null>;
   log(msg: string): void;
@@ -44,13 +57,35 @@ export function statusDoHint(hint: string): number {
   return 400;
 }
 
-/** Senha aleatória de 32 bytes que ninguém recebe (conta não confirmada). */
-export function senhaAleatoria(): string {
-  const b = crypto.getRandomValues(new Uint8Array(32));
-  return btoa(String.fromCharCode(...b)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+/**
+ * O Auth recusou o envio com certeza de que o e-mail não saiu (4xx, menos
+ * 408, que é tempo esgotado e não diz nada).
+ */
+export function recusaDefinitiva(f: ErroAuth): boolean {
+  return f.status !== undefined && f.status >= 400 && f.status < 500 && f.status !== 408;
+}
+
+/** RPC das reservas: idempotente no banco; uma nova tentativa e, se falhar, log. */
+async function resolverReserva(deps: DepsConvidar, nome: string, envioId: string): Promise<void> {
+  for (let tentativa = 1; tentativa <= 2; tentativa++) {
+    const { error } = await deps.rpc(nome, { p_envio_id: envioId });
+    if (!error) return;
+    if (tentativa === 2) {
+      deps.log(`convidar-membro: ${nome} falhou para a reserva ${envioId} (código ${codigoDoErro(error)})`);
+    }
+  }
 }
 
 export async function convidarMembro(req: Request, deps: DepsConvidar): Promise<Response> {
+  try {
+    return await tratar(req, deps);
+  } catch (e) {
+    deps.log(`convidar-membro: exceção (${e instanceof Error ? e.name : "desconhecida"})`);
+    return erro(500, "erro_interno");
+  }
+}
+
+async function tratar(req: Request, deps: DepsConvidar): Promise<Response> {
   if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: CORS });
   if (req.method !== "POST") return erro(405, "metodo_invalido");
 
@@ -85,25 +120,32 @@ export async function convidarMembro(req: Request, deps: DepsConvidar): Promise<
   if (error) {
     const hint = hintDoErro(error);
     if (hint) return erro(statusDoHint(hint), hint);
-    deps.log("convidar-membro: erro inesperado em criar_convite_interna");
+    deps.log(`convidar-membro: erro inesperado em criar_convite_interna (código ${codigoDoErro(error)})`);
     return erro(500, "erro_interno");
   }
   const c = data as Criado;
-  const redirectTo = deps.siteUrl.replace(/\/+$/, "") + "/painel/convites";
+  const redirectTo = deps.siteUrl + "/painel/convites";
 
-  // Conta criada com o e-mail de outra pessoa e nunca confirmada: a senha
-  // dela cai (ninguém recebe a nova) e a conta fica marcada para definir
-  // senha. Vale mesmo sem envio.
+  // Conta com o e-mail do convidado que nunca foi confirmada: quem a criou
+  // pode não ser o dono do e-mail. O banco derruba a senha, as sessões e os
+  // tokens dela, com a conta travada e só se o e-mail continuar não
+  // confirmado (quem confirmou nesse meio-tempo não perde a senha). Vale
+  // mesmo sem envio.
   let falhaAntes: ErroAuth | null = null;
   if (c.conta === "nao_confirmada" && c.user_id) {
-    falhaAntes = await deps.marcarDefinirSenha(c.user_id, senhaAleatoria());
+    const n = await deps.rpc("neutralizar_conta_nao_confirmada_interna", { p_user_id: c.user_id });
+    if (n.error) {
+      falhaAntes = { status: 500 };
+      deps.log(`convidar-membro: não neutralizou a conta não confirmada (código ${codigoDoErro(n.error)})`);
+    }
   }
 
   // Limite por endereço estourado pelo histórico de outra academia: sem
   // e-mail, e a resposta é a mesma de um envio.
   if (!c.enviar) return json(200, { convite_id: c.convite_id, email_enviado: true });
 
-  // 2. Envio, segundo a conta.
+  // 2. Envio, segundo a conta. A conta que deixou de estar não confirmada
+  //    no meio do caminho recebe o link mágico como uma confirmada.
   let falha: ErroAuth | null = falhaAntes;
   if (!falha) {
     if (c.conta === "nenhuma") {
@@ -120,14 +162,14 @@ export async function convidarMembro(req: Request, deps: DepsConvidar): Promise<
     }
   }
 
-  // 3. A reserva do envio: confirmada se o provedor aceitou; liberada se
-  //    recusou de vez (4xx, ou nem chegou a tentar). Falha de rede ou 5xx
-  //    não diz se o e-mail saiu: a reserva fica até o expurgo (lado seguro).
+  // 3. A reserva do envio: confirmada se o Auth aceitou; liberada se recusou
+  //    de vez ou nem chegou a tentar. Falha de rede, 5xx ou 408 não diz se o
+  //    e-mail saiu: a reserva fica até o expurgo (lado seguro contra spam).
   if (c.envio_id) {
     if (!falha) {
-      await deps.rpc("confirmar_envio_convite_interna", { p_envio_id: c.envio_id });
-    } else if (falha === falhaAntes || (falha.status !== undefined && falha.status >= 400 && falha.status < 500)) {
-      await deps.rpc("liberar_envio_convite_interna", { p_envio_id: c.envio_id });
+      await resolverReserva(deps, "confirmar_envio_convite_interna", c.envio_id);
+    } else if (falha === falhaAntes || recusaDefinitiva(falha)) {
+      await resolverReserva(deps, "liberar_envio_convite_interna", c.envio_id);
     }
   }
   if (falha) {

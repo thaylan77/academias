@@ -86,57 +86,90 @@ Deno.test({
   },
 });
 
+const mailpit = Deno.env.get("MAILPIT_URL") ?? "";
+
+/** Dono com academia em trial, logado com senha. */
+async function prepararDono(nome: string) {
+  const c = clientesDoAmbiente();
+  const endereco = email(nome);
+  const dono = await c.servico.auth.admin.createUser({
+    email: endereco,
+    email_confirm: true,
+    password: "senha-do-dono-1",
+  });
+  if (dono.error) throw dono.error;
+  const cliente = novoAnon();
+  const login = await cliente.auth.signInWithPassword({ email: endereco, password: "senha-do-dono-1" });
+  if (login.error) throw login.error;
+  const acad = await cliente.rpc("criar_academia", {
+    p_nome: "Integração " + nome + sufixo,
+    p_slug: `int-${nome}-${sufixo}`,
+  });
+  if (acad.error) throw acad.error;
+  return { c, token: login.data.session!.access_token, academiaId: acad.data as string };
+}
+
+async function usuarioPorEmail(c: ReturnType<typeof clientesDoAmbiente>, endereco: string) {
+  const { data, error } = await c.servico.auth.admin.listUsers({ perPage: 1000 });
+  if (error) throw error;
+  return data.users.find((u) => u.email === endereco) ?? null;
+}
+
+async function envioConfirmado(c: ReturnType<typeof clientesDoAmbiente>, conviteId: string) {
+  const { data, error } = await c.servico.from("convites_envios").select("enviado_em").eq("convite_id", conviteId);
+  if (error) throw error;
+  return data.some((v) => v.enviado_em !== null);
+}
+
+/** Texto dos e-mails que o Mailpit recebeu para o endereço (espera até 10 s). */
+async function emailsPara(endereco: string): Promise<string[]> {
+  for (let i = 0; i < 50; i++) {
+    const r = await fetch(`${mailpit}/api/v1/search?query=${encodeURIComponent(`to:"${endereco}"`)}`);
+    const lista = await r.json();
+    if ((lista.messages ?? []).length > 0) {
+      const textos: string[] = [];
+      for (const m of lista.messages) {
+        const d = await (await fetch(`${mailpit}/api/v1/message/${m.ID}`)).json();
+        textos.push(`${d.Text ?? ""}\n${d.HTML ?? ""}`);
+      }
+      return textos;
+    }
+    await new Promise((ok) => setTimeout(ok, 200));
+  }
+  return [];
+}
+
+/** O link do e-mail leva a /painel/convites (redirect_to codificado na URL). */
+function levaAosConvites(texto: string): boolean {
+  const t = texto.replace(/&amp;/g, "&");
+  return t.includes("redirect_to=http%3A%2F%2F127.0.0.1%3A3000%2Fpainel%2Fconvites") ||
+    t.includes("redirect_to=http://127.0.0.1:3000/painel/convites");
+}
+
 Deno.test({
-  name: "convidar-membro contra o Auth real: conta nova, não confirmada e confirmada",
+  name: "convidar-membro contra o Auth real: conta nova, não confirmada e confirmada, com o e-mail no Mailpit",
   ignore: !ativo,
   async fn() {
-    const c = clientesDoAmbiente();
+    const { c, token, academiaId } = await prepararDono("ramos");
     const deps = depsConvidar(c, "http://127.0.0.1:3000");
-
-    // Dono com academia em trial.
-    const enderecoDono = email("dono");
-    const dono = await c.servico.auth.admin.createUser({
-      email: enderecoDono,
-      email_confirm: true,
-      password: "senha-do-dono-1",
-    });
-    if (dono.error) throw dono.error;
-    const clienteDono = novoAnon();
-    const login = await clienteDono.auth.signInWithPassword({ email: enderecoDono, password: "senha-do-dono-1" });
-    if (login.error) throw login.error;
-    const acad = await clienteDono.rpc("criar_academia", {
-      p_nome: "Integração " + sufixo,
-      p_slug: "integracao-" + sufixo,
-    });
-    if (acad.error) throw acad.error;
-    const token = login.data.session!.access_token;
-
     async function convidar(endereco: string) {
       const r = await convidarMembro(
-        pedido(token, { academia_id: acad.data, email: endereco, papel: "professor" }),
+        pedido(token, { academia_id: academiaId, email: endereco, papel: "professor" }),
         deps,
       );
       return { status: r.status, corpo: await r.json() };
-    }
-    async function usuarioPorEmail(endereco: string) {
-      const { data, error } = await c.servico.auth.admin.listUsers({ perPage: 1000 });
-      if (error) throw error;
-      return data.users.find((u) => u.email === endereco) ?? null;
-    }
-    async function envioConfirmado(conviteId: string) {
-      const { data, error } = await c.servico.from("convites_envios").select("enviado_em").eq("convite_id", conviteId);
-      if (error) throw error;
-      return data.some((v) => v.enviado_em !== null);
     }
 
     // Conta nova: o Auth cria e convida; fica marcada para definir senha.
     const novo = email("novo");
     const r1 = await convidar(novo);
     assertEquals(r1, { status: 200, corpo: { convite_id: r1.corpo.convite_id, email_enviado: true } });
-    assertEquals((await usuarioPorEmail(novo))?.app_metadata?.definir_senha, true);
-    assert(await envioConfirmado(r1.corpo.convite_id), "a reserva do envio foi confirmada");
+    assertEquals((await usuarioPorEmail(c, novo))?.app_metadata?.definir_senha, true);
+    assert(await envioConfirmado(c, r1.corpo.convite_id), "a reserva do envio foi confirmada");
+    assert((await emailsPara(novo)).some(levaAosConvites), "o convite chegou com o link para /painel/convites");
 
-    // Conta criada por outra pessoa e nunca confirmada: a senha dela cai.
+    // Conta criada por outra pessoa e nunca confirmada: o banco derruba a
+    // senha e as sessões dela.
     const ocupado = email("ocupado");
     const squat = await c.servico.auth.admin.createUser({
       email: ocupado,
@@ -146,14 +179,16 @@ Deno.test({
     if (squat.error) throw squat.error;
     const r2 = await convidar(ocupado);
     assertEquals(r2.corpo.email_enviado, true, JSON.stringify(r2));
-    const u2 = await usuarioPorEmail(ocupado);
+    assert(await envioConfirmado(c, r2.corpo.convite_id), "a reserva do envio foi confirmada");
+    const u2 = await usuarioPorEmail(c, ocupado);
     assertEquals(u2?.app_metadata?.definir_senha, true);
-    const intruso = await c.servico.auth.admin.updateUserById(u2!.id, { email_confirm: true });
-    if (intruso.error) throw intruso.error;
+    assert((await emailsPara(ocupado)).some(levaAosConvites), "o link chegou à conta não confirmada");
+    const confirma = await c.servico.auth.admin.updateUserById(u2!.id, { email_confirm: true });
+    if (confirma.error) throw confirma.error;
     const entra = await novoAnon().auth.signInWithPassword({ email: ocupado, password: "senha-do-intruso-1" });
     assert(entra.error, "a senha de quem criou a conta com o e-mail alheio não vale mais");
 
-    // Conta confirmada: só o link mágico.
+    // Conta confirmada: só o link mágico, sem mexer na senha.
     const antigo = email("antigo");
     const conf = await c.servico.auth.admin.createUser({
       email: antigo,
@@ -163,8 +198,65 @@ Deno.test({
     if (conf.error) throw conf.error;
     const r3 = await convidar(antigo);
     assertEquals(r3.corpo.email_enviado, true, JSON.stringify(r3));
-    assert(await envioConfirmado(r3.corpo.convite_id));
+    assert(await envioConfirmado(c, r3.corpo.convite_id));
+    assert((await emailsPara(antigo)).some(levaAosConvites), "o link mágico chegou com o redirect certo");
     const propria = await novoAnon().auth.signInWithPassword({ email: antigo, password: "senha-propria-1" });
     assertEquals(propria.error, null, "a conta confirmada não tem a senha trocada pelo convite");
+  },
+});
+
+Deno.test({
+  name: "fluxo inteiro pelo runtime: gateway, convite, senha nova pelo link, aceite e acesso depois de renovar",
+  ignore: !ativo,
+  async fn() {
+    const { c, token, academiaId } = await prepararDono("fluxo");
+    const funcoes = `${url}/functions/v1`;
+
+    // O gateway recusa sem token (verify_jwt) e a função sobe pelo runtime.
+    const semToken = await fetch(`${funcoes}/convidar-membro`, { method: "POST", body: "{}" });
+    await semToken.body?.cancel();
+    assertEquals(semToken.status, 401, "o gateway exige o JWT");
+
+    const convidado = email("convidado");
+    const r = await fetch(`${funcoes}/convidar-membro`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}`, apikey: anonKey, "Content-Type": "application/json" },
+      body: JSON.stringify({ academia_id: academiaId, email: convidado, papel: "professor" }),
+    });
+    const corpo = await r.json();
+    assertEquals([r.status, corpo.email_enviado], [200, true], JSON.stringify(corpo));
+
+    // A pessoa abre o link (aqui, um link de convite gerado na hora) e
+    // define a senha nova pela concluir-senha, também pelo runtime.
+    const link = await c.servico.auth.admin.generateLink({ type: "magiclink", email: convidado });
+    if (link.error) throw link.error;
+    const cliente = novoAnon();
+    const v = await cliente.auth.verifyOtp({ token_hash: link.data.properties.hashed_token, type: "magiclink" });
+    if (v.error || !v.data.session) throw v.error ?? new Error("sem sessão");
+    const s = await fetch(`${funcoes}/concluir-senha`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${v.data.session.access_token}`,
+        apikey: anonKey,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ senha: "senha-do-convidado-1" }),
+    });
+    assertEquals([s.status, await s.json()], [200, { ok: true }]);
+
+    // Aceita com a sessão renovada e, depois do marco, lê a academia.
+    const renovada = await cliente.auth.refreshSession({ refresh_token: v.data.session.refresh_token });
+    if (renovada.error) throw renovada.error;
+    const aceite = await cliente.rpc("aceitar_convite", { p_convite_id: corpo.convite_id });
+    assertEquals(aceite.error, null, JSON.stringify(aceite.error));
+    await new Promise((ok) => setTimeout(ok, 1500));
+    const depois = await cliente.auth.refreshSession();
+    if (depois.error) throw depois.error;
+    const leitura = await cliente.from("academias").select("id").eq("id", academiaId);
+    assertEquals(leitura.error, null);
+    assertEquals(leitura.data?.length, 1, "com o token novo, o vínculo aceito vale");
+
+    const login = await novoAnon().auth.signInWithPassword({ email: convidado, password: "senha-do-convidado-1" });
+    assertEquals(login.error, null, "a senha definida pela concluir-senha vale no login");
   },
 });

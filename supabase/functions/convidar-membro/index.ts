@@ -4,9 +4,8 @@
 
 import { clientesDoAmbiente, depsConvidar } from "../_shared/clientes.ts";
 import { convidarMembro } from "../_shared/convidar.ts";
+import { siteUrlValida } from "../_shared/http.ts";
 
-const siteUrl = Deno.env.get("SITE_URL");
-if (!siteUrl) throw new Error("variável de ambiente ausente: SITE_URL");
-const deps = depsConvidar(clientesDoAmbiente(), siteUrl);
+const deps = depsConvidar(clientesDoAmbiente(), siteUrlValida(Deno.env.get("SITE_URL")));
 
 Deno.serve((req) => convidarMembro(req, deps));

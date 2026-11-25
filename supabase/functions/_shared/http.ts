@@ -68,3 +68,31 @@ export function hintDoErro(e: unknown): string | null {
   }
   return null;
 }
+
+export type Rpc = (nome: string, args: Record<string, unknown>) => Promise<{ data: unknown; error: unknown }>;
+
+/** Código de um erro do PostgREST (SQLSTATE ou PGRST...), sem a mensagem. */
+export function codigoDoErro(e: unknown): string {
+  if (e && typeof e === "object" && "code" in e) {
+    const c = (e as { code?: unknown }).code;
+    if (typeof c === "string" && /^[A-Z0-9]{1,10}$/.test(c)) return c;
+  }
+  return "?";
+}
+
+/**
+ * SITE_URL válida: http ou https, sem barra no fim. Lança erro na subida da
+ * função se o segredo estiver ausente ou malformado.
+ */
+export function siteUrlValida(v: string | undefined): string {
+  const t = (v ?? "").trim();
+  let u: URL;
+  try {
+    u = new URL(t);
+  } catch {
+    throw new Error("SITE_URL ausente ou inválida");
+  }
+  if (u.protocol !== "https:" && u.protocol !== "http:") throw new Error("SITE_URL precisa ser http ou https");
+  if (u.search || u.hash) throw new Error("SITE_URL não pode ter query nem fragmento");
+  return t.replace(/\/+$/, "");
+}

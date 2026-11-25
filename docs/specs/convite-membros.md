@@ -219,11 +219,13 @@ A entrada é `{ academia_id, email, papel }`, com o JWT de quem convida.
 2. Com `service_role`, segundo a `conta` devolvida:
    - `nenhuma`: chama `auth.admin.inviteUserByEmail(email, { redirectTo })` e
      marca `app_metadata.definir_senha = true`;
-   - `nao_confirmada`: chama `auth.admin.updateUserById` com uma senha
-     aleatória de 32 bytes, que ninguém recebe, e marca
-     `app_metadata.definir_senha = true`. Depois manda o link mágico. Isso
-     derruba a senha de quem tenha criado a conta com o e-mail de outra
-     pessoa;
+   - `nao_confirmada`: chama `neutralizar_conta_nao_confirmada_interna`,
+     que, com a conta travada e só se o e-mail continuar não confirmado,
+     troca a senha por uma aleatória que ninguém recebe, derruba as sessões
+     e os tokens de uso único e marca `app_metadata.definir_senha = true`.
+     Depois manda o link mágico. Isso derruba a senha de quem tenha criado a
+     conta com o e-mail de outra pessoa, sem tirar a de quem confirmou o
+     cadastro no meio-tempo;
    - `confirmada`: manda o link mágico (`signInWithOtp`,
      `shouldCreateUser: false`).
 
@@ -295,13 +297,25 @@ A função não grava em tabela de negócio fora de `criar_convite_interna`. O
   `limite_convites` e `convite_reenvio_cedo`, 400 para os demais e 500 para
   `erro_interno`.
 - Reserva de envio: confirmada quando o Auth aceita o envio; liberada quando
-  ele recusa com 4xx ou quando o envio nem chega a ser tentado (falha ao
-  trocar a senha da conta não confirmada); mantida (até o expurgo) quando a
-  falha é 5xx ou de rede, porque aí não se sabe se o e-mail saiu.
-- A senha da conta `nao_confirmada` é trocada mesmo quando `enviar = false`.
+  ele recusa com 4xx (menos 408) ou quando o envio nem chega a ser tentado
+  (falha ao neutralizar a conta não confirmada); mantida (até o expurgo)
+  quando a falha é 5xx, 408 ou de rede, porque aí não se sabe se o e-mail
+  saiu. As RPCs da reserva têm uma nova tentativa e, se falharem de novo,
+  ficam no log com o id da reserva e o código do erro.
+- A conta `nao_confirmada` é neutralizada mesmo quando `enviar = false`.
+- Token recusado pelo Auth (4xx) dá `sem_sessao`; falha do próprio Auth
+  (5xx, rede) dá `erro_interno`, para o front não encerrar a sessão por
+  isso. `SITE_URL` é validada na subida da função (http ou https, sem query
+  nem fragmento).
+- O link mágico das contas existentes sai pelo endpoint público do Auth
+  (`signInWithOtp`), sujeito ao limite por IP do projeto (`sign_in_sign_ups`
+  e `max_frequency`): com muitos convites ao mesmo tempo, o envio pode ser
+  recusado com 429 e a tela mostra que o e-mail não saiu. Com SMTP próprio,
+  dimensione esses limites no painel do Auth; mandar o link por um provedor
+  transacional próprio fica para depois.
 - A `concluir-senha` recebe `{ senha }` e só aceita token de sessão aberta
-  por link (`amr` com `otp`, `magiclink`, `invite`, `recovery`, `email`,
-  `signup` ou `email_change`) e com `session_id`; senão, `convite_exige_link`.
+  por link (`amr` com `otp`, `magiclink`, `invite`, `recovery`,
+  `email/signup` ou `email_change`, a mesma lista do aceite) e com `session_id`; senão, `convite_exige_link`.
   Sucesso: `{ ok: true }`, e o front renova a sessão.
 
 **Dependência de ambiente:** o SMTP padrão do Supabase só entrega para os

@@ -33,7 +33,13 @@ export function depsBase(c: Clientes) {
   return {
     async usuarioDoToken(jwt: string): Promise<string | null> {
       const { data, error } = await c.servico.auth.getUser(jwt);
-      return error || !data.user ? null : data.user.id;
+      // 4xx: o Auth recusou o token. 5xx ou rede: falha do Auth, não do
+      // token (vira erro_interno, e o front não encerra a sessão por isso).
+      if (error) {
+        if (error.status !== undefined && error.status >= 400 && error.status < 500) return null;
+        throw new Error("Auth indisponível");
+      }
+      return data.user?.id ?? null;
     },
     async rpc(nome: string, args: Record<string, unknown>) {
       const { data, error } = await c.servico.rpc(nome, args);
@@ -53,11 +59,8 @@ export function depsConvidar(c: Clientes, siteUrl: string): DepsConvidar {
       const { data, error } = await c.servico.auth.admin.inviteUserByEmail(email, { redirectTo });
       return { userId: data?.user?.id ?? null, erro: erroAuth(error) };
     },
-    async marcarDefinirSenha(userId, novaSenha) {
-      const { error } = await c.servico.auth.admin.updateUserById(userId, {
-        app_metadata: { definir_senha: true },
-        ...(novaSenha ? { password: novaSenha } : {}),
-      });
+    async marcarDefinirSenha(userId) {
+      const { error } = await c.servico.auth.admin.updateUserById(userId, { app_metadata: { definir_senha: true } });
       return erroAuth(error);
     },
     async enviarLinkMagico(email, redirectTo) {

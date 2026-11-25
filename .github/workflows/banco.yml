@@ -53,11 +53,14 @@ jobs:
 
       - run: deno fmt --check
       - run: deno lint
-      - run: deno check --frozen convidar-membro/index.ts concluir-senha/index.ts tests/integracao/auth_test.ts
-      - run: deno test --frozen --no-prompt tests/convidar_test.ts tests/senha_test.ts
+      - run: deno check --frozen .
+      # Todos os *_test.ts de tests/ (a integração fica em tests/integracao/).
+      - run: deno test --frozen --no-prompt tests/*_test.ts
 
-  # Integração das Edge Functions com o Auth real: banco, Auth, API e
-  # Mailpit locais (supabase start sem os serviços que não entram no teste).
+  # Integração das Edge Functions com o Auth real: banco, Auth, API, Mailpit
+  # e o runtime das funções locais (supabase start sem os serviços que não
+  # entram no teste). As funções sobem pelo gateway, com o verify_jwt e o
+  # import map de verdade.
   integracao:
     runs-on: ubuntu-24.04
     steps:
@@ -71,14 +74,17 @@ jobs:
         with:
           deno-version: 2.5.6
 
-      - run: supabase start -x realtime,storage-api,imgproxy,postgres-meta,studio,edge-runtime,logflare,vector,supavisor
+      - run: supabase start -x realtime,storage-api,imgproxy,postgres-meta,studio,logflare,vector,supavisor
 
       - name: Testes de integração com o Auth local
         working-directory: supabase/functions
         run: |
           eval "$(supabase status -o env)"
-          SUPABASE_URL="$API_URL" SUPABASE_ANON_KEY="$ANON_KEY" SUPABASE_SERVICE_ROLE_KEY="$SERVICE_ROLE_KEY" INTEGRACAO=1 \
-            deno test --frozen --no-prompt --allow-env --allow-net tests/integracao/
+          SUPABASE_URL="$API_URL" SUPABASE_ANON_KEY="$ANON_KEY" SUPABASE_SERVICE_ROLE_KEY="$SERVICE_ROLE_KEY" \
+          MAILPIT_URL="${MAILPIT_URL:-$INBUCKET_URL}" INTEGRACAO=1 \
+            deno test --frozen --no-prompt \
+              --allow-env=SUPABASE_URL,SUPABASE_ANON_KEY,SUPABASE_SERVICE_ROLE_KEY,MAILPIT_URL,INTEGRACAO \
+              --allow-net=127.0.0.1:54321,127.0.0.1:54324 tests/integracao/
 
   # Front: mesma sequência do checklist do AGENTS.md. Node em versão fixa,
   # a mesma dos agentes, lida do .nvmrc (o "engines" do package.json repete

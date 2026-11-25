@@ -17,23 +17,17 @@ export const USUARIO = "11111111-1111-4111-8111-111111111111";
 export const SESSAO = "22222222-2222-4222-8222-222222222222";
 export const ACADEMIA = "33333333-3333-4333-8333-333333333333";
 
-export const TOKEN_LINK = jwtFalso({
-  sub: USUARIO,
-  iat: 1700000000,
-  session_id: SESSAO,
-  amr: [{ method: "otp", timestamp: 1700000000 }],
-});
-export const TOKEN_SENHA = jwtFalso({
-  sub: USUARIO,
-  iat: 1700000000,
-  session_id: SESSAO,
-  amr: [{ method: "password", timestamp: 1700000000 }],
-});
+export function tokenCom(metodo: string): string {
+  return jwtFalso({ sub: USUARIO, iat: 1700000000, session_id: SESSAO, amr: [{ method: metodo, timestamp: 1 }] });
+}
+export const TOKEN_LINK = tokenCom("otp");
+export const TOKEN_SENHA = tokenCom("password");
 
-export function pedido(corpo: unknown, token: string | null = TOKEN_LINK): Request {
+export function pedido(corpo: unknown, token: string | null = TOKEN_LINK, metodo = "POST"): Request {
   const headers: Record<string, string> = { "Content-Type": "application/json" };
   if (token) headers.Authorization = `Bearer ${token}`;
-  return new Request("http://localhost/funcao", { method: "POST", headers, body: JSON.stringify(corpo) });
+  const body = metodo === "POST" ? (typeof corpo === "string" ? corpo : JSON.stringify(corpo)) : undefined;
+  return new Request("http://localhost/funcao", { method: metodo, headers, body });
 }
 
 export interface Chamada {
@@ -41,40 +35,46 @@ export interface Chamada {
   args: unknown[];
 }
 
+type RespostaRpc = { data?: unknown; error?: unknown };
+
 export interface Simulado {
-  rpcCriar?: { data?: unknown; error?: unknown };
+  /** Como o Auth trata o token: aceita (padrão), recusa ou cai. */
+  token?: "valido" | "invalido" | "falha";
+  /** Respostas por RPC; uma lista é consumida em ordem (a última se repete). */
+  rpc?: Record<string, RespostaRpc | RespostaRpc[]>;
   convidar?: { userId: string | null; erro: ErroAuth | null };
   marcar?: ErroAuth | null;
   link?: ErroAuth | null;
-  rpcSenha?: { data?: unknown; error?: unknown };
 }
 
 export function depsSimuladas(s: Simulado = {}) {
   const chamadas: Chamada[] = [];
   const logs: string[] = [];
+  const consumo: Record<string, number> = {};
   const registra = (nome: string, ...args: unknown[]) => chamadas.push({ nome, args });
   const deps: DepsConvidar & DepsSenha = {
-    siteUrl: "https://painel.exemplo.test/",
+    siteUrl: "https://painel.exemplo.test",
     usuarioDoToken(jwt) {
       registra("usuarioDoToken", jwt);
-      return Promise.resolve(jwt ? USUARIO : null);
+      if (s.token === "falha") return Promise.reject(new Error("Auth indisponível"));
+      return Promise.resolve(s.token === "invalido" ? null : USUARIO);
     },
     rpc(nome, args) {
       registra("rpc:" + nome, args);
-      if (nome === "criar_convite_interna") {
-        return Promise.resolve({ data: s.rpcCriar?.data ?? null, error: s.rpcCriar?.error ?? null });
+      const r = s.rpc?.[nome];
+      if (Array.isArray(r)) {
+        const i = Math.min(consumo[nome] ?? 0, r.length - 1);
+        consumo[nome] = (consumo[nome] ?? 0) + 1;
+        return Promise.resolve({ data: r[i].data ?? null, error: r[i].error ?? null });
       }
-      if (nome === "definir_senha_comprovada_interna") {
-        return Promise.resolve({ data: s.rpcSenha?.data ?? null, error: s.rpcSenha?.error ?? null });
-      }
-      return Promise.resolve({ data: null, error: null });
+      return Promise.resolve({ data: r?.data ?? null, error: r?.error ?? null });
     },
     convidarPorEmail(email, redirectTo) {
       registra("convidarPorEmail", email, redirectTo);
       return Promise.resolve(s.convidar ?? { userId: "44444444-4444-4444-8444-444444444444", erro: null });
     },
-    marcarDefinirSenha(userId, novaSenha) {
-      registra("marcarDefinirSenha", userId, novaSenha);
+    marcarDefinirSenha(userId) {
+      registra("marcarDefinirSenha", userId);
       return Promise.resolve(s.marcar ?? null);
     },
     enviarLinkMagico(email, redirectTo) {
@@ -90,15 +90,19 @@ export function depsSimuladas(s: Simulado = {}) {
   return { deps, chamadas, logs, nomes, de };
 }
 
-export function criado(conta: string, extra: Record<string, unknown> = {}) {
+export const CONVITE = "55555555-5555-4555-8555-555555555555";
+export const ENVIO = "77777777-7777-4777-8777-777777777777";
+export const CONTA = "66666666-6666-4666-8666-666666666666";
+
+export function criado(conta: string, extra: Record<string, unknown> = {}): RespostaRpc {
   return {
     data: {
-      convite_id: "55555555-5555-4555-8555-555555555555",
+      convite_id: CONVITE,
       email: "pessoa@exemplo.test",
       conta,
-      user_id: conta === "nenhuma" ? null : "66666666-6666-4666-8666-666666666666",
+      user_id: conta === "nenhuma" ? null : CONTA,
       enviar: true,
-      envio_id: "77777777-7777-4777-8777-777777777777",
+      envio_id: ENVIO,
       ...extra,
     },
   };
